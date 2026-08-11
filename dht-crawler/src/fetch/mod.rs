@@ -32,6 +32,10 @@ const PARALLEL_DIALS: usize = 16;
 /// always complete in the first few dials, so a short deadline frees the pool
 /// quickly for the next hash.
 const FETCH_DEADLINE: Duration = Duration::from_secs(12);
+/// How long to wait for the next `get_peers` batch before giving up. The
+/// DhtLookup streams batches into the channel; a slow or empty lookup must not
+/// hold a pool slot indefinitely.
+const RECV_TIMEOUT: Duration = Duration::from_secs(4);
 /// Dials to attempt before concluding a hash is dead (all connect failures).
 /// If this many consecutive dials fail with no successful handshake, the fetch
 /// aborts early instead of waiting out `FETCH_DEADLINE`.
@@ -273,7 +277,14 @@ async fn fetch_one(
     let mut consecutive_connect_failures = 0usize;
     let mut any_handshake = false;
 
-    'outer: while let Some(batch) = peers.recv().await {
+    'outer: loop {
+        // Bound the wait for the next peer batch so a slow/empty get_peers
+        // lookup cannot hold a pool slot indefinitely.
+        let batch = match tokio::time::timeout(RECV_TIMEOUT, peers.recv()).await {
+            Ok(Some(batch)) => batch,
+            Ok(None) => break,            // lookup exhausted
+            Err(_elapsed) => break,       // no batch arrived in time → stall
+        };
         if tokio::time::Instant::now() >= deadline {
             *failure_counts.entry("deadline").or_insert(0) += 1;
             break;

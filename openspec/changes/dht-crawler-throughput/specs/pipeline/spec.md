@@ -27,11 +27,15 @@ The fetch layer SHALL abort a per-hash fetch once the first ~24 dials have all f
 - **THEN** the fetch continues trying peers until success or the deadline
 
 ### Requirement: Short per-hash deadline
-The fetch layer SHALL give each infohash a wall-clock budget of 12 seconds.
+The fetch layer SHALL give each infohash a wall-clock budget of 12 seconds, and SHALL bound the wait for the next `get_peers` batch to 4 seconds so a slow or empty lookup cannot hold a pool slot indefinitely.
 
 #### Scenario: Deadline caps fetch time
 - **WHEN** a hash has not succeeded after 12s
 - **THEN** the fetch ends and its slot is freed
+
+#### Scenario: Slow get_peers frees its slot
+- **WHEN** no peer batch arrives within 4 seconds of waiting
+- **THEN** the fetch ends (reported as empty peers/deadline) instead of occupying a pool slot forever
 
 ### Requirement: In-run dead-peer cache
 The fetch layer SHALL remember IPs that failed to connect (≥2 failures), skip them when dialing other hashes for up to ~10 minutes, and allow them again after the TTL.
