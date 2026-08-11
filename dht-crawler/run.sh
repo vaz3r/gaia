@@ -10,10 +10,15 @@ LOG="${SCRIPT_DIR}/crawl.log"
 
 mkdir -p "$STATE"
 
+AGGRESSIVE=""
 case "${1:-}" in
     --purge|purge)
         echo "Purging crawl data (db + routing state)..."
-        exec "$BIN" purge --db "$DB" --state-dir "$STATE" "${2:-}"
+        if [[ "${2:-}" == "--yes" ]]; then
+            exec "$BIN" purge --db "$DB" --state-dir "$STATE" --yes
+        else
+            exec "$BIN" purge --db "$DB" --state-dir "$STATE"
+        fi
         ;;
     --aggressive)
         AGGRESSIVE="--aggressive"
