@@ -178,10 +178,21 @@ async fn stats_loop(handle: DhtHandle, stats: Arc<CrawlStats>) {
     loop {
         tick.tick().await;
         let routing = handle.node_count().await.unwrap_or(0);
+        // Passive announcement intake: hashes other nodes announced to us that
+        // are sitting in the actor's internal peer_store. If this stays near 0,
+        // announcement capture is not worth patching irontide for; if it grows
+        // large, a `peer_store_hashes()` reader becomes a valuable second
+        // discovery source alongside BEP 51 sampling.
+        let announced = handle
+            .stats()
+            .await
+            .map(|s| s.peer_store_info_hashes)
+            .unwrap_or(0);
         let s = &stats;
         let r = std::sync::atomic::Ordering::Relaxed;
         info!(
             routing_nodes = routing,
+            announced_hashes = announced,
             hashes_sampled = s.hashes_sampled.load(r),
             hashes_unique = s.hashes_unique.load(r),
             fetches_attempted = s.fetches_attempted.load(r),
