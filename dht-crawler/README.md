@@ -1,11 +1,10 @@
 # dht-crawler
 
-A lightweight BitTorrent DHT crawler that indexes movie/TV torrents into a local
-SQLite database. It bootstraps and maintains a persistent Kademlia routing table,
+A lightweight BitTorrent DHT crawler that indexes torrents into a local SQLite
+database. It bootstraps and maintains a persistent Kademlia routing table,
 traverses the DHT keyspace with **BEP 51** (`sample_infohashes`), fetches torrent
 metadata over TCP with **BEP 9/10** (`ut_metadata`), verifies each download by
-SHA-1, classifies release names as movie/TV, and stores accepted records with
-upsert semantics.
+SHA-1, and stores every accepted torrent with upsert semantics.
 
 ## Quickstart
 
@@ -39,9 +38,6 @@ sampler (BEP 51, UDP)
 metadata fetcher (BEP 9, TCP, SHA-1 verified)
    │  name / files / size
    ▼
-classifier (movie / tv / other — nothing is discarded)
-   │  records
-   ▼
 SQLite (WAL, batched upserts)
 ```
 
@@ -57,14 +53,12 @@ SQLite (WAL, batched upserts)
   table (`ok`/`failed`) with the raw `info` dictionary, so restarts never
   refetch known content; failed hashes retry with exponential backoff
   (5m → 10m → ... → 6h).
-- **Classifier**: deterministic, punctuation-normalized classification labels
-  each torrent `movie`, `tv`, or `other` and extracts title/year/season/episode
-  when possible. **No torrent is filtered out** — everything verified is kept;
-  the label only enriches the record.
-- **Storage**: `torrents` table keyed by `info_hash` with a category CHECK
-  constraint (`movie`/`tv`/`other`), WAL mode, batched `ON CONFLICT DO UPDATE`
-  upserts that preserve `first_seen`, and case-insensitive name search. A
-  `scanned` table tracks fetch outcomes across runs.
+- **Storage**: `torrents` table keyed by `info_hash` stores torrent metadata
+  only (`name`, `size_bytes`, `file_count`, `first_seen`, `last_seen`) — no
+  media taxonomy. WAL mode, batched `ON CONFLICT DO UPDATE` upserts that
+  preserve `first_seen`, and case-insensitive name search. A `scanned` table
+  tracks fetch outcomes across runs and retains the raw `info` dictionary for
+  offline re-analysis (e.g. a future classification table).
 
 ## CLI reference
 
@@ -89,10 +83,12 @@ SQLite (WAL, batched upserts)
 | `--blocklist <FILE>` | none | Blocklist file (IP or CIDR per line, `#` comments) |
 | `--log <FILTER>` | env `RUST_LOG` | tracing filter override |
 
-The daemon logs structured crawl stats (routing-table size, hashes sampled,
-fetch success, records persisted) every 30s and shuts down gracefully on
-SIGTERM/SIGINT: it drains in-flight fetches, flushes the database batch, and
-persists the routing table.
+The daemon logs structured crawl stats (routing-table size, `announced_hashes`,
+hashes sampled, fetch success, records persisted) every 30s and shuts down
+gracefully on SIGTERM/SIGINT: it drains in-flight fetches, flushes the database
+batch, and persists the routing table. `announced_hashes` is the number of
+infohashes other DHT nodes have announced to us; it stays near 0 on a NAT host,
+which tells us passive announce capture is not worth building.
 
 ### `query`
 
@@ -101,7 +97,7 @@ dht-crawler query <NAME> [--db <DB>]
 dht-crawler query <NAME> [--db <DB>] --failures
 ```
 
-Prints matching `name / category / year / size`. With `--failures`, prints an
+Prints matching `name / size / file count`. With `--failures`, prints an
 aggregate breakdown of metadata fetch failures by their dominant `failure_reason`
 from the `scanned` table instead.
 

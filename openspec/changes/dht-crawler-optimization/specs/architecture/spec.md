@@ -19,7 +19,7 @@ A `crawler` module SHALL own the run pipeline: opening storage, starting the DHT
 - **THEN** all channel wiring and task lifecycle are handled by the crawler module, not by `main`
 
 ### Requirement: One-way module dependencies
-Modules SHALL depend only in one direction: `crawler` depends on `discovery`, `fetch`, and `storage`; `fetch` depends on `classify`, `net`, and `storage`; no module SHALL import a module that imports it (no cycles).
+Modules SHALL depend only in one direction: `crawler` depends on `discovery`, `fetch`, and `storage`; `fetch` depends on `net` and `storage`; no module SHALL import a module that imports it (no cycles).
 
 #### Scenario: No circular imports
 - **WHEN** the crate compiles

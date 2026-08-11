@@ -9,7 +9,7 @@ use irontide_core::AddressFamily;
 use irontide_dht::{DhtConfig, DhtHandle};
 use std::path::PathBuf;
 
-use crate::config::RunArgs;
+use crate::cli::RunArgs;
 
 /// Start the DHT actor bound to the configured UDP port and address family.
 pub async fn start_dht(args: &RunArgs, state_dir: PathBuf) -> Result<DhtHandle> {

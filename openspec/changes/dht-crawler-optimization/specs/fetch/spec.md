@@ -27,11 +27,11 @@ The fetch layer SHALL give each infohash a wall-clock deadline of 20 seconds and
 - **THEN** the fetch succeeds without waiting out the full deadline
 
 ### Requirement: Every verified torrent is kept
-The fetch layer SHALL persist every torrent whose metadata passes SHA-1 verification, classifying it as `movie`, `tv`, or `other`; no verified torrent is discarded for failing classification.
+The fetch layer SHALL persist every torrent whose metadata passes SHA-1 verification; no verified torrent is discarded for failing classification, and no classification is applied.
 
 #### Scenario: Unclassifiable torrent is stored
 - **WHEN** verified metadata has no recognizable movie/TV pattern
-- **THEN** the torrent is persisted with category `other` rather than being skipped
+- **THEN** the torrent is persisted as a torrent-metadata-only record rather than being skipped
 
 #### Scenario: Verified and persisted counts match
 - **WHEN** the crawler reports stats

@@ -41,15 +41,15 @@ Capturing passively-announced hashes would require reading irontide's internal `
 `FETCH_DEADLINE 45s→20s` and `MAX_PEERS_PER_HASH 100→50`. Successful fetches almost always complete in the first few dials, so dead hashes free their pool slot quickly.
 - *Trade-off:* rare torrents with many slow peers may exceed 20s; acceptable because those are precisely the low-yield cases.
 
-### D11 — Classification labels, never filters; schema is torrent-metadata-only
-Every SHA-1-verified torrent is persisted. `MediaFilter` (now the classify concern) labels `movie`/`tv`/`other` and enriches title/year/season/episode when it can; when it cannot, the record is stored as `other`. The `torrents` table drops `category`, `title`, `year`, `season`, `episode`:
+### D11 — Schema is torrent-metadata-only; classification removed
+Every SHA-1-verified torrent is persisted; nothing is filtered. The `torrents` table stores torrent metadata only and drops the media taxonomy:
 `torrents(info_hash BLOB PK, name TEXT NOT NULL, size_bytes INTEGER, file_count INTEGER, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL)`.
-A future `torrent_details(info_hash FK, category, title, year, season, episode, …)` can be added without touching `torrents`. Raw `info_bytes` already lives in `scanned` for re-analysis.
-- *Alternatives considered:* keeping category/title/etc. in `torrents` — rejected: couples a generic index to a media taxonomy and duplicates what `scanned.info_bytes` already preserves.
+The movie/TV classifier is **removed** — with no `category`/`title`/`year`/`season`/`episode` columns to fill, keeping it would be dead code. A future `torrent_details(info_hash FK, category, title, year, season, episode, …)` table can be added later, re-deriving classification from `scanned.info_bytes`, which is retained for every accepted torrent.
+- *Alternatives considered:* keeping the classifier as a standalone module — rejected: nothing consumes its output until a `torrent_details` table exists, so it would be unused code. Keeping media columns in `torrents` — rejected: couples a generic index to a media taxonomy.
 
 ### D12 — Modular layout with one-way dependencies
 Split the `main.rs` god-file and the fat `storage.rs`/`metadata/mod.rs` into focused modules:
-`main` (dispatch) → `cli` (args) / `crawler` (pipeline+shutdown) / `query` / `purge`; `discovery/{mod,sampler,announce}` → hash stream; `fetch/{mod,wire,parse}` → records; `classify` → labels; `storage/{mod,schema,model}` → persistence; `net`, `stats`. Dependencies flow only forward (crawler → discovery/fetch/storage; fetch → classify/net/storage); no cycles.
+`main` (dispatch) → `cli` (args) / `crawler` (pipeline+shutdown) / `query` / `purge`; `discovery/{mod,sampler}` → hash stream; `fetch/{mod,wire,parse}` → records; `storage/{mod,schema,model}` → persistence; `net`, `stats`. Dependencies flow only forward (crawler → discovery/fetch/storage; fetch → net/storage); no cycles.
 - *Rationale:* the previous flat layout mixed CLI, pipeline wiring, the storage writer, stats, query, and purge in one file; separation makes each concern testable and maintainable.
 
 ## Risks / Trade-offs

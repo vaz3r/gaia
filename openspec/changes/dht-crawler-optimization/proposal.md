@@ -19,7 +19,7 @@ This change fixes all four, re-architects the codebase for separation of concern
   - Higher defaults: `--sampler-loops 32`, `--sampler-qps 2000`, `--qps 5000`, `--min-seen 2`.
   - Tighter fetch budget: `FETCH_DEADLINE 45s→20s`, `MAX_PEERS_PER_HASH 100→50`.
 - **Announcement measurement**: the stats loop logs `announced_hashes` (`handle.stats().peer_store_info_hashes`), the count of infohashes other nodes announced to us. No crate patch. If this stays near zero, passive announce capture is permanently out of scope; if it grows large, a future change may add a `peer_store_hashes()` reader.
-- **Modular codebase**: `main.rs` god-file split into focused modules with one-way dependencies (crawler orchestration, discovery, fetch, classify, storage, query, purge).
+- **Modular codebase**: `main.rs` god-file split into focused modules with one-way dependencies (crawler orchestration, discovery, fetch, storage, query, purge).
 - **Schema redesign**: `torrents` stores torrent metadata only (`info_hash`, `name`, `size_bytes`, `file_count`, `first_seen`, `last_seen`). Movie/TV fields removed; a future `torrent_details` table can hold extra info if ever requested. Raw `info_bytes` already persists in `scanned` for offline re-analysis.
 
 ## Capabilities
@@ -34,12 +34,12 @@ This change fixes all four, re-architects the codebase for separation of concern
 ### Modified Capabilities
 
 - `dht-crawler` (previous change): retains bootstrap, persistent routing, BEP 51 sampling, and unique-hash emission; gains interval capping and multi-source discovery plumbing.
-- `metadata-enrichment` (previous change): retains BEP 9/10 fetch + SHA-1 verify; classification no longer filters, it labels.
-- `media-filter` (previous change): renamed to the classify concern; no longer gates persistence.
+- `metadata-enrichment` (previous change): retains BEP 9/10 fetch + SHA-1 verify; the movie/TV classifier is removed — every verified torrent is kept as torrent metadata only.
+- `media-filter` (previous change): removed — with the schema storing torrent metadata only, classification has no storage target and is deferred to a future `torrent_details` table.
 
 ## Impact
 
-- **Code**: `main.rs` shrinks to a dispatcher; new `crawler.rs`, `discovery/`, `fetch/`, `classify.rs`, `query.rs`, `purge.rs`; `storage.rs` splits into `storage/{mod,schema,model}.rs`.
+- **Code**: `main.rs` shrinks to a dispatcher; new `crawler.rs`, `discovery/`, `fetch/`, `query.rs`, `purge.rs`; `storage.rs` splits into `storage/{mod,schema,model}.rs`.
 - **Schema**: `torrents` table rebuild migration drops `category`/`title`/`year`/`season`/`episode`; existing rows' torrent metadata preserved, classification re-derivable from `scanned.info_bytes`.
 - **Dependencies**: none added. `irontide-dht` stays a plain crates.io dependency — the decision is **not** to vendor/patch it for announcement capture unless the `announced_hashes` counter proves the store grows large.
 - **Operations**: crawler is significantly more aggressive (more sampling QPS, more fetch concurrency); on shared/limited connections, reduce `--sampler-qps`/`--qps`/`--concurrency` accordingly. The `--aggressive` preset already scales these up for VPS use.

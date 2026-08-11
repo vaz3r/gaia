@@ -1,133 +1,24 @@
-use std::sync::Mutex;
-use std::sync::Arc;
+pub mod model;
+pub mod schema;
+
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params, OptionalExtension};
-use rusqlite::types::Type;
+use rusqlite::{params, Connection, OptionalExtension};
 
-/// Categories persisted for indexed torrents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Category {
-    Movie,
-    Tv,
-    /// Everything that is not confidently movie or TV (kept, not filtered).
-    Other,
-}
-
-impl Category {
-    fn as_str(self) -> &'static str {
-        match self {
-            Category::Movie => "movie",
-            Category::Tv => "tv",
-            Category::Other => "other",
-        }
-    }
-
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "movie" => Some(Category::Movie),
-            "tv" => Some(Category::Tv),
-            "other" => Some(Category::Other),
-            _ => None,
-        }
-    }
-}
-
-/// Exponential backoff in seconds: 5m, 10m, 20m, ... capped at 6h.
-pub fn backoff_secs(attempts: i64) -> i64 {
-    const BASE: i64 = 300;
-    const MAX: i64 = 6 * 3600;
-    let n = attempts.max(1) - 1;
-    let shift = n.min(30);
-    let secs = BASE.saturating_mul(1i64 << shift);
-    secs.min(MAX)
-}
-
-/// A single accepted torrent record, keyed by its 20-byte info hash.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TorrentRecord {
-    pub info_hash: [u8; 20],
-    pub name: String,
-    pub category: Category,
-    pub title: String,
-    pub year: Option<i64>,
-    pub season: Option<i64>,
-    pub episode: Option<i64>,
-    pub size_bytes: Option<i64>,
-    pub file_count: Option<i64>,
-    pub first_seen: i64,
-    pub last_seen: i64,
-}
-
-const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS torrents (
-    info_hash  BLOB PRIMARY KEY,
-    name       TEXT NOT NULL,
-    category   TEXT NOT NULL CHECK(category IN ('movie', 'tv', 'other')),
-    title      TEXT,
-    year       INTEGER,
-    season     INTEGER,
-    episode    INTEGER,
-    size_bytes INTEGER,
-    file_count INTEGER,
-    first_seen INTEGER NOT NULL,
-    last_seen  INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS scanned (
-    info_hash      BLOB PRIMARY KEY,
-    status         TEXT NOT NULL CHECK(status IN ('ok', 'skipped', 'failed')),
-    info_bytes     BLOB,
-    raw_name       TEXT,
-    attempts       INTEGER NOT NULL DEFAULT 0,
-    last_attempt   INTEGER NOT NULL,
-    next_attempt   INTEGER NOT NULL,
-    failure_reason TEXT
-);
-";
+pub use model::{backoff_secs, ScannedRecord, ScannedStatus, TorrentRecord};
 
 const UPSERT: &str = "
-INSERT INTO torrents (info_hash, name, category, title, year, season, episode, size_bytes, file_count, first_seen, last_seen)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+INSERT INTO torrents (info_hash, name, size_bytes, file_count, first_seen, last_seen)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6)
 ON CONFLICT(info_hash) DO UPDATE SET
     name       = excluded.name,
-    category   = excluded.category,
-    title      = excluded.title,
-    year       = excluded.year,
-    season     = excluded.season,
-    episode    = excluded.episode,
     size_bytes = excluded.size_bytes,
     file_count = excluded.file_count,
     last_seen  = excluded.last_seen
 ";
 
-const SELECT_COLS: &str = "info_hash, name, category, title, year, season, episode, size_bytes, file_count, first_seen, last_seen";
-
-/// Outcome of a metadata fetch attempt for an infohash.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ScannedStatus {
-    /// Metadata fetched, SHA-1 verified, and accepted (movie/TV).
-    Ok,
-    /// Metadata fetched and verified but filtered out (not movie/TV).
-    Skipped,
-    /// Metadata could not be fetched; `attempts` and `next_attempt` drive
-    /// exponential backoff. `failure_reason` is the dominant failure class.
-    Failed {
-        attempts: i64,
-        next_attempt: i64,
-        failure_reason: Option<String>,
-    },
-}
-
-/// A row in the `scanned` table. `info_bytes` holds the raw bencoded `info`
-/// dictionary for `Ok`/`Skipped` rows so classification can be re-run offline.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScannedRecord {
-    pub info_hash: [u8; 20],
-    pub status: ScannedStatus,
-    pub info_bytes: Option<Vec<u8>>,
-    pub raw_name: Option<String>,
-    pub last_attempt: i64,
-}
+const SELECT_COLS: &str = "info_hash, name, size_bytes, file_count, first_seen, last_seen";
 
 /// SQLite-backed storage with WAL mode. A writer connection handles batched
 /// upserts; a reader connection serves membership checks and searches so reads
@@ -139,61 +30,18 @@ pub struct Storage {
 }
 
 impl Storage {
-    /// Open (or create) the database and initialize the schema.
+    /// Open (or create) the database and initialize/migrate the schema.
     pub fn open(path: &str) -> Result<Self> {
         let write = Connection::open(path).with_context(|| format!("open db {path}"))?;
-        Self::configure(&write)?;
+        schema::configure(&write)?;
 
         let read = Connection::open(path).with_context(|| format!("open db {path}"))?;
-        Self::configure(&read)?;
+        schema::configure(&read)?;
 
         Ok(Self {
             write: Arc::new(Mutex::new(write)),
             read: Arc::new(Mutex::new(read)),
         })
-    }
-
-    fn configure(conn: &Connection) -> Result<()> {
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.execute_batch(SCHEMA)?;
-        // Migration: add failure_reason column to existing databases.
-        let _ = conn.execute_batch(
-            "ALTER TABLE scanned ADD COLUMN failure_reason TEXT",
-        );
-        // Migration: widen the category CHECK to include 'other'. SQLite cannot
-        // alter a CHECK, so rebuild the table. No-op for fresh databases whose
-        // CREATE already includes 'other'.
-        if let Ok(sql) = conn.query_row(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='torrents'",
-            [],
-            |r| r.get::<_, String>(0),
-        ) {
-            if sql.contains("'movie', 'tv')") {
-                conn.execute_batch(
-                    "BEGIN;
-                     ALTER TABLE torrents RENAME TO torrents_old;
-                     CREATE TABLE torrents (
-                         info_hash  BLOB PRIMARY KEY,
-                         name       TEXT NOT NULL,
-                         category   TEXT NOT NULL CHECK(category IN ('movie', 'tv', 'other')),
-                         title      TEXT,
-                         year       INTEGER,
-                         season     INTEGER,
-                         episode    INTEGER,
-                         size_bytes INTEGER,
-                         file_count INTEGER,
-                         first_seen INTEGER NOT NULL,
-                         last_seen  INTEGER NOT NULL
-                     );
-                     INSERT INTO torrents (info_hash, name, category, title, year, season, episode, size_bytes, file_count, first_seen, last_seen)
-                         SELECT info_hash, name, category, title, year, season, episode, size_bytes, file_count, first_seen, last_seen FROM torrents_old;
-                     DROP TABLE torrents_old;
-                     COMMIT;",
-                )?;
-            }
-        }
-        Ok(())
     }
 
     /// Insert or update a batch of records in a single transaction, preserving
@@ -202,17 +50,11 @@ impl Storage {
         let mut conn = self.write.lock().unwrap();
         let tx = conn.transaction()?;
         for r in records {
-            Self::validate_record(r)?;
             tx.execute(
                 UPSERT,
                 params![
                     r.info_hash,
                     r.name,
-                    r.category.as_str(),
-                    r.title,
-                    r.year,
-                    r.season,
-                    r.episode,
                     r.size_bytes,
                     r.file_count,
                     r.first_seen,
@@ -222,12 +64,6 @@ impl Storage {
         }
         tx.commit()?;
         Ok(())
-    }
-
-    fn validate_record(r: &TorrentRecord) -> Result<()> {
-        match r.category {
-            Category::Movie | Category::Tv | Category::Other => Ok(()),
-        }
     }
 
     /// The recorded scan status for `info_hash`, or `None` if never attempted.
@@ -315,7 +151,8 @@ impl Storage {
     }
 
     /// Case-insensitive substring search over the raw release name.
-    pub fn search(&self, query: &str) -> Result<Vec<TorrentRecord>> {        let escaped = query.replace('%', r"\%").replace('_', r"\_");
+    pub fn search(&self, query: &str) -> Result<Vec<TorrentRecord>> {
+        let escaped = query.replace('%', r"\%").replace('_', r"\_");
         let pattern = format!("%{escaped}%");
         let conn = self.read.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -349,24 +186,17 @@ impl Storage {
         Ok(out)
     }
 
-    fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<TorrentRecord> {        let info_hash: Vec<u8> = row.get(0)?;
-        let category: String = row.get(2)?;
-        let category = Category::parse(&category)
-            .ok_or_else(|| rusqlite::Error::FromSqlConversionFailure(2, Type::Text, Box::new(std::io::Error::other("bad category"))))?;
+    fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<TorrentRecord> {
+        let info_hash: Vec<u8> = row.get(0)?;
         let mut ih = [0u8; 20];
         ih.copy_from_slice(&info_hash);
         Ok(TorrentRecord {
             info_hash: ih,
             name: row.get(1)?,
-            category,
-            title: row.get(3)?,
-            year: row.get(4)?,
-            season: row.get(5)?,
-            episode: row.get(6)?,
-            size_bytes: row.get(7)?,
-            file_count: row.get(8)?,
-            first_seen: row.get(9)?,
-            last_seen: row.get(10)?,
+            size_bytes: row.get(2)?,
+            file_count: row.get(3)?,
+            first_seen: row.get(4)?,
+            last_seen: row.get(5)?,
         })
     }
 }
@@ -387,11 +217,6 @@ mod tests {
         TorrentRecord {
             info_hash: [hash; 20],
             name: "The Matrix 1999".into(),
-            category: Category::Movie,
-            title: "the matrix".into(),
-            year: Some(1999),
-            season: None,
-            episode: None,
             size_bytes: Some(1024),
             file_count: Some(1),
             first_seen: first,
@@ -409,92 +234,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].first_seen, 100, "first_seen must be immutable");
         assert_eq!(rows[0].last_seen, 200);
-        assert_eq!(rows[0].year, Some(1999), "mutable fields are refreshed");
-    }
-
-    #[test]
-    fn invalid_category_rejected() {
-        let db = tmp_db("badcat");
-        let conn = db.write.lock().unwrap();
-        // The CHECK constraint must reject unknown categories.
-        let res = conn.execute(
-            "INSERT INTO torrents (info_hash, name, category, first_seen, last_seen) VALUES (?1, 'x', 'software', 1, 1)",
-            params![vec![2u8; 20]],
-        );
-        assert!(res.is_err(), "CHECK(category IN ('movie','tv','other')) must reject 'software'");
-    }
-
-    #[test]
-    fn category_parse_rejects_unknown() {
-        assert_eq!(Category::parse("movie"), Some(Category::Movie));
-        assert_eq!(Category::parse("tv"), Some(Category::Tv));
-        assert_eq!(Category::parse("other"), Some(Category::Other));
-        assert_eq!(Category::parse("software"), None);
-    }
-
-    #[test]
-    fn other_category_persisted() {
-        let db = tmp_db("other_cat");
-        let mut r = record(9, 1, 1);
-        r.category = Category::Other;
-        db.insert_batch(&[r]).unwrap();
-        let rows = db.search("matrix").unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].category, Category::Other);
-    }
-
-    #[test]
-    fn old_schema_migrates_category_check() {
-        // Simulate a pre-'other' database, then run configure() (open) which
-        // should rebuild the torrents table with the widened CHECK.
-        let path = std::env::temp_dir().join(format!(
-            "dht_crawler_migrate_cat_{}.sqlite",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE torrents (
-                info_hash  BLOB PRIMARY KEY,
-                name       TEXT NOT NULL,
-                category   TEXT NOT NULL CHECK(category IN ('movie', 'tv')),
-                title      TEXT,
-                year       INTEGER,
-                season     INTEGER,
-                episode    INTEGER,
-                size_bytes INTEGER,
-                file_count INTEGER,
-                first_seen INTEGER NOT NULL,
-                last_seen  INTEGER NOT NULL
-            );
-            INSERT INTO torrents VALUES (x'0000000000000000000000000000000000000001', 'Old 1999', 'movie', 'old', 1999, NULL, NULL, NULL, NULL, 1, 1);",
-        )
-        .unwrap();
-        drop(conn);
-
-        let storage = Storage::open(path.to_str().unwrap()).unwrap();
-        let rows = storage.search("old").unwrap();
-        assert_eq!(rows.len(), 1, "old row survives migration");
-
-        let conn = storage.read.lock().unwrap();
-        let sql: String = conn
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name='torrents'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert!(
-            sql.contains("'other'"),
-            "migrated CHECK must include 'other': {sql}"
-        );
-        drop(conn);
-
-        // 'other' now inserts fine.
-        let mut r = record(9, 1, 1);
-        r.category = Category::Other;
-        storage.insert_batch(&[r]).unwrap();
-        let _ = std::fs::remove_file(&path);
+        assert_eq!(rows[0].size_bytes, Some(1024), "mutable fields are refreshed");
     }
 
     #[test]
@@ -606,5 +346,56 @@ mod tests {
         assert_eq!(backoff_secs(3), 1200);
         assert!(backoff_secs(100) <= 6 * 3600);
         assert_eq!(backoff_secs(100), backoff_secs(200));
+    }
+
+    #[test]
+    fn media_schema_migrates_to_metadata_only() {
+        // Simulate a media-era database (with category/title/year/etc.), then
+        // open it and confirm the rebuild drops those columns and keeps rows.
+        let path = std::env::temp_dir().join(format!(
+            "dht_crawler_migrate_meta_{}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE torrents (
+                info_hash  BLOB PRIMARY KEY,
+                name       TEXT NOT NULL,
+                category   TEXT NOT NULL CHECK(category IN ('movie', 'tv', 'other')),
+                title      TEXT,
+                year       INTEGER,
+                season     INTEGER,
+                episode    INTEGER,
+                size_bytes INTEGER,
+                file_count INTEGER,
+                first_seen INTEGER NOT NULL,
+                last_seen  INTEGER NOT NULL
+            );
+            INSERT INTO torrents VALUES (x'0000000000000000000000000000000000000001', 'Old 1999', 'movie', 'old', 1999, NULL, NULL, 2048, 1, 1, 2);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let storage = Storage::open(path.to_str().unwrap()).unwrap();
+        let rows = storage.search("old").unwrap();
+        assert_eq!(rows.len(), 1, "old row survives migration");
+        assert_eq!(rows[0].size_bytes, Some(2048));
+
+        let conn = storage.read.lock().unwrap();
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='torrents'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            !sql.contains("category") && !sql.contains("title") && !sql.contains("year"),
+            "media columns must be dropped: {sql}"
+        );
+        drop(conn);
+
+        let _ = std::fs::remove_file(&path);
     }
 }

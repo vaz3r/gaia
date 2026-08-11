@@ -14,8 +14,7 @@ use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinSet;
 use tracing::debug;
 
-use crate::dht::SampledHash;
-use crate::filter::MediaFilter;
+use crate::discovery::SampledHash;
 use crate::net::Blocklist;
 use crate::stats::CrawlStats;
 use crate::storage::{
@@ -321,30 +320,10 @@ async fn fetch_one(
                 }
             };
 
-            // Every verified torrent is kept; classification only enriches the
-            // record (movie/TV get title/year/season/episode, everything else
-            // is stored as Other rather than filtered out).
-            let filter = MediaFilter;
-            let class = filter
-                .classify(&extracted.name)
-                .or_else(|| filter.classify_by_files(&extracted.files))
-                .unwrap_or_else(|| crate::filter::Classification {
-                    category: crate::storage::Category::Other,
-                    title: extracted.name.clone(),
-                    year: None,
-                    season: None,
-                    episode: None,
-                });
-
             let now = unix_secs();
             let record = TorrentRecord {
                 info_hash: *info_hash.as_bytes(),
                 name: extracted.name.clone(),
-                category: class.category,
-                title: class.title,
-                year: class.year,
-                season: class.season,
-                episode: class.episode,
                 size_bytes: Some(extracted.total_size),
                 file_count: Some(extracted.file_count),
                 first_seen: now,
