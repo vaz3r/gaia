@@ -39,8 +39,8 @@ sampler (BEP 51, UDP)
 metadata fetcher (BEP 9, TCP, SHA-1 verified)
    │  name / files / size
    ▼
-media filter (movie / tv / skip)
-   │  accepted records
+classifier (movie / tv / other — nothing is discarded)
+   │  records
    ▼
 SQLite (WAL, batched upserts)
 ```
@@ -54,18 +54,17 @@ SQLite (WAL, batched upserts)
   queue. For each infohash a DHT `get_peers` lookup finds swarm peers, up to 16
   peers are dialed concurrently, and the first peer whose `ut_metadata` pieces
   reassemble to a SHA-1 match wins. Every attempt is recorded in the `scanned`
-  table (`ok`/`skipped`/`failed`) with the raw `info` dictionary for accepted
-  and filtered torrents, so restarts never refetch known content; failed hashes
-  retry with exponential backoff (5m → 10m → ... → 6h).
-- **Filter**: deterministic, punctuation-normalized classification. A name is a
-  *movie* only if it has a 19xx–20xx year **and** a quality/container tag; a *tv*
-  only if it has a clear `SxxExx` / `Season N Episode M` / `SxNN` marker. When the
-  root name is generic, the largest contained video file is classified instead.
-  Everything else (music, software, adult, etc.) is skipped.
+  table (`ok`/`failed`) with the raw `info` dictionary, so restarts never
+  refetch known content; failed hashes retry with exponential backoff
+  (5m → 10m → ... → 6h).
+- **Classifier**: deterministic, punctuation-normalized classification labels
+  each torrent `movie`, `tv`, or `other` and extracts title/year/season/episode
+  when possible. **No torrent is filtered out** — everything verified is kept;
+  the label only enriches the record.
 - **Storage**: `torrents` table keyed by `info_hash` with a category CHECK
-  constraint, WAL mode, batched `ON CONFLICT DO UPDATE` upserts that preserve
-  `first_seen`, and case-insensitive name search. A `scanned` table tracks
-  fetch outcomes across runs.
+  constraint (`movie`/`tv`/`other`), WAL mode, batched `ON CONFLICT DO UPDATE`
+  upserts that preserve `first_seen`, and case-insensitive name search. A
+  `scanned` table tracks fetch outcomes across runs.
 
 ## CLI reference
 
@@ -79,14 +78,14 @@ SQLite (WAL, batched upserts)
 | `--ipv6` | off | Enable IPv6 DHT support |
 | `--state-dir <DIR>` | `state` | Directory for the persisted routing table |
 | `--bootstrap <HOSTS>` | 5 well-known nodes | Comma-separated bootstrap nodes |
-| `--qps <N>` | `2000` | Aggregate DHT query budget shared by sampling and peer lookups |
-| `--sampler-qps <N>` | `800` | Sampler query budget across all sampling loops |
-| `--sampler-loops <N>` | `8` | Number of concurrent sampling loops |
-| `--min-seen <N>` | `1` | Emit an infohash only after N distinct sampling responses reported it (culls the junk tail) |
+| `--qps <N>` | `5000` | Aggregate DHT query budget shared by sampling and peer lookups |
+| `--sampler-qps <N>` | `2000` | Sampler query budget across all sampling loops |
+| `--sampler-loops <N>` | `32` | Number of concurrent sampling loops |
+| `--min-seen <N>` | `2` | Emit an infohash only after N distinct sampling responses reported it (culls the junk tail) |
 | `--lookup-concurrency <N>` | `64` | Max concurrent DHT `get_peers` lookups |
 | `--max-nodes <N>` | `2048` | Maximum number of nodes in the DHT routing table |
 | `--query-timeout <SECS>` | `5` | Timeout for individual DHT queries (seconds) |
-| `--aggressive` | off | VPS preset: sampler-qps=1500, sampler-loops=16, concurrency=512, lookup-concurrency=128, dht-qps=5000, max-nodes=4096, query-timeout=3 |
+| `--aggressive` | off | VPS preset: sampler-qps=4000, sampler-loops=64, concurrency=1024, lookup-concurrency=256, dht-qps=10000, max-nodes=4096, query-timeout=3 |
 | `--blocklist <FILE>` | none | Blocklist file (IP or CIDR per line, `#` comments) |
 | `--log <FILTER>` | env `RUST_LOG` | tracing filter override |
 
@@ -131,11 +130,12 @@ confirmation unless `--yes` is given.
   its dominant `failure_reason` (`timeout`, `connect_refused`, `no_bep10`,
   `no_ut_metadata`, `metadata_rejected`, `sha1_mismatch`, `empty_peers`,
   `deadline`, `other`) so you can diagnose why hashes fail with
-  `dht-crawler query anything --failures`. Accepted and filtered
-  torrents store their raw `info` dictionary for offline re-analysis.
-- `--min-seen 2` or `3` dramatically cuts the junk tail (hashes reported by a
-  single node) at the cost of skipping rare releases; the popularity value also
-  controls processing order regardless of the threshold.
+  `dht-crawler query anything --failures`. All verified torrents store their raw
+  `info` dictionary for offline re-analysis.
+- `--min-seen 2` (default) skips the single-sighting junk tail, so fetch slots
+  go to hashes confirmed by multiple nodes; raising it to `3` culls further at
+  the cost of delaying rare releases. The popularity value also controls
+  processing order regardless of the threshold.
 - `--blocklist` lets you avoid dialing peers in given networks (e.g. honeypot
   ranges); one IP or CIDR per line, `#` comments allowed.
 

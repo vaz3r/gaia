@@ -228,6 +228,7 @@ fn query(args: config::QueryArgs) -> Result<()> {
         let category = match r.category {
             storage::Category::Movie => "movie",
             storage::Category::Tv => "tv",
+            storage::Category::Other => "other",
         };
         let year = r.year.map_or("-".to_string(), |y| y.to_string());
         let size = r.size_bytes.map_or("-".to_string(), |b| {

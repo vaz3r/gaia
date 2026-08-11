@@ -48,20 +48,20 @@ pub struct RunArgs {
 
     /// Aggregate DHT query budget (per second) shared by sampling and peer
     /// lookups. Must comfortably exceed the sampler rate.
-    #[arg(long, default_value_t = 2000)]
+    #[arg(long, default_value_t = 5000)]
     pub qps: usize,
 
     /// Sampler aggregate query budget (per second) across all sampling loops.
-    #[arg(long, default_value_t = 800)]
+    #[arg(long, default_value_t = 2000)]
     pub sampler_qps: usize,
 
     /// Number of concurrent sampling loops sharing the sampler budget.
-    #[arg(long, default_value_t = 8)]
+    #[arg(long, default_value_t = 32)]
     pub sampler_loops: usize,
 
     /// Emit an infohash to the fetcher only after this many distinct sampling
-    /// responses reported it (1 = no culling).
-    #[arg(long, default_value_t = 1)]
+    /// responses reported it (2 = fetch only hashes confirmed by two nodes).
+    #[arg(long, default_value_t = 2)]
     pub min_seen: u32,
 
     /// Upper bound (seconds) on the per-node re-query interval advertised by
@@ -139,27 +139,27 @@ impl RunArgs {
 
     /// Effective sampler QPS after applying the aggressive preset.
     pub fn effective_sampler_qps(&self) -> usize {
-        if self.aggressive { 1500 } else { self.sampler_qps }
+        if self.aggressive { 4000 } else { self.sampler_qps }
     }
 
     /// Effective sampler loops after applying the aggressive preset.
     pub fn effective_sampler_loops(&self) -> usize {
-        if self.aggressive { 16 } else { self.sampler_loops }
+        if self.aggressive { 64 } else { self.sampler_loops }
     }
 
     /// Effective concurrency after applying the aggressive preset.
     pub fn effective_concurrency(&self) -> usize {
-        if self.aggressive { 512 } else { self.concurrency }
+        if self.aggressive { 1024 } else { self.concurrency }
     }
 
     /// Effective lookup concurrency after applying the aggressive preset.
     pub fn effective_lookup_concurrency(&self) -> usize {
-        if self.aggressive { 128 } else { self.lookup_concurrency }
+        if self.aggressive { 256 } else { self.lookup_concurrency }
     }
 
     /// Effective DHT QPS after applying the aggressive preset.
     pub fn effective_qps(&self) -> usize {
-        if self.aggressive { 5000 } else { self.qps }
+        if self.aggressive { 10000 } else { self.qps }
     }
 
     /// Effective max routing nodes after applying the aggressive preset.

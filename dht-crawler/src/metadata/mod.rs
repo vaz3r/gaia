@@ -26,11 +26,13 @@ use parse::extract_metadata;
 use wire::{fetch_from_peer, sha1_info};
 
 /// Cap on distinct peers tried per infohash before giving up.
-const MAX_PEERS_PER_HASH: usize = 100;
+const MAX_PEERS_PER_HASH: usize = 50;
 /// How many peers are dialed concurrently per infohash; first verified success wins.
 const PARALLEL_DIALS: usize = 16;
-/// Per-hash wall-clock budget for peer iteration.
-const FETCH_DEADLINE: Duration = Duration::from_secs(45);
+/// Per-hash wall-clock budget for peer iteration. Successful fetches almost
+/// always complete in the first few dials, so a short deadline frees the pool
+/// quickly for the next hash.
+const FETCH_DEADLINE: Duration = Duration::from_secs(20);
 /// Per-peer connect/fetch timeout.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(7);
 /// Grace period for in-flight fetches during shutdown before they are cancelled.
@@ -38,10 +40,8 @@ const SHUTDOWN_DRAIN: Duration = Duration::from_secs(10);
 
 /// The result of one metadata fetch.
 enum FetchOutcome {
-    /// Metadata verified, classified, and persisted to the torrents table.
+    /// Metadata verified and persisted to the torrents table.
     Accepted { info_bytes: Vec<u8>, raw_name: String },
-    /// Metadata verified but filtered out (not movie/TV).
-    Skipped { info_bytes: Vec<u8>, raw_name: String },
 }
 
 /// Error from `fetch_one` carrying the dominant failure reason for DB persistence.
@@ -152,18 +152,6 @@ pub async fn run_fetcher(
                             last_attempt: unix_secs(),
                         });
                     }
-                    Ok(FetchOutcome::Skipped { info_bytes, raw_name }) => {
-                        stats
-                            .filtered_skip
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let _ = storage.record_scanned(&ScannedRecord {
-                            info_hash: *hash.as_bytes(),
-                            status: ScannedStatus::Skipped,
-                            info_bytes: Some(info_bytes),
-                            raw_name: Some(raw_name),
-                            last_attempt: unix_secs(),
-                        });
-                    }
                     Err(fe) => {
                         stats
                             .fetches_failed
@@ -219,9 +207,11 @@ pub async fn run_fetcher(
     tasks.abort_all();
 }
 
-/// Fetch and classify one infohash. Holds a lookup permit (bounding concurrent
-/// DHT lookups) for the whole call. Peers are dialed in parallel and the first
-/// SHA-1-verified, classified result wins.
+/// Fetch and classify one infohash. Acquires a lookup permit only to start the
+/// `get_peers` stream (the actor's DhtLookup keeps running in the background and
+/// feeds the channel), then releases it so the pool is not blocked by slow peer
+/// dialing — `concurrency` bounds in-flight fetches, not `lookup_concurrency`.
+/// Peers are dialed in parallel and the first SHA-1-verified result wins.
 async fn fetch_one(
     info_hash: Id20,
     handle: DhtHandle,
@@ -231,10 +221,12 @@ async fn fetch_one(
     blocklist: &Blocklist,
     lookup_permits: &Semaphore,
 ) -> std::result::Result<FetchOutcome, FetchError> {
-    let _permit = lookup_permits.acquire().await.context("lookup permit")
-        .map_err(|e| FetchError { reason: e, dominant_failure: None })?;
-    let mut peers = handle.get_peers(info_hash).await.context("get_peers failed")
-        .map_err(|e| FetchError { reason: e, dominant_failure: None })?;
+    let mut peers = {
+        let _permit = lookup_permits.acquire().await.context("lookup permit")
+            .map_err(|e| FetchError { reason: e, dominant_failure: None })?;
+        handle.get_peers(info_hash).await.context("get_peers failed")
+            .map_err(|e| FetchError { reason: e, dominant_failure: None })?
+    };
 
     let deadline = tokio::time::Instant::now() + FETCH_DEADLINE;
     let mut tried = 0usize;
@@ -329,16 +321,20 @@ async fn fetch_one(
                 }
             };
 
+            // Every verified torrent is kept; classification only enriches the
+            // record (movie/TV get title/year/season/episode, everything else
+            // is stored as Other rather than filtered out).
             let filter = MediaFilter;
-            let Some(class) = filter
+            let class = filter
                 .classify(&extracted.name)
                 .or_else(|| filter.classify_by_files(&extracted.files))
-            else {
-                return Ok(FetchOutcome::Skipped {
-                    info_bytes: meta.info_bytes,
-                    raw_name: extracted.name,
+                .unwrap_or_else(|| crate::filter::Classification {
+                    category: crate::storage::Category::Other,
+                    title: extracted.name.clone(),
+                    year: None,
+                    season: None,
+                    episode: None,
                 });
-            };
 
             let now = unix_secs();
             let record = TorrentRecord {

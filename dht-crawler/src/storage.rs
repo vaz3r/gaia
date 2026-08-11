@@ -5,11 +5,13 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, params, OptionalExtension};
 use rusqlite::types::Type;
 
-/// The only two categories ever persisted.
+/// Categories persisted for indexed torrents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
     Movie,
     Tv,
+    /// Everything that is not confidently movie or TV (kept, not filtered).
+    Other,
 }
 
 impl Category {
@@ -17,6 +19,7 @@ impl Category {
         match self {
             Category::Movie => "movie",
             Category::Tv => "tv",
+            Category::Other => "other",
         }
     }
 
@@ -24,6 +27,7 @@ impl Category {
         match s {
             "movie" => Some(Category::Movie),
             "tv" => Some(Category::Tv),
+            "other" => Some(Category::Other),
             _ => None,
         }
     }
@@ -59,7 +63,7 @@ const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS torrents (
     info_hash  BLOB PRIMARY KEY,
     name       TEXT NOT NULL,
-    category   TEXT NOT NULL CHECK(category IN ('movie', 'tv')),
+    category   TEXT NOT NULL CHECK(category IN ('movie', 'tv', 'other')),
     title      TEXT,
     year       INTEGER,
     season     INTEGER,
@@ -157,6 +161,38 @@ impl Storage {
         let _ = conn.execute_batch(
             "ALTER TABLE scanned ADD COLUMN failure_reason TEXT",
         );
+        // Migration: widen the category CHECK to include 'other'. SQLite cannot
+        // alter a CHECK, so rebuild the table. No-op for fresh databases whose
+        // CREATE already includes 'other'.
+        if let Ok(sql) = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='torrents'",
+            [],
+            |r| r.get::<_, String>(0),
+        ) {
+            if sql.contains("'movie', 'tv')") {
+                conn.execute_batch(
+                    "BEGIN;
+                     ALTER TABLE torrents RENAME TO torrents_old;
+                     CREATE TABLE torrents (
+                         info_hash  BLOB PRIMARY KEY,
+                         name       TEXT NOT NULL,
+                         category   TEXT NOT NULL CHECK(category IN ('movie', 'tv', 'other')),
+                         title      TEXT,
+                         year       INTEGER,
+                         season     INTEGER,
+                         episode    INTEGER,
+                         size_bytes INTEGER,
+                         file_count INTEGER,
+                         first_seen INTEGER NOT NULL,
+                         last_seen  INTEGER NOT NULL
+                     );
+                     INSERT INTO torrents (info_hash, name, category, title, year, season, episode, size_bytes, file_count, first_seen, last_seen)
+                         SELECT info_hash, name, category, title, year, season, episode, size_bytes, file_count, first_seen, last_seen FROM torrents_old;
+                     DROP TABLE torrents_old;
+                     COMMIT;",
+                )?;
+            }
+        }
         Ok(())
     }
 
@@ -189,10 +225,9 @@ impl Storage {
     }
 
     fn validate_record(r: &TorrentRecord) -> Result<()> {
-        if r.category != Category::Movie && r.category != Category::Tv {
-            anyhow::bail!("invalid category for {:?}: not movie/tv", r.info_hash);
+        match r.category {
+            Category::Movie | Category::Tv | Category::Other => Ok(()),
         }
-        Ok(())
     }
 
     /// The recorded scan status for `info_hash`, or `None` if never attempted.
@@ -381,19 +416,85 @@ mod tests {
     fn invalid_category_rejected() {
         let db = tmp_db("badcat");
         let conn = db.write.lock().unwrap();
-        // The CHECK constraint on the category column must reject non movie/tv.
+        // The CHECK constraint must reject unknown categories.
         let res = conn.execute(
             "INSERT INTO torrents (info_hash, name, category, first_seen, last_seen) VALUES (?1, 'x', 'software', 1, 1)",
             params![vec![2u8; 20]],
         );
-        assert!(res.is_err(), "CHECK(category IN ('movie','tv')) must reject 'software'");
+        assert!(res.is_err(), "CHECK(category IN ('movie','tv','other')) must reject 'software'");
     }
 
     #[test]
     fn category_parse_rejects_unknown() {
         assert_eq!(Category::parse("movie"), Some(Category::Movie));
         assert_eq!(Category::parse("tv"), Some(Category::Tv));
+        assert_eq!(Category::parse("other"), Some(Category::Other));
         assert_eq!(Category::parse("software"), None);
+    }
+
+    #[test]
+    fn other_category_persisted() {
+        let db = tmp_db("other_cat");
+        let mut r = record(9, 1, 1);
+        r.category = Category::Other;
+        db.insert_batch(&[r]).unwrap();
+        let rows = db.search("matrix").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].category, Category::Other);
+    }
+
+    #[test]
+    fn old_schema_migrates_category_check() {
+        // Simulate a pre-'other' database, then run configure() (open) which
+        // should rebuild the torrents table with the widened CHECK.
+        let path = std::env::temp_dir().join(format!(
+            "dht_crawler_migrate_cat_{}.sqlite",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE torrents (
+                info_hash  BLOB PRIMARY KEY,
+                name       TEXT NOT NULL,
+                category   TEXT NOT NULL CHECK(category IN ('movie', 'tv')),
+                title      TEXT,
+                year       INTEGER,
+                season     INTEGER,
+                episode    INTEGER,
+                size_bytes INTEGER,
+                file_count INTEGER,
+                first_seen INTEGER NOT NULL,
+                last_seen  INTEGER NOT NULL
+            );
+            INSERT INTO torrents VALUES (x'0000000000000000000000000000000000000001', 'Old 1999', 'movie', 'old', 1999, NULL, NULL, NULL, NULL, 1, 1);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let storage = Storage::open(path.to_str().unwrap()).unwrap();
+        let rows = storage.search("old").unwrap();
+        assert_eq!(rows.len(), 1, "old row survives migration");
+
+        let conn = storage.read.lock().unwrap();
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='torrents'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            sql.contains("'other'"),
+            "migrated CHECK must include 'other': {sql}"
+        );
+        drop(conn);
+
+        // 'other' now inserts fine.
+        let mut r = record(9, 1, 1);
+        r.category = Category::Other;
+        storage.insert_batch(&[r]).unwrap();
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

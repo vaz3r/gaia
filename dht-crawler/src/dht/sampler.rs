@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use irontide_core::Id20;
 use irontide_dht::DhtHandle;
-use rand::seq::IteratorRandom;
+use rand::seq::SliceRandom;
 use rand::thread_rng;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -399,9 +399,11 @@ impl SamplerLoop {
 /// Pick a ready node and query it with a target equal to its own node ID. The
 /// DHT actor resolves `sample_infohashes` to `closest(target, 1)`, so a target
 /// equal to the node's own ID makes the actor query exactly this node. Ready
-/// nodes are sampled at random (spreading queries across the table) and the
-/// highest-quality candidate among them wins. A few cooling nodes cannot starve
-/// the sampler because every ready node is a candidate.
+/// nodes are shuffled then sampled so each loop spreads across the table (with
+/// a small routing table, `choose_multiple` returns items in original order —
+/// shuffling first prevents all loops from converging on the same node). The
+/// highest-quality candidate among the sampled subset wins. A few cooling nodes
+/// cannot starve the sampler because every ready node is a candidate.
 fn pick_target(
     intervals: &IntervalMap,
     node_stats: &NodeStats,
@@ -409,8 +411,16 @@ fn pick_target(
     now: Instant,
 ) -> Option<(Id20, SocketAddr)> {
     let mut rng = thread_rng();
+    let mut ready: Vec<(Id20, SocketAddr)> = nodes
+        .iter()
+        .filter(|(_, a)| intervals.is_ready(a, now))
+        .map(|(id, addr)| (*id, *addr))
+        .collect();
+    ready.shuffle(&mut rng);
+
+    let sample = ready.iter().take(PICK_CANDIDATES);
     let mut best: Option<(i64, Id20, SocketAddr)> = None;
-    for (id, addr) in nodes.iter().filter(|(_, a)| intervals.is_ready(a, now)).choose_multiple(&mut rng, PICK_CANDIDATES.min(nodes.len()).max(1)) {
+    for (id, addr) in sample {
         let score = node_stats.score(addr);
         if best.as_ref().is_none_or(|(s, _, _)| score > *s) {
             best = Some((score, *id, *addr));

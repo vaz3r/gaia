@@ -8,7 +8,6 @@ pub struct CrawlStats {
     pub fetches_attempted: AtomicU64,
     pub fetches_failed: AtomicU64,
     pub metadata_verified: AtomicU64,
-    pub filtered_skip: AtomicU64,
     pub records_persisted: AtomicU64,
 
     // Per-peer failure breakdown (diagnostic).

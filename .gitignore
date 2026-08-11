@@ -3,3 +3,5 @@
 *.sqlite-wal
 *.sqlite-shm
 state/
+crawl.log
+crawl-debug.log
