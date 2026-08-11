@@ -50,21 +50,37 @@ stays ~0.5%). The crawler container shares Gluetun's network namespace
 (`network_mode: "service:gluetun"`); DHT ports 6881–6884 are opened inbound on
 the tunnel.
 
+**Docker context:** this stack is deployed to the `remote-dev` context
+(`ssh://core@100.99.147.104`), not the local daemon. Bind mounts do **not**
+propagate correctly there, so the stack uses a **named volume** (`dht-crawler-data`)
+for the database and routing state. Confirm the context first:
+`docker context use remote-dev`.
+
 ```sh
 cd dht-crawler
-cp .env.example .env     # fill in WireGuard keys (gitignored)
-mkdir -p data && cp -r crawler.sqlite state data/   # optional warm start
+cp .env.example .env            # fill in WireGuard keys (gitignored)
 docker compose up -d --build
 docker compose logs -f dht-crawler
 ```
 
+Warm-start migration (first run): copy the existing DB + state into the named
+volume via `docker cp` (bind mounts don't work on remote-dev):
+
+```sh
+docker run -d --name dht-seed -v dht-crawler-data:/data alpine sleep 300
+docker cp crawler.sqlite dht-seed:/data/crawler.sqlite
+docker cp state dht-seed:/data/state
+docker rm -f dht-seed
+```
+
 Notes:
 - The WireGuard server must be reachable on a non-default port (Oracle Cloud
-  blocks the default 51820; this stack uses `:443`).
+  blocks the default 51820; this stack uses UDP `:443`, which does not conflict
+  with TCP 443 HTTPS — WireGuard is UDP, web is TCP).
 - If the tunnel's private DNS is unreachable, set
   `DNS_UPSTREAM_PLAIN_ADDRESSES` to public resolvers (default `1.1.1.1:53,8.8.8.8:53`).
-- Data lives in `dht-crawler/data/` (gitignored); `run.sh`/pm2 remain as
-  fallback and share the same DB path.
+- Data lives in the `dht-crawler-data` named volume on the daemon host;
+  `run.sh`/pm2 remain as fallback and share the same DB path.
 
 ## Prerequisites
 
