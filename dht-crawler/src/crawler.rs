@@ -42,8 +42,9 @@ pub async fn run(args: RunArgs) -> Result<()> {
     );
 
     // Each instance gets its own DHT node/sampler but shares one storage and
-    // one fetch pool. Start all nodes first (bootstrap in parallel), then warm
-    // their routing tables, then hand off to the samplers.
+    // one fetch pool. Instance 0 uses the configured state dir (may already
+    // hold a warm routing table); instances 1..N bootstrap from instance 0's
+    // known-live nodes so they do not start from an empty table.
     let mut handles = Vec::with_capacity(instances);
     for i in 0..instances {
         let instance_dir = if instances == 1 {
@@ -52,19 +53,32 @@ pub async fn run(args: RunArgs) -> Result<()> {
             state_dir.join(format!("instance-{i}"))
         };
         std::fs::create_dir_all(&instance_dir)?;
-        let handle = discovery::start_dht(&args, instance_dir, i).await?;
+        // Instance 0 loads the configured state; later instances reuse its
+        // persisted nodes as bootstrap seeds (captured before instance 0's
+        // in-memory table is used).
+        let seeds = if i == 0 {
+            Vec::new()
+        } else {
+            discovery::seed_nodes_from_state(&args.state_dir)
+        };
+        let handle = discovery::start_dht(&args, instance_dir, i, seeds).await?;
         handles.push(handle);
     }
 
-    // Warm routing tables concurrently so lookups have roots early.
-    let mut warmups = tokio::task::JoinSet::new();
+    let shutdown = CancellationToken::new();
+
+    // Spawn one continuous routing grower per instance so each routing table
+    // climbs toward --max-nodes throughout the crawl (not just at startup).
+    // A ~100ms interval keeps tables filling steadily without dominating the
+    // DHT query budget.
+    let mut growers = tokio::task::JoinSet::new();
     for handle in &handles {
         let handle = handle.clone();
-        warmups.spawn(async move {
-            discovery::warmup_routing(&handle, 16).await;
+        let shutdown = shutdown.clone();
+        growers.spawn(async move {
+            discovery::grow_routing(handle, Duration::from_millis(100), shutdown).await;
         });
     }
-    while warmups.join_next().await.is_some() {}
 
     let (hash_tx, hash_rx) = tokio::sync::mpsc::channel(SAMPLER_CHANNEL);
     let (record_tx, record_rx) = tokio::sync::mpsc::channel(RECORD_CHANNEL);
@@ -75,7 +89,6 @@ pub async fn run(args: RunArgs) -> Result<()> {
         min_seen: args.effective_min_seen(),
         max_interval_secs: args.sampler_max_interval,
     };
-    let shutdown = CancellationToken::new();
 
     // All instances share the hash channel; the fetcher consumes from it once.
     let mut samplers = tokio::task::JoinSet::new();
@@ -119,6 +132,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
     // Cancel the sampler loops so they drop their `emit` clones and close the
     // fetch channel; the fetcher then drains its in-flight work internally.
     shutdown.cancel();
+    while growers.join_next().await.is_some() {}
     while samplers.join_next().await.is_some() {}
     let _ = tokio::time::timeout(SHUTDOWN_DRAIN + Duration::from_secs(5), &mut fetcher).await;
     fetcher.abort();

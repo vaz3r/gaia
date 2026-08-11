@@ -20,7 +20,7 @@ module.exports = {
       name: "dht-crawler",
       cwd: __dirname,
       script: "../target/release/dht-crawler",
-      args: "run --db crawler.sqlite --state-dir state --port 6881 --log dht_crawler=info",
+      args: "run --db crawler.sqlite --state-dir state --port 6881 --instances 4 --log dht_crawler=info",
       // The crawler is a single long-running process; do not fork-mode cluster.
       instances: 1,
       exec_mode: "fork",

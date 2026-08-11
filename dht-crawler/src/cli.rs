@@ -47,7 +47,7 @@ pub struct RunArgs {
     pub instances: usize,
 
     /// Comma-separated bootstrap nodes (host:port).
-    #[arg(long, value_delimiter = ',', default_value = "router.bittorrent.com:6881,dht.transmissionbt.com:6881,router.utorrent.com:6881,dht.libtorrent.org:25401,dht.aelitis.com:6881")]
+    #[arg(long, value_delimiter = ',', default_value = "router.bittorrent.com:6881,dht.transmissionbt.com:6881,router.utorrent.com:6881,dht.libtorrent.org:25401,dht.aelitis.com:6881,router.bitcomet.com:6881,bt.offer.bitcomet.com:6881,router.bittorrent.com:6882")]
     pub bootstrap: Vec<String>,
 
     /// Aggregate DHT query budget (per second) shared by sampling and peer
@@ -79,8 +79,14 @@ pub struct RunArgs {
     pub lookup_concurrency: usize,
 
     /// Maximum number of nodes in the DHT routing table.
-    #[arg(long, default_value_t = 2048)]
+    #[arg(long, default_value_t = 4096)]
     pub max_nodes: usize,
+
+    /// Disable irontide's one-node-per-IP routing restriction. Off by default;
+    /// enable on NAT hosts where many peers share egress IPs and routing
+    /// diversity is suppressed.
+    #[arg(long)]
+    pub no_restrict_ips: bool,
 
     /// Timeout in seconds for individual DHT queries.
     #[arg(long, default_value_t = 5)]
@@ -159,7 +165,7 @@ impl RunArgs {
 
     /// Effective max routing nodes after applying the aggressive preset.
     pub fn effective_max_nodes(&self) -> usize {
-        if self.aggressive { 4096 } else { self.max_nodes }
+        if self.aggressive { 8192 } else { self.max_nodes }
     }
 
     /// Effective query timeout after applying the aggressive preset.

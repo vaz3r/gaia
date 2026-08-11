@@ -35,9 +35,11 @@ pm2 stop dht-crawler               # graceful stop
 pm2 save && pm2 startup            # auto-start on boot
 ```
 
-To scale discovery, pass `--instances N` in the `args` of the ecosystem file
-(uses ports `6881..6881+N-1`); keep `instances: 1` in PM2 config since each
-DHT node is its own process slot.
+The included `ecosystem.config.cjs` runs **4 instances** by default (ports
+`6881..6884`), multiplying discovery breadth; each instance has its own
+routing table and sampler, all feeding one database. Keep `instances: 1` in
+the PM2 app config (the crawler spawns its own DHT instances internally). To
+change the count, edit `--instances N` in the ecosystem `args`.
 
 ## Prerequisites
 
@@ -96,9 +98,10 @@ SQLite (WAL, batched upserts)
 | `--sampler-loops <N>` | `32` | Number of concurrent sampling loops |
 | `--min-seen <N>` | `2` | Emit an infohash only after N distinct sampling responses reported it (culls the junk tail) |
 | `--lookup-concurrency <N>` | `256` | Max concurrent DHT `get_peers` lookups |
-| `--max-nodes <N>` | `2048` | Maximum number of nodes in the DHT routing table |
+| `--max-nodes <N>` | `4096` | Maximum number of nodes in the DHT routing table |
+| `--no-restrict-ips` | off | Disable one-node-per-IP routing restriction (opt-in for NAT) |
 | `--query-timeout <SECS>` | `5` | Timeout for individual DHT queries (seconds) |
-| `--aggressive` | off | VPS preset: sampler-qps=4000, sampler-loops=64, concurrency=1024, lookup-concurrency=512, dht-qps=12000, max-nodes=4096, query-timeout=3 |
+| `--aggressive` | off | VPS preset: sampler-qps=4000, sampler-loops=64, concurrency=1024, lookup-concurrency=512, dht-qps=12000, max-nodes=8192, query-timeout=3 |
 | `--blocklist <FILE>` | none | Blocklist file (IP or CIDR per line, `#` comments) |
 | `--log <FILTER>` | env `RUST_LOG` | tracing filter override |
 
@@ -160,7 +163,12 @@ confirmation unless `--yes` is given.
   60 seconds, since their swarm may appear quickly.
 - `--instances N` runs N independent DHT nodes on `port`..`port+N-1`, each with
   its own routing table (and state dir), all feeding one database — this
-  multiplies discovery breadth. Use with `--aggressive` on a VPS.
+  multiplies discovery breadth. Use with `--aggressive` on a VPS. Each instance
+  also runs a continuous routing grower (throttled `get_peers` on random
+  targets) so its table keeps growing toward `--max-nodes` throughout the crawl.
+- `--no-restrict-ips` lifts irontide's one-node-per-IP routing restriction;
+  on NAT hosts where many peers share egress IPs this can grow the routing
+  table with more distinct node IDs.
 - `--blocklist` lets you avoid dialing peers in given networks (e.g. honeypot
   ranges); one IP or CIDR per line, `#` comments allowed.
 
