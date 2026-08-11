@@ -15,10 +15,10 @@ use tokio::task::JoinSet;
 use tracing::debug;
 
 use crate::discovery::SampledHash;
-use crate::net::Blocklist;
+use crate::net::{Blocklist, DeadPeerCache};
 use crate::stats::CrawlStats;
 use crate::storage::{
-    backoff_secs, ScannedRecord, ScannedStatus, Storage, TorrentRecord,
+    backoff_secs, EMPTY_PEERS_RETRY_SECS, ScannedRecord, ScannedStatus, Storage, TorrentRecord,
 };
 
 use parse::extract_metadata;
@@ -31,7 +31,11 @@ const PARALLEL_DIALS: usize = 16;
 /// Per-hash wall-clock budget for peer iteration. Successful fetches almost
 /// always complete in the first few dials, so a short deadline frees the pool
 /// quickly for the next hash.
-const FETCH_DEADLINE: Duration = Duration::from_secs(20);
+const FETCH_DEADLINE: Duration = Duration::from_secs(12);
+/// Dials to attempt before concluding a hash is dead (all connect failures).
+/// If this many consecutive dials fail with no successful handshake, the fetch
+/// aborts early instead of waiting out `FETCH_DEADLINE`.
+const EARLY_ABORT_DIALS: usize = 24;
 /// Per-peer connect/fetch timeout.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(7);
 /// Grace period for in-flight fetches during shutdown before they are cancelled.
@@ -84,6 +88,11 @@ impl HashQueue {
         }
         None
     }
+
+    /// Number of distinct hashes currently queued and not yet fetched.
+    fn depth(&self) -> usize {
+        self.current.len()
+    }
 }
 
 /// Fetcher pool settings.
@@ -111,6 +120,7 @@ pub async fn run_fetcher(
     let peer_id = random_peer_id();
     let lookup_permits = Arc::new(Semaphore::new(cfg.lookup_concurrency.max(1)));
     let in_flight: Arc<Mutex<HashSet<Id20>>> = Arc::new(Mutex::new(HashSet::new()));
+    let dead_peers: Arc<Mutex<DeadPeerCache>> = Arc::new(Mutex::new(DeadPeerCache::new(2, 600)));
     let mut queue = HashQueue::new();
     let mut tasks = JoinSet::new();
     let max = cfg.concurrency.max(1);
@@ -138,9 +148,19 @@ pub async fn run_fetcher(
             let blocklist = cfg.blocklist.clone();
             let permits = lookup_permits.clone();
             let in_flight = in_flight.clone();
+            let dead_peers = dead_peers.clone();
             tasks.spawn(async move {
-                let outcome = fetch_one(hash, handle, tx, peer_id, &stats, &blocklist, &permits)
-                    .await;
+                let outcome = fetch_one(
+                    hash,
+                    handle,
+                    tx,
+                    peer_id,
+                    &stats,
+                    &blocklist,
+                    &permits,
+                    &dead_peers,
+                )
+                .await;
                 match outcome {
                     Ok(FetchOutcome::Accepted { info_bytes, raw_name }) => {
                         let _ = storage.record_scanned(&ScannedRecord {
@@ -165,11 +185,16 @@ pub async fn run_fetcher(
                                 _ => 1,
                             });
                         let now = unix_secs();
+                        let delay = if fe.dominant_failure.as_deref() == Some("empty_peers") {
+                            EMPTY_PEERS_RETRY_SECS
+                        } else {
+                            backoff_secs(attempts)
+                        };
                         let _ = storage.record_scanned(&ScannedRecord {
                             info_hash: *hash.as_bytes(),
                             status: ScannedStatus::Failed {
                                 attempts,
-                                next_attempt: now + backoff_secs(attempts),
+                                next_attempt: now + delay,
                                 failure_reason: fe.dominant_failure,
                             },
                             info_bytes: None,
@@ -195,6 +220,14 @@ pub async fn run_fetcher(
             }
             _ = tasks.join_next(), if !tasks.is_empty() => {}
         }
+
+        // Publish pipeline depth snapshots for the stats loop.
+        stats
+            .fetch_in_flight
+            .store(tasks.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        stats
+            .queue_depth
+            .store(queue.depth() as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
     // Drain in-flight fetches before returning (graceful shutdown), but bound
@@ -211,6 +244,7 @@ pub async fn run_fetcher(
 /// feeds the channel), then releases it so the pool is not blocked by slow peer
 /// dialing — `concurrency` bounds in-flight fetches, not `lookup_concurrency`.
 /// Peers are dialed in parallel and the first SHA-1-verified result wins.
+#[allow(clippy::too_many_arguments)]
 async fn fetch_one(
     info_hash: Id20,
     handle: DhtHandle,
@@ -219,6 +253,7 @@ async fn fetch_one(
     stats: &CrawlStats,
     blocklist: &Blocklist,
     lookup_permits: &Semaphore,
+    dead_peers: &Arc<Mutex<DeadPeerCache>>,
 ) -> std::result::Result<FetchOutcome, FetchError> {
     let mut peers = {
         let _permit = lookup_permits.acquire().await.context("lookup permit")
@@ -233,6 +268,10 @@ async fn fetch_one(
     let mut dialed_ips: HashSet<IpAddr> = HashSet::new();
     let mut any_peers_seen = false;
     let mut failure_counts: HashMap<&'static str, u32> = HashMap::new();
+    // Counts dials that failed to connect or handshake. If this reaches
+    // EARLY_ABORT_DIALS before any successful handshake, the hash is dead.
+    let mut consecutive_connect_failures = 0usize;
+    let mut any_handshake = false;
 
     'outer: while let Some(batch) = peers.recv().await {
         if tokio::time::Instant::now() >= deadline {
@@ -244,11 +283,16 @@ async fn fetch_one(
         }
 
         let mut candidates: Vec<SocketAddr> = Vec::with_capacity(PARALLEL_DIALS);
+        let now = unix_secs();
+        dead_peers.lock().unwrap().prune(now);
         for peer in batch {
             if tried >= MAX_PEERS_PER_HASH {
                 break 'outer;
             }
             if blocklist.contains(peer.ip()) {
+                continue;
+            }
+            if dead_peers.lock().unwrap().is_dead(peer.ip(), now) {
                 continue;
             }
             if !seen_peers.insert(peer) || !dialed_ips.insert(peer.ip()) {
@@ -267,7 +311,10 @@ async fn fetch_one(
         let mut dials = JoinSet::new();
         for peer in candidates {
             dials.spawn(async move {
-                tokio::time::timeout(FETCH_TIMEOUT, fetch_from_peer(peer, info_hash, peer_id)).await
+                let result =
+                    tokio::time::timeout(FETCH_TIMEOUT, fetch_from_peer(peer, info_hash, peer_id))
+                        .await;
+                (peer, result)
             });
         }
         while let Some(res) = dials.join_next().await {
@@ -275,28 +322,46 @@ async fn fetch_one(
                 *failure_counts.entry("deadline").or_insert(0) += 1;
                 break;
             }
-            let meta = match res {
-                Ok(Ok(Ok(m))) => m,
-                Ok(Ok(Err(e))) => {
+            let (peer, inner) = match res {
+                Ok(v) => v,
+                Err(_) => {
+                    *failure_counts.entry("other").or_insert(0) += 1;
+                    stats
+                        .peer_errors_other
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    continue;
+                }
+            };
+            let now = unix_secs();
+            let meta = match inner {
+                Ok(Ok(m)) => m,
+                Ok(Err(e)) => {
+                    // The TCP connect + handshake succeeded; this peer is
+                    // reachable even though metadata failed, so the hash is
+                    // not dead. Reset the early-abort counter.
+                    consecutive_connect_failures = 0;
+                    any_handshake = true;
                     let key = classify_error(&e);
                     *failure_counts.entry(key).or_insert(0) += 1;
                     classify_peer_error(&e, stats);
                     debug!(%info_hash, error = %e, "peer metadata fetch failed");
                     continue;
                 }
-                Ok(Err(_elapsed)) => {
+                Err(_elapsed) => {
                     *failure_counts.entry("timeout").or_insert(0) += 1;
                     stats
                         .connect_timeout
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     debug!(%info_hash, "peer dial timed out");
-                    continue;
-                }
-                Err(_) => {
-                    *failure_counts.entry("other").or_insert(0) += 1;
-                    stats
-                        .peer_errors_other
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    dead_peers.lock().unwrap().record_failure(peer.ip(), now);
+                    consecutive_connect_failures += 1;
+                    if !any_handshake && consecutive_connect_failures >= EARLY_ABORT_DIALS {
+                        *failure_counts.entry("early_abort").or_insert(0) += 1;
+                        stats
+                            .early_abort
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        break 'outer;
+                    }
                     continue;
                 }
             };

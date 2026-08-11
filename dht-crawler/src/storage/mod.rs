@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
-pub use model::{backoff_secs, ScannedRecord, ScannedStatus, TorrentRecord};
+pub use model::{
+    backoff_secs, EMPTY_PEERS_RETRY_SECS, ScannedRecord, ScannedStatus, TorrentRecord,
+};
 
 const UPSERT: &str = "
 INSERT INTO torrents (info_hash, name, size_bytes, file_count, first_seen, last_seen)
@@ -341,9 +343,9 @@ mod tests {
 
     #[test]
     fn backoff_grows_exponentially_and_caps() {
-        assert_eq!(backoff_secs(1), 300);
-        assert_eq!(backoff_secs(2), 600);
-        assert_eq!(backoff_secs(3), 1200);
+        assert_eq!(backoff_secs(1), 60);
+        assert_eq!(backoff_secs(2), 120);
+        assert_eq!(backoff_secs(3), 240);
         assert!(backoff_secs(100) <= 6 * 3600);
         assert_eq!(backoff_secs(100), backoff_secs(200));
     }

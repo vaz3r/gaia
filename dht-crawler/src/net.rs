@@ -91,6 +91,51 @@ impl Blocklist {
     }
 }
 
+/// In-run cache of peer IPs that repeatedly failed to connect. Once an IP has
+/// failed `required_failures` times within the TTL window, it is skipped when
+/// dialing further hashes; it becomes eligible again after the TTL elapses.
+#[derive(Debug)]
+pub struct DeadPeerCache {
+    /// How many connect failures an IP needs before it is skipped.
+    required_failures: usize,
+    /// How long a dead marking lasts before the IP is retried.
+    ttl_secs: i64,
+    /// IP → (failure count, last-failure unix time).
+    entries: std::collections::HashMap<IpAddr, (u32, i64)>,
+}
+
+impl DeadPeerCache {
+    /// Failures required to mark dead, and the TTL in seconds.
+    pub fn new(required_failures: usize, ttl_secs: i64) -> Self {
+        Self {
+            required_failures: required_failures.max(1),
+            ttl_secs: ttl_secs.max(1),
+            entries: std::collections::HashMap::new(),
+        }
+    }
+
+    /// True if `ip` should be skipped (dead within the TTL window).
+    pub fn is_dead(&self, ip: IpAddr, now: i64) -> bool {
+        self.entries.get(&ip).is_some_and(|(count, last)| {
+            *count >= self.required_failures as u32 && now - *last < self.ttl_secs
+        })
+    }
+
+    /// Record a connect failure for `ip`. Returns true if it just became dead.
+    pub fn record_failure(&mut self, ip: IpAddr, now: i64) -> bool {
+        let entry = self.entries.entry(ip).or_insert((0, now));
+        entry.0 = entry.0.saturating_add(1);
+        entry.1 = now;
+        entry.0 >= self.required_failures as u32
+    }
+
+    /// Forget expired entries; keeps the map small.
+    pub fn prune(&mut self, now: i64) {
+        self.entries
+            .retain(|_, (_, last)| now - *last < self.ttl_secs);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,5 +171,43 @@ mod tests {
     fn bad_lines_rejected() {
         assert!(Blocklist::from_text("not-an-ip\n").is_err());
         assert!(Blocklist::from_text("1.2.3.4/99\n").is_err());
+    }
+
+    #[test]
+    fn dead_peer_cache_skips_after_threshold_and_expires() {
+        let mut cache = DeadPeerCache::new(2, 600);
+        let ip: IpAddr = "93.184.216.34".parse().unwrap();
+        let now = 1_700_000_000i64;
+
+        assert!(!cache.is_dead(ip, now));
+        cache.record_failure(ip, now);
+        assert!(!cache.is_dead(ip, now), "one failure is below threshold");
+        cache.record_failure(ip, now);
+        assert!(cache.is_dead(ip, now), "two failures mark dead");
+
+        assert!(
+            cache.is_dead(ip, now + 300),
+            "still dead inside TTL window"
+        );
+        assert!(
+            !cache.is_dead(ip, now + 601),
+            "expired after TTL"
+        );
+
+        cache.record_failure(ip, now);
+        cache.prune(now + 601);
+        assert!(
+            !cache.is_dead(ip, now + 601),
+            "prune removes expired entries"
+        );
+    }
+
+    #[test]
+    fn dead_peer_cache_threshold_one() {
+        let mut cache = DeadPeerCache::new(1, 60);
+        let ip: IpAddr = "1.2.3.4".parse().unwrap();
+        let now = 1_700_000_000i64;
+        assert!(cache.record_failure(ip, now), "single failure marks dead");
+        assert!(cache.is_dead(ip, now));
     }
 }

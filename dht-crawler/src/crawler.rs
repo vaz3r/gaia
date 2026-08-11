@@ -19,21 +19,20 @@ const STATS_INTERVAL: Duration = Duration::from_secs(30);
 /// Per-hash in-flight-fetch budget permitted before aborting at shutdown.
 const SHUTDOWN_DRAIN: Duration = Duration::from_secs(10);
 
-/// Run the crawl daemon until SIGTERM/SIGINT: BEP 51 sampler → metadata
+/// Run the crawl daemon until SIGTERM/SIGINT: N BEP 51 samplers → metadata
 /// fetcher → storage writer, then drain and persist state on shutdown.
 pub async fn run(args: RunArgs) -> Result<()> {
     let state_dir = args.state_dir.clone();
-    if !state_dir.exists() {
-        std::fs::create_dir_all(&state_dir)?;
-    }
+    std::fs::create_dir_all(&state_dir)?;
 
     let storage = Storage::open(&args.db)?;
     let stats = Arc::new(CrawlStats::default());
     let blocklist = Arc::new(Blocklist::load(args.blocklist.as_deref())?);
 
-    let handle = discovery::start_dht(&args, args.state_dir.clone()).await?;
+    let instances = args.instances.max(1);
     info!(
         port = args.port,
+        instances = instances,
         ipv6 = args.ipv6,
         db = %args.db,
         state_dir = %state_dir.display(),
@@ -41,6 +40,31 @@ pub async fn run(args: RunArgs) -> Result<()> {
         aggressive = args.aggressive,
         "dht crawler starting"
     );
+
+    // Each instance gets its own DHT node/sampler but shares one storage and
+    // one fetch pool. Start all nodes first (bootstrap in parallel), then warm
+    // their routing tables, then hand off to the samplers.
+    let mut handles = Vec::with_capacity(instances);
+    for i in 0..instances {
+        let instance_dir = if instances == 1 {
+            args.state_dir.clone()
+        } else {
+            state_dir.join(format!("instance-{i}"))
+        };
+        std::fs::create_dir_all(&instance_dir)?;
+        let handle = discovery::start_dht(&args, instance_dir, i).await?;
+        handles.push(handle);
+    }
+
+    // Warm routing tables concurrently so lookups have roots early.
+    let mut warmups = tokio::task::JoinSet::new();
+    for handle in &handles {
+        let handle = handle.clone();
+        warmups.spawn(async move {
+            discovery::warmup_routing(&handle, 16).await;
+        });
+    }
+    while warmups.join_next().await.is_some() {}
 
     let (hash_tx, hash_rx) = tokio::sync::mpsc::channel(SAMPLER_CHANNEL);
     let (record_tx, record_rx) = tokio::sync::mpsc::channel(RECORD_CHANNEL);
@@ -52,20 +76,29 @@ pub async fn run(args: RunArgs) -> Result<()> {
         max_interval_secs: args.sampler_max_interval,
     };
     let shutdown = CancellationToken::new();
-    let sampler = Sampler::new(
-        handle.clone(),
-        hash_tx,
-        storage.clone(),
-        &sampler_cfg,
-        stats.clone(),
-        shutdown.clone(),
-    );
-    let sampler_task = tokio::spawn(async move { sampler.run().await });
 
+    // All instances share the hash channel; the fetcher consumes from it once.
+    let mut samplers = tokio::task::JoinSet::new();
+    for handle in &handles {
+        let sampler = Sampler::new(
+            handle.clone(),
+            hash_tx.clone(),
+            storage.clone(),
+            &sampler_cfg,
+            stats.clone(),
+            shutdown.clone(),
+        );
+        samplers.spawn(async move { sampler.run().await });
+    }
+    // The shared channel must outlive all sampler clones: keep a live sender
+    // owned by this scope until samplers finish.
+    drop(hash_tx);
+
+    let primary = handles[0].clone();
     let mut fetcher = tokio::spawn(run_fetcher(
         hash_rx,
         record_tx,
-        handle.clone(),
+        primary.clone(),
         storage.clone(),
         FetcherConfig {
             concurrency: args.effective_concurrency(),
@@ -77,7 +110,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
 
     let writer = tokio::spawn(write_loop(record_rx, storage.clone(), stats.clone()));
 
-    let stats_task = tokio::spawn(stats_loop(handle.clone(), stats.clone()));
+    let stats_task = tokio::spawn(stats_loop(primary.clone(), stats.clone()));
 
     wait_for_shutdown().await;
 
@@ -86,7 +119,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
     // Cancel the sampler loops so they drop their `emit` clones and close the
     // fetch channel; the fetcher then drains its in-flight work internally.
     shutdown.cancel();
-    sampler_task.abort();
+    while samplers.join_next().await.is_some() {}
     let _ = tokio::time::timeout(SHUTDOWN_DRAIN + Duration::from_secs(5), &mut fetcher).await;
     fetcher.abort();
     // Dropping the fetcher aborts its JoinSet; the fetch tasks' `record_tx`
@@ -94,9 +127,11 @@ pub async fn run(args: RunArgs) -> Result<()> {
     let _ = writer.await;
     stats_task.abort();
 
-    // Persist the routing table before exit.
-    if let Err(e) = handle.shutdown_and_wait().await {
-        error!(error = %e, "failed to persist routing table");
+    // Persist every instance's routing table before exit.
+    for handle in &handles {
+        if let Err(e) = handle.shutdown_and_wait().await {
+            error!(error = %e, "failed to persist routing table");
+        }
     }
     info!("shutdown complete");
     Ok(())
@@ -170,6 +205,8 @@ async fn stats_loop(handle: DhtHandle, stats: Arc<CrawlStats>) {
             hashes_unique = s.hashes_unique.load(r),
             fetches_attempted = s.fetches_attempted.load(r),
             fetches_failed = s.fetches_failed.load(r),
+            fetch_in_flight = s.fetch_in_flight.load(r),
+            queue_depth = s.queue_depth.load(r),
             metadata_verified = s.metadata_verified.load(r),
             records_persisted = s.records_persisted.load(r),
             "crawl stats"
@@ -183,6 +220,7 @@ async fn stats_loop(handle: DhtHandle, stats: Arc<CrawlStats>) {
             sha1_mismatch = s.sha1_mismatch.load(r),
             empty_peers = s.empty_peers.load(r),
             fetch_deadline = s.fetch_deadline.load(r),
+            early_abort = s.early_abort.load(r),
             peer_errors_other = s.peer_errors_other.load(r),
             "peer failure breakdown"
         );

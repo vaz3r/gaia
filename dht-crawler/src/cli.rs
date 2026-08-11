@@ -1,4 +1,3 @@
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
@@ -42,13 +41,18 @@ pub struct RunArgs {
     #[arg(long, default_value = "state")]
     pub state_dir: PathBuf,
 
+    /// Number of independent DHT nodes/samplers to run, sharing one database.
+    /// Instance i binds UDP port `port+i` and uses `state-dir/instance-i/`.
+    #[arg(long, default_value_t = 1)]
+    pub instances: usize,
+
     /// Comma-separated bootstrap nodes (host:port).
     #[arg(long, value_delimiter = ',', default_value = "router.bittorrent.com:6881,dht.transmissionbt.com:6881,router.utorrent.com:6881,dht.libtorrent.org:25401,dht.aelitis.com:6881")]
     pub bootstrap: Vec<String>,
 
     /// Aggregate DHT query budget (per second) shared by sampling and peer
     /// lookups. Must comfortably exceed the sampler rate.
-    #[arg(long, default_value_t = 5000)]
+    #[arg(long, default_value_t = 8000)]
     pub qps: usize,
 
     /// Sampler aggregate query budget (per second) across all sampling loops.
@@ -71,7 +75,7 @@ pub struct RunArgs {
     pub sampler_max_interval: u64,
 
     /// Maximum concurrent DHT `get_peers` lookups (bounds query-budget use).
-    #[arg(long, default_value_t = 64)]
+    #[arg(long, default_value_t = 256)]
     pub lookup_concurrency: usize,
 
     /// Maximum number of nodes in the DHT routing table.
@@ -128,15 +132,6 @@ pub struct PurgeArgs {
 }
 
 impl RunArgs {
-    /// The UDP bind address for this runtime, honoring `--ipv6`.
-    pub fn bind_addr(&self) -> SocketAddr {
-        if self.ipv6 {
-            SocketAddr::from((Ipv6Addr::UNSPECIFIED, self.port))
-        } else {
-            SocketAddr::from((Ipv4Addr::UNSPECIFIED, self.port))
-        }
-    }
-
     /// Effective sampler QPS after applying the aggressive preset.
     pub fn effective_sampler_qps(&self) -> usize {
         if self.aggressive { 4000 } else { self.sampler_qps }
@@ -154,12 +149,12 @@ impl RunArgs {
 
     /// Effective lookup concurrency after applying the aggressive preset.
     pub fn effective_lookup_concurrency(&self) -> usize {
-        if self.aggressive { 256 } else { self.lookup_concurrency }
+        if self.aggressive { 512 } else { self.lookup_concurrency }
     }
 
     /// Effective DHT QPS after applying the aggressive preset.
     pub fn effective_qps(&self) -> usize {
-        if self.aggressive { 10000 } else { self.qps }
+        if self.aggressive { 12000 } else { self.qps }
     }
 
     /// Effective max routing nodes after applying the aggressive preset.

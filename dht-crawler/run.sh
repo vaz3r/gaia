@@ -40,7 +40,6 @@ exec "$BIN" run \
   --db "$DB" \
   --state-dir "$STATE" \
   --port 6881 \
-  --min-seen 1 \
   $AGGRESSIVE \
   --log dht_crawler=info \
   >"$LOG" 2>&1

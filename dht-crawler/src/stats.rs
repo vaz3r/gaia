@@ -10,6 +10,10 @@ pub struct CrawlStats {
     pub metadata_verified: AtomicU64,
     pub records_persisted: AtomicU64,
 
+    // Pipeline depth (snapshots, not cumulative).
+    pub fetch_in_flight: AtomicU64,
+    pub queue_depth: AtomicU64,
+
     // Per-peer failure breakdown (diagnostic).
     pub connect_timeout: AtomicU64,
     pub connect_refused: AtomicU64,
@@ -19,5 +23,6 @@ pub struct CrawlStats {
     pub sha1_mismatch: AtomicU64,
     pub empty_peers: AtomicU64,
     pub fetch_deadline: AtomicU64,
+    pub early_abort: AtomicU64,
     pub peer_errors_other: AtomicU64,
 }

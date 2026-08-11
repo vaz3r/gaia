@@ -11,10 +11,17 @@ use std::path::PathBuf;
 
 use crate::cli::RunArgs;
 
-/// Start the DHT actor bound to the configured UDP port and address family.
-pub async fn start_dht(args: &RunArgs, state_dir: PathBuf) -> Result<DhtHandle> {
+/// Start the DHT actor for instance `i` (0-based), bound to `port + i` and
+/// persisting its routing table to `state_dir/instance-i/`.
+pub async fn start_dht(args: &RunArgs, state_dir: PathBuf, instance: usize) -> Result<DhtHandle> {
+    let port = args.port.saturating_add(instance as u16);
+    let bind_addr = if args.ipv6 {
+        std::net::SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port))
+    } else {
+        std::net::SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, port))
+    };
     let dht = DhtConfig {
-        bind_addr: args.bind_addr(),
+        bind_addr,
         bootstrap_nodes: args.bootstrap.clone(),
         state_dir: Some(state_dir),
         address_family: if args.ipv6 {
@@ -29,4 +36,23 @@ pub async fn start_dht(args: &RunArgs, state_dir: PathBuf) -> Result<DhtHandle> 
     };
     let (handle, _ip) = DhtHandle::start(dht).await?;
     Ok(handle)
+}
+
+/// Grow the routing table quickly at startup by issuing `get_peers` on random
+/// targets. This forces find_node/get_peers cascades that populate the table
+/// faster than passive BEP 51 sampling alone, so more BEP 51-capable nodes are
+/// discovered sooner.
+pub async fn warmup_routing(handle: &DhtHandle, targets: usize) {
+    use irontide_core::Id20;
+    use rand::RngCore;
+
+    for _ in 0..targets {
+        let mut bytes = [0u8; 20];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        let target = Id20(bytes);
+        // get_peers on a random hash: even with no peers, the lookup injects
+        // nodes into the routing table. Drop the receiver immediately.
+        let _ = handle.get_peers(target).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }

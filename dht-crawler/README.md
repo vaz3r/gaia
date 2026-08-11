@@ -72,19 +72,21 @@ SQLite (WAL, batched upserts)
 | `--ipv6` | off | Enable IPv6 DHT support |
 | `--state-dir <DIR>` | `state` | Directory for the persisted routing table |
 | `--bootstrap <HOSTS>` | 5 well-known nodes | Comma-separated bootstrap nodes |
-| `--qps <N>` | `5000` | Aggregate DHT query budget shared by sampling and peer lookups |
+| `--instances <N>` | `1` | Run N independent DHT nodes/samplers, sharing one DB. Instance i binds `port+i` and uses `state-dir/instance-i/` |
+| `--qps <N>` | `8000` | Aggregate DHT query budget shared by sampling and peer lookups |
 | `--sampler-qps <N>` | `2000` | Sampler query budget across all sampling loops |
 | `--sampler-loops <N>` | `32` | Number of concurrent sampling loops |
 | `--min-seen <N>` | `2` | Emit an infohash only after N distinct sampling responses reported it (culls the junk tail) |
-| `--lookup-concurrency <N>` | `64` | Max concurrent DHT `get_peers` lookups |
+| `--lookup-concurrency <N>` | `256` | Max concurrent DHT `get_peers` lookups |
 | `--max-nodes <N>` | `2048` | Maximum number of nodes in the DHT routing table |
 | `--query-timeout <SECS>` | `5` | Timeout for individual DHT queries (seconds) |
-| `--aggressive` | off | VPS preset: sampler-qps=4000, sampler-loops=64, concurrency=1024, lookup-concurrency=256, dht-qps=10000, max-nodes=4096, query-timeout=3 |
+| `--aggressive` | off | VPS preset: sampler-qps=4000, sampler-loops=64, concurrency=1024, lookup-concurrency=512, dht-qps=12000, max-nodes=4096, query-timeout=3 |
 | `--blocklist <FILE>` | none | Blocklist file (IP or CIDR per line, `#` comments) |
 | `--log <FILTER>` | env `RUST_LOG` | tracing filter override |
 
 The daemon logs structured crawl stats (routing-table size, `announced_hashes`,
-hashes sampled, fetch success, records persisted) every 30s and shuts down
+hashes sampled, fetch success, `fetch_in_flight`, `queue_depth`, records
+persisted) every 30s and shuts down
 gracefully on SIGTERM/SIGINT: it drains in-flight fetches, flushes the database
 batch, and persists the routing table. `announced_hashes` is the number of
 infohashes other DHT nodes have announced to us; it stays near 0 on a NAT host,
@@ -122,16 +124,25 @@ confirmation unless `--yes` is given.
 - Metadata fetch failure rates are high by nature (dead peers, no `ut_metadata`,
   timeouts); the pool is sized for many cheap failures with tight timeouts, and
   previously-failed hashes are quarantined with exponential backoff (persisted
-  in the `scanned` table, so it survives restarts). Every failed fetch records
+  in the `scanned` table, so it survives restarts). A fetch aborts early if its
+  first ~24 dials all fail to connect (no handshake reached), and IPs that fail
+  to connect repeatedly are cached as dead for ~10 minutes so the same
+  unreachable peers are not re-dialed for every hash. Every failed fetch records
   its dominant `failure_reason` (`timeout`, `connect_refused`, `no_bep10`,
   `no_ut_metadata`, `metadata_rejected`, `sha1_mismatch`, `empty_peers`,
-  `deadline`, `other`) so you can diagnose why hashes fail with
+  `deadline`, `early_abort`, `other`) so you can diagnose why hashes fail with
   `dht-crawler query anything --failures`. All verified torrents store their raw
   `info` dictionary for offline re-analysis.
 - `--min-seen 2` (default) skips the single-sighting junk tail, so fetch slots
   go to hashes confirmed by multiple nodes; raising it to `3` culls further at
   the cost of delaying rare releases. The popularity value also controls
   processing order regardless of the threshold.
+- Failed hashes retry after exponential backoff starting at 1 minute (capped at
+  6 hours); hashes that failed with no peers (`empty_peers`) retry after a fixed
+  60 seconds, since their swarm may appear quickly.
+- `--instances N` runs N independent DHT nodes on `port`..`port+N-1`, each with
+  its own routing table (and state dir), all feeding one database — this
+  multiplies discovery breadth. Use with `--aggressive` on a VPS.
 - `--blocklist` lets you avoid dialing peers in given networks (e.g. honeypot
   ranges); one IP or CIDR per line, `#` comments allowed.
 

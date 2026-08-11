@@ -1,12 +1,17 @@
-/// Exponential backoff in seconds: 5m, 10m, 20m, ... capped at 6h.
+/// Exponential backoff in seconds: 1m, 2m, 4m, ... capped at 6h.
 pub fn backoff_secs(attempts: i64) -> i64 {
-    const BASE: i64 = 300;
+    const BASE: i64 = 60;
     const MAX: i64 = 6 * 3600;
     let n = attempts.max(1) - 1;
     let shift = n.min(30);
     let secs = BASE.saturating_mul(1i64 << shift);
     secs.min(MAX)
 }
+
+/// Fixed short retry window for hashes that failed with no peers at all.
+/// Their swarm may appear within a minute, so retry faster than the standard
+/// exponential backoff.
+pub const EMPTY_PEERS_RETRY_SECS: i64 = 60;
 
 /// A single accepted torrent record, keyed by its 20-byte info hash. Holds
 /// torrent metadata only; classification lives in a future `torrent_details`
