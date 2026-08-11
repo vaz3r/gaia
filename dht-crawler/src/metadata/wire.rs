@@ -17,7 +17,7 @@ pub const PIECE_SIZE: usize = 16 * 1024;
 /// Upper bound on metadata size we are willing to assemble (16 MiB).
 const MAX_METADATA_SIZE: usize = 16 * 1024 * 1024;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const PIECE_TIMEOUT: Duration = Duration::from_secs(10);
 

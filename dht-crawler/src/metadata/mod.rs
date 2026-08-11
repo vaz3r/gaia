@@ -6,7 +6,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Context};
 use irontide_core::Id20;
 use irontide_dht::DhtHandle;
 use rand::RngCore;
@@ -26,13 +26,13 @@ use parse::extract_metadata;
 use wire::{fetch_from_peer, sha1_info};
 
 /// Cap on distinct peers tried per infohash before giving up.
-const MAX_PEERS_PER_HASH: usize = 50;
+const MAX_PEERS_PER_HASH: usize = 100;
 /// How many peers are dialed concurrently per infohash; first verified success wins.
-const PARALLEL_DIALS: usize = 8;
+const PARALLEL_DIALS: usize = 16;
 /// Per-hash wall-clock budget for peer iteration.
-const FETCH_DEADLINE: Duration = Duration::from_secs(90);
+const FETCH_DEADLINE: Duration = Duration::from_secs(45);
 /// Per-peer connect/fetch timeout.
-const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+const FETCH_TIMEOUT: Duration = Duration::from_secs(7);
 /// Grace period for in-flight fetches during shutdown before they are cancelled.
 const SHUTDOWN_DRAIN: Duration = Duration::from_secs(10);
 
@@ -42,6 +42,12 @@ enum FetchOutcome {
     Accepted { info_bytes: Vec<u8>, raw_name: String },
     /// Metadata verified but filtered out (not movie/TV).
     Skipped { info_bytes: Vec<u8>, raw_name: String },
+}
+
+/// Error from `fetch_one` carrying the dominant failure reason for DB persistence.
+struct FetchError {
+    reason: anyhow::Error,
+    dominant_failure: Option<String>,
 }
 
 /// Max-heap of pending hashes keyed by their reported popularity, with
@@ -158,11 +164,11 @@ pub async fn run_fetcher(
                             last_attempt: unix_secs(),
                         });
                     }
-                    Err(e) => {
+                    Err(fe) => {
                         stats
                             .fetches_failed
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        debug!(error = %e, %hash, "metadata fetch failed");
+                        debug!(error = %fe.reason, %hash, dominant = ?fe.dominant_failure, "metadata fetch failed");
                         let attempts = storage
                             .scan_status(hash.as_bytes())
                             .ok()
@@ -177,6 +183,7 @@ pub async fn run_fetcher(
                             status: ScannedStatus::Failed {
                                 attempts,
                                 next_attempt: now + backoff_secs(attempts),
+                                failure_reason: fe.dominant_failure,
                             },
                             info_bytes: None,
                             raw_name: None,
@@ -223,18 +230,26 @@ async fn fetch_one(
     stats: &CrawlStats,
     blocklist: &Blocklist,
     lookup_permits: &Semaphore,
-) -> Result<FetchOutcome> {
-    let _permit = lookup_permits.acquire().await.context("lookup permit")?;
-    let mut peers = handle.get_peers(info_hash).await.context("get_peers failed")?;
+) -> std::result::Result<FetchOutcome, FetchError> {
+    let _permit = lookup_permits.acquire().await.context("lookup permit")
+        .map_err(|e| FetchError { reason: e, dominant_failure: None })?;
+    let mut peers = handle.get_peers(info_hash).await.context("get_peers failed")
+        .map_err(|e| FetchError { reason: e, dominant_failure: None })?;
 
     let deadline = tokio::time::Instant::now() + FETCH_DEADLINE;
     let mut tried = 0usize;
     let mut seen_peers: HashSet<SocketAddr> = HashSet::new();
     let mut dialed_ips: HashSet<IpAddr> = HashSet::new();
+    let mut any_peers_seen = false;
+    let mut failure_counts: HashMap<&'static str, u32> = HashMap::new();
 
     'outer: while let Some(batch) = peers.recv().await {
         if tokio::time::Instant::now() >= deadline {
+            *failure_counts.entry("deadline").or_insert(0) += 1;
             break;
+        }
+        if !batch.is_empty() {
+            any_peers_seen = true;
         }
 
         let mut candidates: Vec<SocketAddr> = Vec::with_capacity(PARALLEL_DIALS);
@@ -266,15 +281,38 @@ async fn fetch_one(
         }
         while let Some(res) = dials.join_next().await {
             if tokio::time::Instant::now() >= deadline {
+                *failure_counts.entry("deadline").or_insert(0) += 1;
                 break;
             }
             let meta = match res {
                 Ok(Ok(Ok(m))) => m,
-                _ => continue,
+                Ok(Ok(Err(e))) => {
+                    let key = classify_error(&e);
+                    *failure_counts.entry(key).or_insert(0) += 1;
+                    classify_peer_error(&e, stats);
+                    debug!(%info_hash, error = %e, "peer metadata fetch failed");
+                    continue;
+                }
+                Ok(Err(_elapsed)) => {
+                    *failure_counts.entry("timeout").or_insert(0) += 1;
+                    stats
+                        .connect_timeout
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    debug!(%info_hash, "peer dial timed out");
+                    continue;
+                }
+                Err(_) => {
+                    *failure_counts.entry("other").or_insert(0) += 1;
+                    stats
+                        .peer_errors_other
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    continue;
+                }
             };
 
             // SHA-1 must match the sampled infohash; never persist partial data.
             if sha1_info(&meta.info_bytes) != *info_hash.as_bytes() {
+                *failure_counts.entry("sha1_mismatch").or_insert(0) += 1;
                 debug!(%info_hash, "metadata SHA-1 mismatch, rejected");
                 continue;
             }
@@ -285,6 +323,7 @@ async fn fetch_one(
             let extracted = match extract_metadata(&meta.info_bytes) {
                 Ok(e) => e,
                 Err(e) => {
+                    *failure_counts.entry("parse_failed").or_insert(0) += 1;
                     debug!(%info_hash, error = %e, "metadata parse failed");
                     continue;
                 }
@@ -316,7 +355,8 @@ async fn fetch_one(
                 last_seen: now,
             };
 
-            tx.send(record).await.context("storage channel closed")?;
+            tx.send(record).await.context("storage channel closed")
+                .map_err(|e| FetchError { reason: e, dominant_failure: None })?;
             stats
                 .records_persisted
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -327,7 +367,21 @@ async fn fetch_one(
         }
     }
 
-    Err(anyhow!("no reachable peer yielded verified metadata"))
+    if !any_peers_seen {
+        *failure_counts.entry("empty_peers").or_insert(0) += 1;
+        stats
+            .empty_peers
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    let dominant = failure_counts.iter()
+        .max_by_key(|(_, count)| **count)
+        .map(|(reason, _)| reason.to_string());
+
+    Err(FetchError {
+        reason: anyhow!("no reachable peer yielded verified metadata"),
+        dominant_failure: dominant,
+    })
 }
 
 fn random_peer_id() -> Id20 {
@@ -341,4 +395,45 @@ fn unix_secs() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+/// Classify a peer fetch error into a static category string for per-hash tracking.
+fn classify_error(e: &anyhow::Error) -> &'static str {
+    let msg = e.to_string();
+    if msg.contains("timed out") || msg.contains("timeout") {
+        "timeout"
+    } else if msg.contains("Connection refused") {
+        "connect_refused"
+    } else if msg.contains("does not support BEP 10") {
+        "no_bep10"
+    } else if msg.contains("does not advertise ut_metadata") {
+        "no_ut_metadata"
+    } else if msg.contains("rejected metadata piece") {
+        "metadata_rejected"
+    } else if msg.contains("SHA-1 mismatch") {
+        "sha1_mismatch"
+    } else {
+        "other"
+    }
+}
+
+/// Classify a peer fetch error into a diagnostic counter.
+fn classify_peer_error(e: &anyhow::Error, stats: &CrawlStats) {
+    let msg = e.to_string();
+    let rel = std::sync::atomic::Ordering::Relaxed;
+    if msg.contains("timed out") || msg.contains("timeout") {
+        stats.connect_timeout.fetch_add(1, rel);
+    } else if msg.contains("Connection refused") {
+        stats.connect_refused.fetch_add(1, rel);
+    } else if msg.contains("does not support BEP 10") {
+        stats.no_bep10.fetch_add(1, rel);
+    } else if msg.contains("does not advertise ut_metadata") {
+        stats.no_ut_metadata.fetch_add(1, rel);
+    } else if msg.contains("rejected metadata piece") {
+        stats.metadata_rejected.fetch_add(1, rel);
+    } else if msg.contains("SHA-1 mismatch") {
+        stats.sha1_mismatch.fetch_add(1, rel);
+    } else {
+        stats.peer_errors_other.fetch_add(1, rel);
+    }
 }

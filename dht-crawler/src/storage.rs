@@ -70,13 +70,14 @@ CREATE TABLE IF NOT EXISTS torrents (
     last_seen  INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS scanned (
-    info_hash    BLOB PRIMARY KEY,
-    status       TEXT NOT NULL CHECK(status IN ('ok', 'skipped', 'failed')),
-    info_bytes   BLOB,
-    raw_name     TEXT,
-    attempts     INTEGER NOT NULL DEFAULT 0,
-    last_attempt INTEGER NOT NULL,
-    next_attempt INTEGER NOT NULL
+    info_hash      BLOB PRIMARY KEY,
+    status         TEXT NOT NULL CHECK(status IN ('ok', 'skipped', 'failed')),
+    info_bytes     BLOB,
+    raw_name       TEXT,
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    last_attempt   INTEGER NOT NULL,
+    next_attempt   INTEGER NOT NULL,
+    failure_reason TEXT
 );
 ";
 
@@ -98,15 +99,19 @@ ON CONFLICT(info_hash) DO UPDATE SET
 const SELECT_COLS: &str = "info_hash, name, category, title, year, season, episode, size_bytes, file_count, first_seen, last_seen";
 
 /// Outcome of a metadata fetch attempt for an infohash.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScannedStatus {
     /// Metadata fetched, SHA-1 verified, and accepted (movie/TV).
     Ok,
     /// Metadata fetched and verified but filtered out (not movie/TV).
     Skipped,
     /// Metadata could not be fetched; `attempts` and `next_attempt` drive
-    /// exponential backoff.
-    Failed { attempts: i64, next_attempt: i64 },
+    /// exponential backoff. `failure_reason` is the dominant failure class.
+    Failed {
+        attempts: i64,
+        next_attempt: i64,
+        failure_reason: Option<String>,
+    },
 }
 
 /// A row in the `scanned` table. `info_bytes` holds the raw bencoded `info`
@@ -148,6 +153,10 @@ impl Storage {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;
+        // Migration: add failure_reason column to existing databases.
+        let _ = conn.execute_batch(
+            "ALTER TABLE scanned ADD COLUMN failure_reason TEXT",
+        );
         Ok(())
     }
 
@@ -191,22 +200,24 @@ impl Storage {
         let conn = self.read.lock().unwrap();
         let row = conn
             .query_row(
-                "SELECT status, attempts, next_attempt FROM scanned WHERE info_hash = ?1",
+                "SELECT status, attempts, next_attempt, failure_reason FROM scanned WHERE info_hash = ?1",
                 params![info_hash],
                 |r| {
                     let status: String = r.get(0)?;
                     let attempts: i64 = r.get(1)?;
                     let next_attempt: i64 = r.get(2)?;
-                    Ok((status, attempts, next_attempt))
+                    let failure_reason: Option<String> = r.get(3)?;
+                    Ok((status, attempts, next_attempt, failure_reason))
                 },
             )
             .optional()?;
-        Ok(row.map(|(status, attempts, next_attempt)| match status.as_str() {
+        Ok(row.map(|(status, attempts, next_attempt, failure_reason)| match status.as_str() {
             "ok" => ScannedStatus::Ok,
             "skipped" => ScannedStatus::Skipped,
             _ => ScannedStatus::Failed {
                 attempts,
                 next_attempt,
+                failure_reason,
             },
         }))
     }
@@ -226,7 +237,7 @@ impl Storage {
     /// and schedules the next attempt with exponential backoff.
     pub fn record_scanned(&self, rec: &ScannedRecord) -> Result<()> {
         let conn = self.write.lock().unwrap();
-        match rec.status {
+        match &rec.status {
             ScannedStatus::Ok | ScannedStatus::Skipped => {
                 let status = match rec.status {
                     ScannedStatus::Ok => "ok",
@@ -251,16 +262,17 @@ impl Storage {
                     ],
                 )?;
             }
-            ScannedStatus::Failed { attempts, next_attempt } => {
+            ScannedStatus::Failed { attempts, next_attempt, failure_reason } => {
                 conn.execute(
-                    "INSERT INTO scanned (info_hash, status, info_bytes, raw_name, attempts, last_attempt, next_attempt)
-                     VALUES (?1, 'failed', NULL, NULL, ?2, ?3, ?4)
+                    "INSERT INTO scanned (info_hash, status, info_bytes, raw_name, attempts, last_attempt, next_attempt, failure_reason)
+                     VALUES (?1, 'failed', NULL, NULL, ?2, ?3, ?4, ?5)
                      ON CONFLICT(info_hash) DO UPDATE SET
                          status = 'failed',
                          attempts = ?2,
                          last_attempt = ?3,
-                         next_attempt = ?4",
-                    params![rec.info_hash, attempts, rec.last_attempt, next_attempt],
+                         next_attempt = ?4,
+                         failure_reason = ?5",
+                    params![rec.info_hash, attempts, rec.last_attempt, next_attempt, failure_reason],
                 )?;
             }
         }
@@ -268,8 +280,7 @@ impl Storage {
     }
 
     /// Case-insensitive substring search over the raw release name.
-    pub fn search(&self, query: &str) -> Result<Vec<TorrentRecord>> {
-        let escaped = query.replace('%', r"\%").replace('_', r"\_");
+    pub fn search(&self, query: &str) -> Result<Vec<TorrentRecord>> {        let escaped = query.replace('%', r"\%").replace('_', r"\_");
         let pattern = format!("%{escaped}%");
         let conn = self.read.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -285,8 +296,25 @@ impl Storage {
         Ok(out)
     }
 
-    fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<TorrentRecord> {
-        let info_hash: Vec<u8> = row.get(0)?;
+    /// Aggregate metadata fetch failures by dominant reason from the `scanned`
+    /// table. Returns `(reason, count)` sorted descending by count.
+    pub fn failure_breakdown(&self) -> Result<Vec<(String, i64)>> {
+        let conn = self.read.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(failure_reason, 'unknown'), COUNT(*) AS n
+             FROM scanned WHERE status = 'failed'
+             GROUP BY COALESCE(failure_reason, 'unknown')
+             ORDER BY n DESC",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<TorrentRecord> {        let info_hash: Vec<u8> = row.get(0)?;
         let category: String = row.get(2)?;
         let category = Category::parse(&category)
             .ok_or_else(|| rusqlite::Error::FromSqlConversionFailure(2, Type::Text, Box::new(std::io::Error::other("bad category"))))?;
@@ -394,6 +422,7 @@ mod tests {
             status: ScannedStatus::Failed {
                 attempts: 1,
                 next_attempt: now + backoff_secs(1),
+                failure_reason: Some("timeout".into()),
             },
             info_bytes: None,
             raw_name: None,
@@ -440,6 +469,7 @@ mod tests {
             status: ScannedStatus::Failed {
                 attempts: 1,
                 next_attempt: now + backoff_secs(1),
+                failure_reason: Some("connect_refused".into()),
             },
             info_bytes: None,
             raw_name: None,
@@ -451,6 +481,7 @@ mod tests {
             status: ScannedStatus::Failed {
                 attempts: 2,
                 next_attempt: now + backoff_secs(2),
+                failure_reason: Some("no_ut_metadata".into()),
             },
             info_bytes: None,
             raw_name: None,
@@ -462,6 +493,7 @@ mod tests {
             Some(ScannedStatus::Failed {
                 attempts: 2,
                 next_attempt: now + backoff_secs(2),
+                failure_reason: Some("no_ut_metadata".into()),
             })
         );
     }

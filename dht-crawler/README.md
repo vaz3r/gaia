@@ -51,7 +51,7 @@ SQLite (WAL, batched upserts)
   samples. Each infohash is emitted with a *popularity* count (how many
   distinct nodes reported it); hashes below `--min-seen` are never fetched.
 - **Metadata**: fetches are processed most-popular-first through a priority
-  queue. For each infohash a DHT `get_peers` lookup finds swarm peers, up to 8
+  queue. For each infohash a DHT `get_peers` lookup finds swarm peers, up to 16
   peers are dialed concurrently, and the first peer whose `ut_metadata` pieces
   reassemble to a SHA-1 match wins. Every attempt is recorded in the `scanned`
   table (`ok`/`skipped`/`failed`) with the raw `info` dictionary for accepted
@@ -78,12 +78,15 @@ SQLite (WAL, batched upserts)
 | `--concurrency <N>` | `512` | Max concurrent in-flight metadata fetches |
 | `--ipv6` | off | Enable IPv6 DHT support |
 | `--state-dir <DIR>` | `state` | Directory for the persisted routing table |
-| `--bootstrap <HOSTS>` | 4 well-known nodes | Comma-separated bootstrap nodes |
+| `--bootstrap <HOSTS>` | 5 well-known nodes | Comma-separated bootstrap nodes |
 | `--qps <N>` | `2000` | Aggregate DHT query budget shared by sampling and peer lookups |
-| `--sampler-qps <N>` | `240` | Sampler query budget across all sampling loops |
-| `--sampler-loops <N>` | `4` | Number of concurrent sampling loops |
+| `--sampler-qps <N>` | `800` | Sampler query budget across all sampling loops |
+| `--sampler-loops <N>` | `8` | Number of concurrent sampling loops |
 | `--min-seen <N>` | `1` | Emit an infohash only after N distinct sampling responses reported it (culls the junk tail) |
-| `--lookup-concurrency <N>` | `32` | Max concurrent DHT `get_peers` lookups |
+| `--lookup-concurrency <N>` | `64` | Max concurrent DHT `get_peers` lookups |
+| `--max-nodes <N>` | `2048` | Maximum number of nodes in the DHT routing table |
+| `--query-timeout <SECS>` | `5` | Timeout for individual DHT queries (seconds) |
+| `--aggressive` | off | VPS preset: sampler-qps=1500, sampler-loops=16, concurrency=512, lookup-concurrency=128, dht-qps=5000, max-nodes=4096, query-timeout=3 |
 | `--blocklist <FILE>` | none | Blocklist file (IP or CIDR per line, `#` comments) |
 | `--log <FILTER>` | env `RUST_LOG` | tracing filter override |
 
@@ -96,9 +99,12 @@ persists the routing table.
 
 ```
 dht-crawler query <NAME> [--db <DB>]
+dht-crawler query <NAME> [--db <DB>] --failures
 ```
 
-Prints matching `name / category / year / size`.
+Prints matching `name / category / year / size`. With `--failures`, prints an
+aggregate breakdown of metadata fetch failures by their dominant `failure_reason`
+from the `scanned` table instead.
 
 ## Options reference (behavior notes)
 
@@ -110,7 +116,11 @@ Prints matching `name / category / year / size`.
 - Metadata fetch failure rates are high by nature (dead peers, no `ut_metadata`,
   timeouts); the pool is sized for many cheap failures with tight timeouts, and
   previously-failed hashes are quarantined with exponential backoff (persisted
-  in the `scanned` table, so it survives restarts). Accepted and filtered
+  in the `scanned` table, so it survives restarts). Every failed fetch records
+  its dominant `failure_reason` (`timeout`, `connect_refused`, `no_bep10`,
+  `no_ut_metadata`, `metadata_rejected`, `sha1_mismatch`, `empty_peers`,
+  `deadline`, `other`) so you can diagnose why hashes fail with
+  `dht-crawler query anything --failures`. Accepted and filtered
   torrents store their raw `info` dictionary for offline re-analysis.
 - `--min-seen 2` or `3` dramatically cuts the junk tail (hashes reported by a
   single node) at the cost of skipping rare releases; the popularity value also

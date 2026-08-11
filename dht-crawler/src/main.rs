@@ -63,7 +63,8 @@ async fn run(args: config::RunArgs) -> Result<()> {
         ipv6 = args.ipv6,
         db = %args.db,
         state_dir = %state_dir.display(),
-        concurrency = args.concurrency,
+        concurrency = args.effective_concurrency(),
+        aggressive = args.aggressive,
         "dht crawler starting"
     );
 
@@ -71,9 +72,10 @@ async fn run(args: config::RunArgs) -> Result<()> {
     let (record_tx, record_rx) = tokio::sync::mpsc::channel(RECORD_CHANNEL);
 
     let sampler_cfg = dht::SamplerConfig {
-        queries_per_second: args.sampler_qps,
-        concurrency: args.sampler_loops,
-        min_seen: args.min_seen,
+        queries_per_second: args.effective_sampler_qps(),
+        concurrency: args.effective_sampler_loops(),
+        min_seen: args.effective_min_seen(),
+        max_interval_secs: args.sampler_max_interval,
     };
     let shutdown = tokio_util::sync::CancellationToken::new();
     let sampler = Sampler::new(
@@ -92,8 +94,8 @@ async fn run(args: config::RunArgs) -> Result<()> {
         handle.clone(),
         storage.clone(),
         FetcherConfig {
-            concurrency: args.concurrency,
-            lookup_concurrency: args.lookup_concurrency,
+            concurrency: args.effective_concurrency(),
+            lookup_concurrency: args.effective_lookup_concurrency(),
             blocklist,
         },
         stats.clone(),
@@ -126,21 +128,39 @@ async fn run(args: config::RunArgs) -> Result<()> {
     Ok(())
 }
 
-/// Single-threaded storage writer: batches records into transactions.
+/// Single-threaded storage writer: batches records into transactions. Flushes
+/// when the batch fills OR after a short interval, so a slow trickle of found
+/// torrents is persisted promptly instead of sitting in memory until shutdown.
 async fn write_loop(
     mut rx: tokio::sync::mpsc::Receiver<TorrentRecord>,
     storage: Storage,
     stats: Arc<CrawlStats>,
 ) {
     const BATCH: usize = 256;
+    const FLUSH_INTERVAL: Duration = Duration::from_secs(2);
     let mut batch: Vec<TorrentRecord> = Vec::with_capacity(BATCH);
-    while let Some(record) = rx.recv().await {
-        batch.push(record);
-        if batch.len() >= BATCH {
-            if let Err(e) = storage.insert_batch(&batch) {
-                error!(error = %e, "storage batch failed");
+    loop {
+        tokio::select! {
+            record = rx.recv() => {
+                match record {
+                    Some(record) => {
+                        batch.push(record);
+                        if batch.len() >= BATCH {
+                            if let Err(e) = storage.insert_batch(&batch) {
+                                error!(error = %e, "storage batch failed");
+                            }
+                            batch.clear();
+                        }
+                    }
+                    None => break,
+                }
             }
-            batch.clear();
+            _ = tokio::time::sleep(FLUSH_INTERVAL), if !batch.is_empty() => {
+                if let Err(e) = storage.insert_batch(&batch) {
+                    error!(error = %e, "storage batch failed");
+                }
+                batch.clear();
+            }
         }
     }
     if !batch.is_empty() {
@@ -158,15 +178,28 @@ async fn stats_loop(handle: DhtHandle, stats: Arc<CrawlStats>) {
         tick.tick().await;
         let routing = handle.node_count().await.unwrap_or(0);
         let s = &stats;
+        let r = std::sync::atomic::Ordering::Relaxed;
         info!(
             routing_nodes = routing,
-            hashes_sampled = s.hashes_sampled.load(std::sync::atomic::Ordering::Relaxed),
-            hashes_unique = s.hashes_unique.load(std::sync::atomic::Ordering::Relaxed),
-            fetches_attempted = s.fetches_attempted.load(std::sync::atomic::Ordering::Relaxed),
-            fetches_failed = s.fetches_failed.load(std::sync::atomic::Ordering::Relaxed),
-            metadata_verified = s.metadata_verified.load(std::sync::atomic::Ordering::Relaxed),
-            records_persisted = s.records_persisted.load(std::sync::atomic::Ordering::Relaxed),
+            hashes_sampled = s.hashes_sampled.load(r),
+            hashes_unique = s.hashes_unique.load(r),
+            fetches_attempted = s.fetches_attempted.load(r),
+            fetches_failed = s.fetches_failed.load(r),
+            metadata_verified = s.metadata_verified.load(r),
+            records_persisted = s.records_persisted.load(r),
             "crawl stats"
+        );
+        info!(
+            connect_timeout = s.connect_timeout.load(r),
+            connect_refused = s.connect_refused.load(r),
+            no_bep10 = s.no_bep10.load(r),
+            no_ut_metadata = s.no_ut_metadata.load(r),
+            metadata_rejected = s.metadata_rejected.load(r),
+            sha1_mismatch = s.sha1_mismatch.load(r),
+            empty_peers = s.empty_peers.load(r),
+            fetch_deadline = s.fetch_deadline.load(r),
+            peer_errors_other = s.peer_errors_other.load(r),
+            "peer failure breakdown"
         );
     }
 }
@@ -182,6 +215,9 @@ async fn wait_for_shutdown() {
 
 fn query(args: config::QueryArgs) -> Result<()> {
     let storage = Storage::open(&args.db)?;
+    if args.failures {
+        return query_failures(&storage);
+    }
     let rows = storage.search(&args.name)?;
     if rows.is_empty() {
         println!("no matches for {:?}", args.name);
@@ -203,6 +239,19 @@ fn query(args: config::QueryArgs) -> Result<()> {
             }
         });
         println!("{name}\t{category}\t{year}\t{size}", name = r.name);
+    }
+    Ok(())
+}
+
+fn query_failures(storage: &Storage) -> Result<()> {
+    let rows = storage.failure_breakdown()?;
+    if rows.is_empty() {
+        println!("no failed fetches recorded yet");
+        return Ok(());
+    }
+    println!("failed fetches by dominant reason:");
+    for (reason, count) in rows {
+        println!("  {count:>8}  {reason}");
     }
     Ok(())
 }

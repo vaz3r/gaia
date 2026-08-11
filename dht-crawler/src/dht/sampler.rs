@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 
 use irontide_core::Id20;
 use irontide_dht::DhtHandle;
-use rand::RngCore;
+use rand::seq::IteratorRandom;
+use rand::thread_rng;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -14,7 +15,7 @@ use crate::stats::CrawlStats;
 use crate::storage::Storage;
 
 /// How often a node that failed to answer is retried.
-const FAIL_BACKOFF: Duration = Duration::from_secs(60);
+const FAIL_BACKOFF: Duration = Duration::from_secs(10);
 /// Cap on the per-node interval map (LRU-evicted).
 const INTERVAL_MAP_CAP: usize = 8192;
 /// Cap on the in-memory occurrence map (FIFO-evicted).
@@ -22,9 +23,18 @@ const SEEN_CAP: usize = 1_000_000;
 /// Cap on the per-node quality map (LRU-evicted).
 const NODE_STATS_CAP: usize = 32_768;
 /// Minimum time to wait when no node is re-queryable.
-const MIN_LOOP_DELAY: Duration = Duration::from_millis(100);
+const MIN_LOOP_DELAY: Duration = Duration::from_millis(10);
 /// Time to wait for the routing table to populate before warning.
 const BOOTSTRAP_WAIT: Duration = Duration::from_secs(15);
+/// Number of random ready nodes to sample when picking a target; the highest
+/// quality among them wins, spreading queries across the routing table.
+const PICK_CANDIDATES: usize = 32;
+/// Safety cap on a single `sample_infohashes` round-trip. The DHT actor
+/// resolves a query via a oneshot reply; if a peer answers with a KRPC error
+/// the actor can drop that reply without firing it (an irontide quirk), which
+/// would otherwise hang the loop forever. This timeout bounds the wait and the
+/// node is retried later via `FAIL_BACKOFF`.
+const SAMPLE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Sampler loop configuration.
 #[derive(Debug, Clone)]
@@ -38,6 +48,10 @@ pub struct SamplerConfig {
     /// responses reported it. Higher values cull the long-tail of junk but
     /// delay rare-but-valid releases.
     pub min_seen: u32,
+    /// Upper bound (seconds) on the per-node re-query interval advertised by
+    /// BEP 51 nodes. Nodes that report longer intervals are still re-queried
+    /// after this period so the routing table keeps growing.
+    pub max_interval_secs: u64,
 }
 
 /// A distinct infohash emitted into the fetch pipeline together with the
@@ -231,6 +245,7 @@ impl Sampler {
     pub async fn run(&self) {
         self.wait_for_bootstrap().await;
 
+        let max_interval = Duration::from_secs(self.cfg.max_interval_secs.max(1));
         let gate = Arc::new(QpsGate::new(self.cfg.queries_per_second));
         let mut tasks = tokio::task::JoinSet::new();
         for _ in 0..self.cfg.concurrency.max(1) {
@@ -244,6 +259,7 @@ impl Sampler {
                 gate: gate.clone(),
                 node_stats: NodeStats::new(NODE_STATS_CAP),
                 min_seen: self.cfg.min_seen.max(1),
+                max_interval,
                 shutdown: self.shutdown.clone(),
             };
             tasks.spawn(async move { loop_.run_loop().await });
@@ -278,6 +294,7 @@ struct SamplerLoop {
     gate: Arc<QpsGate>,
     node_stats: NodeStats,
     min_seen: u32,
+    max_interval: Duration,
     shutdown: CancellationToken,
 }
 
@@ -298,14 +315,30 @@ impl SamplerLoop {
             let Some((target, node_addr)) =
                 pick_target(&self.intervals, &self.node_stats, &nodes, now)
             else {
+                debug!(
+                    ready = nodes.iter().filter(|(_, a)| self.intervals.is_ready(a, now)).count(),
+                    total = nodes.len(),
+                    "pick_target found no ready node"
+                );
                 tokio::time::sleep(MIN_LOOP_DELAY).await;
                 continue;
             };
 
             self.gate.acquire().await;
-            match self.handle.sample_infohashes(target).await {
+            let result = tokio::time::timeout(SAMPLE_TIMEOUT, self.handle.sample_infohashes(target)).await;
+            let result = match result {
+                Ok(r) => r,
+                Err(_elapsed) => {
+                    debug!(%node_addr, "sample_infohashes hung, timed out");
+                    self.intervals.record(node_addr, FAIL_BACKOFF, now);
+                    self.node_stats.get_mut(node_addr).failures += 1;
+                    continue;
+                }
+            };
+            match result {
                 Ok(res) => {
-                    let interval = Duration::from_secs(res.interval.max(0) as u64);
+                    let advertised = Duration::from_secs(res.interval.max(0) as u64);
+                    let interval = advertised.min(self.max_interval);
                     self.intervals.record(node_addr, interval, now);
                     self.node_stats
                         .get_mut(node_addr)
@@ -313,6 +346,7 @@ impl SamplerLoop {
                     debug!(
                         %node_addr,
                         interval_secs = res.interval,
+                        capped = interval.as_secs(),
                         samples = res.samples.len(),
                         closer_nodes = res.nodes.len(),
                         "sample_infohashes ok"
@@ -335,9 +369,8 @@ impl SamplerLoop {
         }
     }
 
-    /// Emit a hash when its occurrence count crosses `min_seen` or doubles
-    /// (milestones 1, 2, 4, ...) so the fetcher can re-prioritize popular
-    /// hashes. Returns `false` if the pipeline is shut down.
+    /// Emit a hash exactly once when its occurrence count reaches `min_seen`.
+    /// Returns `false` if the pipeline is shut down.
     async fn emit_sample(&mut self, hash: Id20) -> bool {
         self.stats
             .hashes_sampled
@@ -349,8 +382,7 @@ impl SamplerLoop {
         }
 
         let count = self.seen.record(hash);
-        let emit = count >= self.min_seen && (count == self.min_seen || count.is_power_of_two());
-        if !emit {
+        if count != self.min_seen {
             return true;
         }
 
@@ -364,34 +396,28 @@ impl SamplerLoop {
     }
 }
 
-fn random_id() -> Id20 {
-    let mut bytes = [0u8; 20];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    Id20(bytes)
-}
-
-/// Pick a random target whose closest routing node is not in cooldown,
-/// preferring candidates served by known-productive nodes.
+/// Pick a ready node and query it with a target equal to its own node ID. The
+/// DHT actor resolves `sample_infohashes` to `closest(target, 1)`, so a target
+/// equal to the node's own ID makes the actor query exactly this node. Ready
+/// nodes are sampled at random (spreading queries across the table) and the
+/// highest-quality candidate among them wins. A few cooling nodes cannot starve
+/// the sampler because every ready node is a candidate.
 fn pick_target(
     intervals: &IntervalMap,
     node_stats: &NodeStats,
     nodes: &[(Id20, SocketAddr)],
     now: Instant,
 ) -> Option<(Id20, SocketAddr)> {
-    let mut best: Option<(Id20, SocketAddr)> = None;
-    let mut best_score = i64::MIN;
-    for _ in 0..16 {
-        let target = random_id();
-        let Some(addr) = select_ready_node(nodes, &target, intervals, now) else {
-            continue;
-        };
-        let score = node_stats.score(&addr);
-        if score > best_score {
-            best_score = score;
-            best = Some((target, addr));
+    let mut rng = thread_rng();
+    let mut best: Option<(i64, Id20, SocketAddr)> = None;
+    for (id, addr) in nodes.iter().filter(|(_, a)| intervals.is_ready(a, now)).choose_multiple(&mut rng, PICK_CANDIDATES.min(nodes.len()).max(1)) {
+        let score = node_stats.score(addr);
+        if best.as_ref().is_none_or(|(s, _, _)| score > *s) {
+            best = Some((score, *id, *addr));
         }
     }
-    best
+    // Target = the node's own ID so the actor queries this exact node.
+    best.map(|(_, id, addr)| (id, addr))
 }
 
 fn unix_secs() -> i64 {
@@ -399,22 +425,6 @@ fn unix_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
-}
-
-/// The node the DHT actor will query for `target` is the closest routing node;
-/// return its address only if it is not in cooldown.
-fn select_ready_node(
-    nodes: &[(Id20, SocketAddr)],
-    target: &Id20,
-    intervals: &IntervalMap,
-    now: Instant,
-) -> Option<SocketAddr> {
-    let (_id, addr) = nodes.iter().min_by_key(|(id, _)| id.xor_distance(target))?;
-    if intervals.is_ready(addr, now) {
-        Some(*addr)
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]
@@ -510,43 +520,37 @@ mod tests {
     }
 
     #[test]
-    fn select_ready_node_skips_cooling_node() {
+    fn pick_target_skips_cooling_node() {
         let mut intervals = IntervalMap::new(16);
         let now = Instant::now();
         let a: SocketAddr = "127.0.0.1:1".parse().unwrap();
         let b: SocketAddr = "127.0.0.1:2".parse().unwrap();
         let nodes = vec![(id(1), a), (id(2), b)];
 
-        // target is closest to id(1), which is in cooldown → None.
         intervals.record(a, Duration::from_secs(60), now);
-        assert!(select_ready_node(&nodes, &id(0), &intervals, now).is_none());
-
-        // After the interval elapses the same node becomes selectable.
-        let later = now + Duration::from_secs(61);
-        assert_eq!(select_ready_node(&nodes, &id(0), &intervals, later), Some(a));
-
-        // A node with no recorded interval is immediately ready.
-        let fresh = IntervalMap::new(16);
-        assert_eq!(select_ready_node(&nodes, &id(0), &fresh, now), Some(a));
+        let (target, addr) = pick_target(&intervals, &NodeStats::new(16), &nodes, now).unwrap();
+        assert_eq!(addr, b, "cooling node must be skipped");
+        assert_eq!(target, id(2), "target must be the picked node's own ID");
     }
 
     #[test]
-    fn select_ready_node_falls_through_to_next_closest() {
+    fn pick_target_none_when_all_cooling() {
         let mut intervals = IntervalMap::new(16);
         let now = Instant::now();
         let a: SocketAddr = "127.0.0.1:1".parse().unwrap();
         let b: SocketAddr = "127.0.0.1:2".parse().unwrap();
         let nodes = vec![(id(1), a), (id(2), b)];
-
         intervals.record(a, Duration::from_secs(60), now);
-        // id(2) is next-closest to id(0) and ready.
-        assert_eq!(select_ready_node(&nodes, &id(10), &intervals, now), Some(b));
+        intervals.record(b, Duration::from_secs(60), now);
+        assert!(pick_target(&intervals, &NodeStats::new(16), &nodes, now).is_none());
+
+        // After the interval elapses, a node becomes selectable again.
+        let later = now + Duration::from_secs(61);
+        assert!(pick_target(&intervals, &NodeStats::new(16), &nodes, later).is_some());
     }
 
     #[test]
     fn pick_target_prefers_productive_node() {
-        // Give node b a good score and node a a penalty; across many random
-        // targets the productive node should win at least once.
         let mut node_stats = NodeStats::new(16);
         let a: SocketAddr = "127.0.0.1:1".parse().unwrap();
         let b: SocketAddr = "127.0.0.1:2".parse().unwrap();
@@ -556,14 +560,8 @@ mod tests {
         let intervals = IntervalMap::new(16);
         let nodes = vec![(id(1), a), (id(2), b)];
         let now = Instant::now();
-        let mut picked_b = false;
-        for _ in 0..64 {
-            if let Some((_, addr)) = pick_target(&intervals, &node_stats, &nodes, now) {
-                if addr == b {
-                    picked_b = true;
-                }
-            }
-        }
-        assert!(picked_b, "productive node must be picked over penalized one");
+        let (target, addr) = pick_target(&intervals, &node_stats, &nodes, now).unwrap();
+        assert_eq!(addr, b, "productive node must be picked over penalized one");
+        assert_eq!(target, id(2));
     }
 }

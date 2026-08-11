@@ -41,7 +41,7 @@ pub struct RunArgs {
     pub state_dir: PathBuf,
 
     /// Comma-separated bootstrap nodes (host:port).
-    #[arg(long, value_delimiter = ',', default_value = "router.bittorrent.com:6881,dht.transmissionbt.com:6881,router.utorrent.com:6881,dht.libtorrent.org:25401")]
+    #[arg(long, value_delimiter = ',', default_value = "router.bittorrent.com:6881,dht.transmissionbt.com:6881,router.utorrent.com:6881,dht.libtorrent.org:25401,dht.aelitis.com:6881")]
     pub bootstrap: Vec<String>,
 
     /// Aggregate DHT query budget (per second) shared by sampling and peer
@@ -50,11 +50,11 @@ pub struct RunArgs {
     pub qps: usize,
 
     /// Sampler aggregate query budget (per second) across all sampling loops.
-    #[arg(long, default_value_t = 240)]
+    #[arg(long, default_value_t = 800)]
     pub sampler_qps: usize,
 
     /// Number of concurrent sampling loops sharing the sampler budget.
-    #[arg(long, default_value_t = 4)]
+    #[arg(long, default_value_t = 8)]
     pub sampler_loops: usize,
 
     /// Emit an infohash to the fetcher only after this many distinct sampling
@@ -62,9 +62,29 @@ pub struct RunArgs {
     #[arg(long, default_value_t = 1)]
     pub min_seen: u32,
 
+    /// Upper bound (seconds) on the per-node re-query interval advertised by
+    /// BEP 51 nodes. Nodes reporting longer intervals are re-queried after
+    /// this period so the routing table keeps growing.
+    #[arg(long, default_value_t = 60)]
+    pub sampler_max_interval: u64,
+
     /// Maximum concurrent DHT `get_peers` lookups (bounds query-budget use).
-    #[arg(long, default_value_t = 32)]
+    #[arg(long, default_value_t = 64)]
     pub lookup_concurrency: usize,
+
+    /// Maximum number of nodes in the DHT routing table.
+    #[arg(long, default_value_t = 2048)]
+    pub max_nodes: usize,
+
+    /// Timeout in seconds for individual DHT queries.
+    #[arg(long, default_value_t = 5)]
+    pub query_timeout: u64,
+
+    /// Aggressive preset: crank up sampling and fetch rates for VPS deployments.
+    /// Overrides --sampler-qps, --sampler-loops, --concurrency,
+    /// --lookup-concurrency, --dht-qps, --max-nodes, --query-timeout.
+    #[arg(long)]
+    pub aggressive: bool,
 
     /// Optional blocklist file: one IP or CIDR per line, '#' comments allowed.
     #[arg(long)]
@@ -83,6 +103,11 @@ pub struct QueryArgs {
     /// SQLite database file path.
     #[arg(long, default_value = "crawler.sqlite")]
     pub db: String,
+
+    /// Instead of searching names, print a breakdown of metadata fetch
+    /// failures by `failure_reason` from the `scanned` table.
+    #[arg(long)]
+    pub failures: bool,
 }
 
 impl RunArgs {
@@ -93,5 +118,45 @@ impl RunArgs {
         } else {
             SocketAddr::from((Ipv4Addr::UNSPECIFIED, self.port))
         }
+    }
+
+    /// Effective sampler QPS after applying the aggressive preset.
+    pub fn effective_sampler_qps(&self) -> usize {
+        if self.aggressive { 1500 } else { self.sampler_qps }
+    }
+
+    /// Effective sampler loops after applying the aggressive preset.
+    pub fn effective_sampler_loops(&self) -> usize {
+        if self.aggressive { 16 } else { self.sampler_loops }
+    }
+
+    /// Effective concurrency after applying the aggressive preset.
+    pub fn effective_concurrency(&self) -> usize {
+        if self.aggressive { 512 } else { self.concurrency }
+    }
+
+    /// Effective lookup concurrency after applying the aggressive preset.
+    pub fn effective_lookup_concurrency(&self) -> usize {
+        if self.aggressive { 128 } else { self.lookup_concurrency }
+    }
+
+    /// Effective DHT QPS after applying the aggressive preset.
+    pub fn effective_qps(&self) -> usize {
+        if self.aggressive { 5000 } else { self.qps }
+    }
+
+    /// Effective max routing nodes after applying the aggressive preset.
+    pub fn effective_max_nodes(&self) -> usize {
+        if self.aggressive { 4096 } else { self.max_nodes }
+    }
+
+    /// Effective query timeout after applying the aggressive preset.
+    pub fn effective_query_timeout(&self) -> u64 {
+        if self.aggressive { 3 } else { self.query_timeout }
+    }
+
+    /// Effective min_seen after applying the aggressive preset.
+    pub fn effective_min_seen(&self) -> u32 {
+        if self.aggressive { self.min_seen.max(2) } else { self.min_seen }
     }
 }

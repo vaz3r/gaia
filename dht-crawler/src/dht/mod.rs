@@ -2,6 +2,8 @@ mod sampler;
 
 pub use sampler::{SampledHash, Sampler, SamplerConfig};
 
+use std::time::Duration;
+
 use anyhow::Result;
 use irontide_core::AddressFamily;
 use irontide_dht::{DhtConfig, DhtHandle};
@@ -20,7 +22,9 @@ pub async fn start_dht(args: &RunArgs, state_dir: PathBuf) -> Result<DhtHandle> 
         } else {
             AddressFamily::V4
         },
-        queries_per_second: args.qps,
+        queries_per_second: args.effective_qps(),
+        max_routing_nodes: args.effective_max_nodes(),
+        query_timeout: Duration::from_secs(args.effective_query_timeout()),
         ..DhtConfig::default()
     };
     let (handle, _ip) = DhtHandle::start(dht).await?;
