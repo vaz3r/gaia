@@ -7,3 +7,6 @@ crawl.log
 crawl-debug.log
 pm2-out.log
 pm2-error.log
+dht-crawler/.env
+dht-crawler/data/
+dht-crawler/gluetun/

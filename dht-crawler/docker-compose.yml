@@ -1,0 +1,73 @@
+# dht-crawler behind Gluetun WireGuard -> Oracle public IP.
+#
+# Secrets come from dht-crawler/.env (gitignored); see .env.example for the
+# variable names.
+#
+#   cp .env.example .env   # then fill in WireGuard keys
+#   docker compose up -d --build
+
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      # WireGuard / custom provider
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=10.8.0.9/24
+      - WIREGUARD_PRESHARED_KEY=${WIREGUARD_PRESHARED_KEY}
+      - WIREGUARD_PUBLIC_KEY=${SERVER_PUBLIC_KEY}
+      - WIREGUARD_ENDPOINT_IP=132.145.189.201
+      - WIREGUARD_ENDPOINT_PORT=443
+      # The tunnel's private DNS (10.8.1.3) is unreachable from this host, so
+      # use public resolvers through the tunnel instead.
+      - DNS_UPSTREAM_PLAIN_ADDRESSES=1.1.1.1:53,8.8.8.8:53
+      # Allow inbound DHT queries to reach the crawler through the tunnel.
+      - FIREWALL_VPN_INPUT_PORTS=6881,6882,6883,6884
+      - TZ=UTC
+    healthcheck:
+      # Gluetun's own health server (127.0.0.1:9999) reflects tunnel
+      # connectivity (TCP+TLS dial to HEALTH_TARGET_ADDRESSES); use it as the
+      # authoritative tunnel-up signal rather than an external wget/curl.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "--timeout=5", "http://127.0.0.1:9999/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  dht-crawler:
+    build:
+      context: ..
+      dockerfile: dht-crawler/Dockerfile
+    container_name: dht-crawler
+    restart: unless-stopped
+    # Share Gluetun's network namespace: all crawler traffic egresses via the
+    # WireGuard tunnel from the Oracle public IP.
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    volumes:
+      - dht-data:/data
+    command:
+      - run
+      - --db
+      - /data/crawler.sqlite
+      - --state-dir
+      - /data/state
+      - --port
+      - "6881"
+      - --instances
+      - "4"
+      - --log
+      - dht_crawler=info
+
+volumes:
+  dht-data:
+    name: dht-crawler-data

@@ -41,6 +41,31 @@ routing table and sampler, all feeding one database. Keep `instances: 1` in
 the PM2 app config (the crawler spawns its own DHT instances internally). To
 change the count, edit `--instances N` in the ecosystem `args`.
 
+### Docker + Gluetun (recommended for public egress)
+
+A `docker-compose.yml` runs the crawler behind a **Gluetun WireGuard client**,
+so all crawler traffic (DHT UDP + metadata TCP) egresses from a public IP —
+which is what makes peers reachable and raises the verify rate (behind NAT it
+stays ~0.5%). The crawler container shares Gluetun's network namespace
+(`network_mode: "service:gluetun"`); DHT ports 6881–6884 are opened inbound on
+the tunnel.
+
+```sh
+cd dht-crawler
+cp .env.example .env     # fill in WireGuard keys (gitignored)
+mkdir -p data && cp -r crawler.sqlite state data/   # optional warm start
+docker compose up -d --build
+docker compose logs -f dht-crawler
+```
+
+Notes:
+- The WireGuard server must be reachable on a non-default port (Oracle Cloud
+  blocks the default 51820; this stack uses `:443`).
+- If the tunnel's private DNS is unreachable, set
+  `DNS_UPSTREAM_PLAIN_ADDRESSES` to public resolvers (default `1.1.1.1:53,8.8.8.8:53`).
+- Data lives in `dht-crawler/data/` (gitignored); `run.sh`/pm2 remain as
+  fallback and share the same DB path.
+
 ## Prerequisites
 
 - A machine with a **public IP and reachable UDP port** (the DHT node replies
