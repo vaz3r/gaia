@@ -5,3 +5,5 @@
 state/
 crawl.log
 crawl-debug.log
+pm2-out.log
+pm2-error.log

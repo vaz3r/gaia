@@ -21,6 +21,24 @@ cargo build --release
 ./target/release/dht-crawler query "matrix 1080p"
 ```
 
+### Running under PM2 (recommended for 24/7)
+
+An `ecosystem.config.cjs` is included for [PM2](https://pm2.keymetrics.io/). It
+runs the release binary directly (PM2 captures the logs) and raises
+`kill_timeout` so SIGTERM graceful shutdown (~15s drain) completes cleanly.
+
+```sh
+pm2 start ecosystem.config.cjs     # start / auto-restart on crash
+pm2 logs dht-crawler               # tail crawl stats
+pm2 restart dht-crawler            # graceful restart (drains + persists)
+pm2 stop dht-crawler               # graceful stop
+pm2 save && pm2 startup            # auto-start on boot
+```
+
+To scale discovery, pass `--instances N` in the `args` of the ecosystem file
+(uses ports `6881..6881+N-1`); keep `instances: 1` in PM2 config since each
+DHT node is its own process slot.
+
 ## Prerequisites
 
 - A machine with a **public IP and reachable UDP port** (the DHT node replies
