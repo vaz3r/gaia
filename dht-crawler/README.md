@@ -106,6 +106,17 @@ Prints matching `name / category / year / size`. With `--failures`, prints an
 aggregate breakdown of metadata fetch failures by their dominant `failure_reason`
 from the `scanned` table instead.
 
+### `purge`
+
+```
+dht-crawler purge [--db <DB>] [--state-dir <DIR>] [--yes]
+./run.sh --purge
+```
+
+Deletes the SQLite database (plus its WAL/SHM sidecars) and the persisted
+routing state so the next `run` starts completely fresh. Prompts for
+confirmation unless `--yes` is given.
+
 ## Options reference (behavior notes)
 
 - On startup the persisted routing table (`state/dht_state.json`) is loaded, so

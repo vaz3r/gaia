@@ -16,6 +16,8 @@ pub enum Command {
     Run(RunArgs),
     /// Search the local database for torrent names.
     Query(QueryArgs),
+    /// Delete the database and routing state so the next run starts fresh.
+    Purge(PurgeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -108,6 +110,21 @@ pub struct QueryArgs {
     /// failures by `failure_reason` from the `scanned` table.
     #[arg(long)]
     pub failures: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PurgeArgs {
+    /// SQLite database file path.
+    #[arg(long, default_value = "crawler.sqlite")]
+    pub db: String,
+
+    /// Directory holding the persisted DHT routing table.
+    #[arg(long, default_value = "state")]
+    pub state_dir: PathBuf,
+
+    /// Skip asking for confirmation.
+    #[arg(long)]
+    pub yes: bool,
 }
 
 impl RunArgs {
