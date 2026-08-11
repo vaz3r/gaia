@@ -1,0 +1,3 @@
+[workspace]
+members = ["dht-crawler"]
+resolver = "2"

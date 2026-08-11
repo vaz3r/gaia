@@ -1,0 +1,25 @@
+[package]
+name = "dht-crawler"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Lightweight BitTorrent DHT crawler indexing movie/TV torrents into SQLite"
+
+[dependencies]
+anyhow = "1"
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+futures-util = "0.3"
+irontide-bencode = "1.7"
+irontide-core = "1.7"
+irontide-dht = "1.7"
+irontide-wire = "1.7"
+rand = "0.8"
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+sha1 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
