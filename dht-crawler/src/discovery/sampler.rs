@@ -27,8 +27,10 @@ const MIN_LOOP_DELAY: Duration = Duration::from_millis(10);
 /// Time to wait for the routing table to populate before warning.
 const BOOTSTRAP_WAIT: Duration = Duration::from_secs(15);
 /// Number of random ready nodes to sample when picking a target; the highest
-/// quality among them wins, spreading queries across the routing table.
-const PICK_CANDIDATES: usize = 32;
+/// quality among them wins, spreading queries across the routing table. A
+/// larger sample keeps the sampler from converging on a few productive nodes,
+/// reaching more distinct BEP 51 nodes and surfacing more unique hashes.
+const PICK_CANDIDATES: usize = 64;
 /// Safety cap on a single `sample_infohashes` round-trip. The DHT actor
 /// resolves a query via a oneshot reply; if a peer answers with a KRPC error
 /// the actor can drop that reply without firing it (an irontide quirk), which
@@ -220,6 +222,7 @@ pub struct Sampler {
     stats: Arc<CrawlStats>,
     cfg: SamplerConfig,
     shutdown: CancellationToken,
+    shared: crate::redis::SharedState,
 }
 
 impl Sampler {
@@ -230,6 +233,7 @@ impl Sampler {
         cfg: &SamplerConfig,
         stats: Arc<CrawlStats>,
         shutdown: CancellationToken,
+        shared: crate::redis::SharedState,
     ) -> Self {
         Self {
             handle,
@@ -238,6 +242,7 @@ impl Sampler {
             stats,
             cfg: cfg.clone(),
             shutdown,
+            shared,
         }
     }
 
@@ -260,6 +265,7 @@ impl Sampler {
                 node_stats: NodeStats::new(NODE_STATS_CAP),
                 min_seen: self.cfg.min_seen.max(1),
                 max_interval,
+                shared: self.shared.clone(),
                 shutdown: self.shutdown.clone(),
             };
             tasks.spawn(async move { loop_.run_loop().await });
@@ -295,6 +301,7 @@ struct SamplerLoop {
     node_stats: NodeStats,
     min_seen: u32,
     max_interval: Duration,
+    shared: crate::redis::SharedState,
     shutdown: CancellationToken,
 }
 
@@ -386,13 +393,22 @@ impl SamplerLoop {
             return true;
         }
 
+        // Fleet-wide dedup: if another instance already emitted this hash,
+        // skip it here (best-effort; Redis failure returns false).
+        if self.shared.seen_contains(hash.as_bytes()).await {
+            return true;
+        }
+
         self.stats
             .hashes_unique
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.emit
+        let ok = self
+            .emit
             .send(SampledHash { hash, occurrences: count })
             .await
-            .is_ok()
+            .is_ok();
+        self.shared.seen_add(hash.as_bytes()).await;
+        ok
     }
 }
 

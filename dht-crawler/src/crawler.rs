@@ -28,6 +28,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
     let storage = Storage::open(&args.db)?;
     let stats = Arc::new(CrawlStats::default());
     let blocklist = Arc::new(Blocklist::load(args.blocklist.as_deref())?);
+    let shared = crate::redis::init_shared(args.redis_url.clone()).await;
 
     let instances = args.instances.max(1);
     info!(
@@ -76,7 +77,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
         let handle = handle.clone();
         let shutdown = shutdown.clone();
         growers.spawn(async move {
-            discovery::grow_routing(handle, Duration::from_millis(100), shutdown).await;
+            discovery::grow_routing(handle, Duration::from_secs(1), shutdown).await;
         });
     }
 
@@ -100,6 +101,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
             &sampler_cfg,
             stats.clone(),
             shutdown.clone(),
+            shared.clone(),
         );
         samplers.spawn(async move { sampler.run().await });
     }
@@ -117,13 +119,14 @@ pub async fn run(args: RunArgs) -> Result<()> {
             concurrency: args.effective_concurrency(),
             lookup_concurrency: args.effective_lookup_concurrency(),
             blocklist,
+            shared: shared.clone(),
         },
         stats.clone(),
     ));
 
     let writer = tokio::spawn(write_loop(record_rx, storage.clone(), stats.clone()));
 
-    let stats_task = tokio::spawn(stats_loop(primary.clone(), stats.clone()));
+    let stats_task = tokio::spawn(stats_loop(handles.clone(), stats.clone()));
 
     wait_for_shutdown().await;
 
@@ -194,18 +197,27 @@ async fn write_loop(
     let _ = stats;
 }
 
-async fn stats_loop(handle: DhtHandle, stats: Arc<CrawlStats>) {
+async fn stats_loop(handles: Vec<DhtHandle>, stats: Arc<CrawlStats>) {
     let mut tick = tokio::time::interval(STATS_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tick.tick().await;
-        let routing = handle.node_count().await.unwrap_or(0);
+        let primary = &handles[0];
+        let routing = primary.node_count().await.unwrap_or(0);
+        // Per-instance routing node counts so a redundant instance (one that
+        // burns tunnel bandwidth without contributing nodes) is identifiable.
+        let mut per_instance = Vec::with_capacity(handles.len());
+        for h in &handles {
+            let n = h.node_count().await.unwrap_or(0);
+            let total = h.stats().await.map(|s| s.total_queries_sent).unwrap_or(0);
+            per_instance.push(format!("{n}/{}q", total));
+        }
         // Passive announcement intake: hashes other nodes announced to us that
         // are sitting in the actor's internal peer_store. If this stays near 0,
         // announcement capture is not worth patching irontide for; if it grows
         // large, a `peer_store_hashes()` reader becomes a valuable second
         // discovery source alongside BEP 51 sampling.
-        let announced = handle
+        let announced = primary
             .stats()
             .await
             .map(|s| s.peer_store_info_hashes)
@@ -214,6 +226,7 @@ async fn stats_loop(handle: DhtHandle, stats: Arc<CrawlStats>) {
         let r = std::sync::atomic::Ordering::Relaxed;
         info!(
             routing_nodes = routing,
+            instance_nodes = per_instance.join(","),
             announced_hashes = announced,
             hashes_sampled = s.hashes_sampled.load(r),
             hashes_unique = s.hashes_unique.load(r),

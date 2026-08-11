@@ -25,13 +25,14 @@ use parse::extract_metadata;
 use wire::{fetch_from_peer, sha1_info};
 
 /// Cap on distinct peers tried per infohash before giving up.
-const MAX_PEERS_PER_HASH: usize = 100;
+const MAX_PEERS_PER_HASH: usize = 50;
 /// How many peers are dialed concurrently per infohash; first verified success wins.
-const PARALLEL_DIALS: usize = 32;
-/// Per-hash wall-clock budget for peer iteration. The pool has headroom
-/// (in-flight is far below concurrency), so a longer deadline lets each hash
-/// try more peers and reach slow-but-live peers that short deadlines miss.
-const FETCH_DEADLINE: Duration = Duration::from_secs(20);
+const PARALLEL_DIALS: usize = 16;
+/// Per-hash wall-clock budget for peer iteration. Successful fetches almost
+/// always complete in the first few dials; the shared dead-peer cache prevents
+/// re-dialing known-dead IPs, so a moderate window finds live peers without
+/// excessive churn.
+const FETCH_DEADLINE: Duration = Duration::from_secs(15);
 /// How long to wait for the next `get_peers` batch before giving up. The
 /// DhtLookup streams batches into the channel; a slow or empty lookup must not
 /// hold a pool slot indefinitely.
@@ -107,6 +108,8 @@ pub struct FetcherConfig {
     pub lookup_concurrency: usize,
     /// Peer/IP blocklist applied before dialing.
     pub blocklist: Arc<Blocklist>,
+    /// Shared cross-instance state (dead-peer cache, seen-set).
+    pub shared: crate::redis::SharedState,
 }
 
 /// Consume popularity-ordered infohashes from `rx`, fetch verified metadata
@@ -153,6 +156,7 @@ pub async fn run_fetcher(
             let permits = lookup_permits.clone();
             let in_flight = in_flight.clone();
             let dead_peers = dead_peers.clone();
+            let shared = cfg.shared.clone();
             tasks.spawn(async move {
                 let outcome = fetch_one(
                     hash,
@@ -163,6 +167,7 @@ pub async fn run_fetcher(
                     &blocklist,
                     &permits,
                     &dead_peers,
+                    &shared,
                 )
                 .await;
                 match outcome {
@@ -258,6 +263,7 @@ async fn fetch_one(
     blocklist: &Blocklist,
     lookup_permits: &Semaphore,
     dead_peers: &Arc<Mutex<DeadPeerCache>>,
+    shared: &crate::redis::SharedState,
 ) -> std::result::Result<FetchOutcome, FetchError> {
     let mut peers = {
         let _permit = lookup_permits.acquire().await.context("lookup permit")
@@ -304,6 +310,10 @@ async fn fetch_one(
                 continue;
             }
             if dead_peers.lock().unwrap().is_dead(peer.ip(), now) {
+                continue;
+            }
+            // Fleet-wide dead check (best-effort; Redis failure allows dialing).
+            if shared.dead_contains(peer.ip()).await {
                 continue;
             }
             if !seen_peers.insert(peer) || !dialed_ips.insert(peer.ip()) {
@@ -364,7 +374,11 @@ async fn fetch_one(
                         .connect_timeout
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     debug!(%info_hash, "peer dial timed out");
-                    dead_peers.lock().unwrap().record_failure(peer.ip(), now);
+                    let became_dead = dead_peers.lock().unwrap().record_failure(peer.ip(), now);
+                    if became_dead {
+                        // Flag fleet-wide so other instances skip it too.
+                        shared.dead_add(peer.ip(), 600).await;
+                    }
                     consecutive_connect_failures += 1;
                     if !any_handshake && consecutive_connect_failures >= EARLY_ABORT_DIALS {
                         *failure_counts.entry("early_abort").or_insert(0) += 1;

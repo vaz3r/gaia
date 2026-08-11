@@ -5,6 +5,7 @@ mod fetch;
 mod net;
 mod purge;
 mod query;
+mod redis;
 mod stats;
 mod storage;
 

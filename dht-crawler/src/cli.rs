@@ -52,11 +52,11 @@ pub struct RunArgs {
 
     /// Aggregate DHT query budget (per second) shared by sampling and peer
     /// lookups. Must comfortably exceed the sampler rate.
-    #[arg(long, default_value_t = 8000)]
+    #[arg(long, default_value_t = 2000)]
     pub qps: usize,
 
     /// Sampler aggregate query budget (per second) across all sampling loops.
-    #[arg(long, default_value_t = 2000)]
+    #[arg(long, default_value_t = 400)]
     pub sampler_qps: usize,
 
     /// Number of concurrent sampling loops sharing the sampler budget.
@@ -102,6 +102,12 @@ pub struct RunArgs {
     #[arg(long)]
     pub blocklist: Option<PathBuf>,
 
+    /// Optional Redis URL (e.g. redis://redis:6379) for a shared seen-set and
+    /// dead-peer cache across instances. If absent or unreachable, the crawler
+    /// falls back to per-instance in-memory dedup/cache.
+    #[arg(long)]
+    pub redis_url: Option<String>,
+
     /// Override the RUST_LOG tracing filter (e.g. "dht_crawler=debug").
     #[arg(long)]
     pub log: Option<String>,
@@ -140,7 +146,7 @@ pub struct PurgeArgs {
 impl RunArgs {
     /// Effective sampler QPS after applying the aggressive preset.
     pub fn effective_sampler_qps(&self) -> usize {
-        if self.aggressive { 4000 } else { self.sampler_qps }
+        if self.aggressive { 1000 } else { self.sampler_qps }
     }
 
     /// Effective sampler loops after applying the aggressive preset.
@@ -150,17 +156,17 @@ impl RunArgs {
 
     /// Effective concurrency after applying the aggressive preset.
     pub fn effective_concurrency(&self) -> usize {
-        if self.aggressive { 1024 } else { self.concurrency }
+        if self.aggressive { 512 } else { self.concurrency }
     }
 
     /// Effective lookup concurrency after applying the aggressive preset.
     pub fn effective_lookup_concurrency(&self) -> usize {
-        if self.aggressive { 512 } else { self.lookup_concurrency }
+        if self.aggressive { 256 } else { self.lookup_concurrency }
     }
 
     /// Effective DHT QPS after applying the aggressive preset.
     pub fn effective_qps(&self) -> usize {
-        if self.aggressive { 12000 } else { self.qps }
+        if self.aggressive { 4000 } else { self.qps }
     }
 
     /// Effective max routing nodes after applying the aggressive preset.

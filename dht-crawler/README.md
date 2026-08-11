@@ -74,6 +74,9 @@ docker rm -f dht-seed
 ```
 
 Notes:
+- The stack runs **4 instances** (ports 6881-6884) plus a **redis** service for a
+  shared seen-set and dead-peer cache; the crawler is configured for
+  low-bandwidth/high-discovery (lower QPS budgets, tight fetch budgets).
 - The WireGuard server must be reachable on a non-default port (Oracle Cloud
   blocks the default 51820; this stack uses UDP `:443`, which does not conflict
   with TCP 443 HTTPS — WireGuard is UDP, web is TCP).
@@ -134,15 +137,16 @@ SQLite (WAL, batched upserts)
 | `--state-dir <DIR>` | `state` | Directory for the persisted routing table |
 | `--bootstrap <HOSTS>` | 5 well-known nodes | Comma-separated bootstrap nodes |
 | `--instances <N>` | `1` | Run N independent DHT nodes/samplers, sharing one DB. Instance i binds `port+i` and uses `state-dir/instance-i/` |
-| `--qps <N>` | `8000` | Aggregate DHT query budget shared by sampling and peer lookups |
-| `--sampler-qps <N>` | `2000` | Sampler query budget across all sampling loops |
+| `--qps <N>` | `2000` | Aggregate DHT query budget shared by sampling and peer lookups |
+| `--sampler-qps <N>` | `400` | Sampler query budget across all sampling loops |
 | `--sampler-loops <N>` | `32` | Number of concurrent sampling loops |
 | `--min-seen <N>` | `2` | Emit an infohash only after N distinct sampling responses reported it (culls the junk tail) |
 | `--lookup-concurrency <N>` | `256` | Max concurrent DHT `get_peers` lookups |
 | `--max-nodes <N>` | `4096` | Maximum number of nodes in the DHT routing table |
 | `--no-restrict-ips` | off | Disable one-node-per-IP routing restriction (opt-in for NAT) |
+| `--redis-url <URL>` | none | Shared seen-set + dead-peer cache across instances (e.g. `redis://redis:6379`); falls back to per-instance state if unreachable |
 | `--query-timeout <SECS>` | `5` | Timeout for individual DHT queries (seconds) |
-| `--aggressive` | off | VPS preset: sampler-qps=4000, sampler-loops=64, concurrency=1024, lookup-concurrency=512, dht-qps=12000, max-nodes=8192, query-timeout=3 |
+| `--aggressive` | off | VPS preset: sampler-qps=1000, sampler-loops=64, concurrency=512, lookup-concurrency=256, dht-qps=4000, max-nodes=8192, query-timeout=3 |
 | `--blocklist <FILE>` | none | Blocklist file (IP or CIDR per line, `#` comments) |
 | `--log <FILTER>` | env `RUST_LOG` | tracing filter override |
 

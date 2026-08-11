@@ -15,6 +15,7 @@ irontide-core = "1.7"
 irontide-dht = "1.7"
 irontide-wire = "1.7"
 rand = "0.8"
+redis = { version = "1.5", features = ["tokio-comp", "connection-manager"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
