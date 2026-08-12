@@ -49,13 +49,17 @@ pub struct LivenessConfig {
 #[derive(Debug, Clone)]
 pub struct Entry {
     reports: Reports,
+    /// Total report events (including same-source refreshes), for
+    /// discriminating backoff-stalled sources from genuinely sparse hashes at
+    /// expiry time.
+    sightings: u32,
 }
 
 impl Entry {
     fn new(source: Id20, now: Instant) -> Self {
         let mut reports = Reports::new();
         reports.push((source, now));
-        Self { reports }
+        Self { reports, sightings: 1 }
     }
 
     /// Distinct sources with a report within `window` of `now`.
@@ -96,8 +100,13 @@ pub enum RecordOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SweepEviction {
     pub hash: [u8; 20],
-    /// Max distinct sources this entry ever reached.
+    /// Max distinct sources this entry ever reached (pre-prune).
     pub max_sources: usize,
+    /// Total report events (including same-source refreshes). A count-1 near
+    /// miss with sightings == max_sources == 1 means the sole source never
+    /// refreshed — consistent with a backoff-stalled node; sightings > 1 means
+    /// the source kept being re-queried (plain sparsity, not backoff).
+    pub sightings: u32,
 }
 
 /// Shared liveness counter (one per process, cloned across sampler loops).
@@ -132,6 +141,7 @@ impl LivenessCounter {
             .inner
             .get_mut(hash)
             .expect("contains_key checked above");
+        e.sightings = e.sightings.saturating_add(1);
 
         // Prune expired reports (each report has its own timestamp).
         e.reports.retain(|(_, t)| now.duration_since(*t) <= window);
@@ -181,11 +191,13 @@ impl LivenessCounter {
         // near-miss bucket must use the pre-prune count.
         self.inner.retain(|hash, entry| {
             let pre_prune = entry.reports.len();
+            let sightings = entry.sightings;
             entry.reports.retain(|(_, t)| now.duration_since(*t) <= window);
             if entry.reports.is_empty() {
                 evicted.push(SweepEviction {
                     hash: *hash,
                     max_sources: pre_prune,
+                    sightings,
                 });
                 false
             } else {
@@ -208,6 +220,7 @@ impl LivenessCounter {
                     evicted.push(SweepEviction {
                         hash,
                         max_sources: entry.max_reached(),
+                        sightings: entry.sightings,
                     });
                 }
             }
@@ -345,13 +358,33 @@ mod tests {
         let hash = [1u8; 20];
         lc.record(&hash, id(1), now);
         lc.record(&hash, id(2), now + Duration::from_secs(1));
-        // Both reports expire; sweep must report max_sources == 2.
+        // Both reports expire; sweep must report max_sources == 2 and
+        // sightings == 2.
         let evicted = lc.sweep(now + Duration::from_secs(200));
         assert_eq!(evicted.len(), 1);
         assert_eq!(
             evicted[0].max_sources, 2,
             "sweep must report the pre-prune distinct count, got {}",
             evicted[0].max_sources
+        );
+        assert_eq!(evicted[0].sightings, 2, "two reports recorded");
+    }
+
+    #[test]
+    fn same_source_refresh_increments_sightings_not_distinct() {
+        let lc = LivenessCounter::new(cfg());
+        let now = Instant::now();
+        let hash = [1u8; 20];
+        lc.record(&hash, id(1), now);
+        // A same-source refresh increments sightings but not distinct count.
+        lc.record(&hash, id(1), now + Duration::from_secs(10));
+        lc.record(&hash, id(1), now + Duration::from_secs(20));
+        let evicted = lc.sweep(now + Duration::from_secs(200));
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0].max_sources, 1, "still one distinct source");
+        assert_eq!(
+            evicted[0].sightings, 3,
+            "three reports from one source (refresh, not new source)"
         );
     }
 

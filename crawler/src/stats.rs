@@ -17,6 +17,11 @@ pub struct CrawlStats {
     /// distinct sources (detect window/threshold coupling).
     pub shadow_near_miss_1: AtomicU64,
     pub shadow_near_miss_2: AtomicU64,
+    /// Of the count-1 near-misses: how many had the sole source refresh
+    /// (sightings > 1 = plain sparsity) vs a single never-refreshed report
+    /// (sightings == 1 = consistent with a backoff-stalled source).
+    pub shadow_near_miss_1_sparse: AtomicU64,
+    pub shadow_near_miss_1_stalled: AtomicU64,
     /// Number of liveness sweep task invocations (confirms the backstop runs).
     pub liveness_sweeps: AtomicU64,
     pub fetches_attempted: AtomicU64,

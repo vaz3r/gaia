@@ -44,9 +44,9 @@ An entry is NOT removed when the live threshold is reached if shadow mode is tes
 - *Trade-off:* debug log + counters only; near-miss correlation is qualitative for now.
 
 ### D62 — Near-miss bucketing detects STALE_BACKOFF coupling
-Shadow mode buckets expired entries by max distinct sources reached (1, 2) and their time near the window edge, to detect the coupling where two early sightings legitimately go stale (STALE_BACKOFF=300s deprioritizes a node that returned no new hashes) before a third distinct source lands.
-- *Rationale:* if near-misses cluster at the window edge, the fix is **tune the window (D60), not min-seen (D57)** — loosening min-seen to compensate for a windowing problem would mask the real issue.
-- *Trade-off:* requires reading the near-miss counters against the window value; explicit in the validation criteria.
+Shadow mode buckets expired entries by max distinct sources reached (1, 2), and — to distinguish a backoff-stalled source from plain single-sighting sparsity — by whether the sole source ever refreshed (sightings counter). A count-1 near miss with sightings == 1 (source never re-consulted) is consistent with a STALE_BACKOFF-stalled node; sightings > 1 (source kept being re-queried but no 2nd distinct node appeared) is plain sparsity.
+- *Rationale:* the cliff shape alone (count-1 ≫ count-2) cannot distinguish these causes, and the tuning differs: backoff coupling → widen the window / decouple window from backoff interval; sparsity → no window change helps (those hashes were never going to reach 3 regardless).
+- *Trade-off:* requires per-entry sightings tracking (a u32 counter); negligible memory. Detected at expiry via the pre-prune report count and sightings.
 
 ## Risks / Trade-offs
 

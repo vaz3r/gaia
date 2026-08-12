@@ -139,7 +139,16 @@ pub async fn run(args: RunArgs) -> Result<()> {
                     continue;
                 }
                 match ev.max_sources {
-                    1 => { sweep_stats.shadow_near_miss_1.fetch_add(1, rel); }
+                    1 => {
+                        sweep_stats.shadow_near_miss_1.fetch_add(1, rel);
+                        // Discriminate: did the sole source refresh (sparsity)
+                        // or report exactly once (backoff-stalled)?
+                        if ev.sightings > 1 {
+                            sweep_stats.shadow_near_miss_1_sparse.fetch_add(1, rel);
+                        } else {
+                            sweep_stats.shadow_near_miss_1_stalled.fetch_add(1, rel);
+                        }
+                    }
                     2 => { sweep_stats.shadow_near_miss_2.fetch_add(1, rel); }
                     _ => {}
                 }
@@ -348,6 +357,8 @@ async fn stats_loop(
             shadow_emitted = s.shadow_emitted.load(r),
             shadow_filtered = s.shadow_filtered.load(r),
             shadow_near_miss_1 = s.shadow_near_miss_1.load(r),
+            shadow_near_miss_1_sparse = s.shadow_near_miss_1_sparse.load(r),
+            shadow_near_miss_1_stalled = s.shadow_near_miss_1_stalled.load(r),
             shadow_near_miss_2 = s.shadow_near_miss_2.load(r),
             liveness_entries = liveness.len(),
             liveness_sweeps = s.liveness_sweeps.load(r),
