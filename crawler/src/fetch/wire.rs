@@ -89,11 +89,21 @@ pub async fn fetch_from_peer(
         bail!("peer {peer} advertised zero metadata size");
     }
 
-    // 4. Request every metadata piece.
+    // 4. Request metadata pieces incrementally: ask for piece 0 first, then
+    // request the next piece only after a piece's data arrives. A peer that
+    // advertises ut_metadata but stalls (honeypot, slow leecher) then costs us
+    // at most ~2 pieces instead of a request for the whole metadata — the
+    // largest per-fetch bandwidth item at ~84 fetches/s.
     let mut received: Vec<Option<Bytes>> = vec![None; pieces];
     let mut remaining = pieces;
-    for idx in 0..pieces {
-        let req = MetadataMessage::request(idx as u32);
+    let mut next = 0usize;
+
+    async fn request_piece(
+        framed: &mut FramedWrite<impl tokio::io::AsyncWrite + Unpin, MessageCodec>,
+        ut_id: u8,
+        idx: u32,
+    ) -> Result<()> {
+        let req = MetadataMessage::request(idx);
         timeout(
             PIECE_TIMEOUT,
             framed.send(Message::Extended {
@@ -103,10 +113,12 @@ pub async fn fetch_from_peer(
         )
         .await
         .context("send metadata request timed out")?
-        .context("send metadata request")?;
+        .context("send metadata request")
     }
 
-    // 5. Collect pieces until complete.
+    request_piece(&mut framed, ut_id, next as u32).await?;
+
+    // 5. Collect pieces until complete, requesting the next piece as we go.
     while remaining > 0 {
         let frame = timeout(PIECE_TIMEOUT, reader.next())
             .await
@@ -129,6 +141,14 @@ pub async fn fetch_from_peer(
                                 if data.len() <= PIECE_SIZE {
                                     received[idx] = Some(data);
                                     remaining -= 1;
+                                    // Ask for the next piece only after this
+                                    // one arrived, bounding a stall's cost.
+                                    while next < pieces && received[next].is_some() {
+                                        next += 1;
+                                    }
+                                    if next < pieces {
+                                        request_piece(&mut framed, ut_id, next as u32).await?;
+                                    }
                                 }
                             }
                         }

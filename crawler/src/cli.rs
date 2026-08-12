@@ -72,8 +72,7 @@ pub struct RunArgs {
 
     /// Emit an infohash to the fetcher after this many distinct sampling
     /// responses reported it (1 = fetch on first sighting; the in-memory bloom
-    /// filter already prevents re-fetching hashes confirmed Ok/Skipped, so a
-    /// low value raises the unique stream without re-fetching dead hashes).
+    /// filter already prevents re-fetching hashes confirmed Ok/Skipped).
     #[arg(long, default_value_t = 1)]
     pub min_seen: u32,
 
