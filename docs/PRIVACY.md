@@ -1,6 +1,6 @@
 # Privacy & footprint on the BitTorrent DHT
 
-This document covers how `dht-crawler` is visible on the public DHT, what it
+This document covers how `crawler` is visible on the public DHT, what it
 can and cannot do about it, and the operational choices that actually reduce
 your exposure. Read it before running a long-lived instance.
 

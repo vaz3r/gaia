@@ -316,6 +316,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "crawler"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "clap",
+ "futures-util",
+ "gaia-bencode",
+ "gaia-core",
+ "gaia-dht",
+ "gaia-wire",
+ "rand",
+ "redis",
+ "rusqlite",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "sha1",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "criterion"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -454,31 +479,6 @@ name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
-
-[[package]]
-name = "dht-crawler"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "clap",
- "futures-util",
- "gaia-bencode",
- "gaia-core",
- "gaia-dht",
- "gaia-wire",
- "rand",
- "redis",
- "rusqlite",
- "serde",
- "serde_bytes",
- "serde_json",
- "sha1",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
-]
 
 [[package]]
 name = "diff"

@@ -1,5 +1,5 @@
 [package]
-name = "dht-crawler"
+name = "crawler"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
@@ -10,10 +10,10 @@ anyhow = "1"
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
 futures-util = "0.3"
-gaia-bencode = { path = "../vendor/gaia-bencode" }
-gaia-core = { path = "../vendor/gaia-core" }
-gaia-dht = { path = "../vendor/gaia-dht" }
-gaia-wire = { path = "../vendor/gaia-wire" }
+gaia-bencode = { path = "crates/gaia-bencode" }
+gaia-core = { path = "crates/gaia-core" }
+gaia-dht = { path = "crates/gaia-dht" }
+gaia-wire = { path = "crates/gaia-wire" }
 rand = "0.8"
 redis = { version = "1.5", features = ["tokio-comp", "connection-manager"] }
 rusqlite = { version = "0.40", features = ["bundled"] }

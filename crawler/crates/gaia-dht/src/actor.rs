@@ -35,7 +35,7 @@ use crate::krpc::{
 use crate::lookup::{FindNodeCallbacks, IterativeLookup};
 use crate::node_id::{self, ExternalIpVoter, IpVoteSource};
 use crate::peer_store::PeerStore;
-use crate::routing_table::{K, RoutingTable};
+use crate::routing_table::{K, RESPONSE_K, RoutingTable};
 use crate::storage::{DhtStorage, InMemoryDhtStorage};
 
 #[allow(unused_imports)]
@@ -1315,7 +1315,9 @@ impl DhtActor {
                 target,
                 want: _,
             } => {
-                let closest = self.routing_table.read().closest(target, K);
+                // RESPONSE_K bounds the payload regardless of the (large) table
+                // K, keeping responses in one small UDP packet.
+                let closest = self.routing_table.read().closest(target, RESPONSE_K);
                 let nodes: Vec<CompactNodeInfo> = closest
                     .into_iter()
                     .map(|n| CompactNodeInfo {
@@ -1358,7 +1360,7 @@ impl DhtActor {
                 };
 
                 if peers.is_empty() {
-                    let closest = self.routing_table.read().closest(info_hash, K);
+                    let closest = self.routing_table.read().closest(info_hash, RESPONSE_K);
                     let nodes: Vec<CompactNodeInfo> = closest
                         .into_iter()
                         .map(|n| CompactNodeInfo {
@@ -1450,7 +1452,7 @@ impl DhtActor {
                     if let Some(min_seq) = requested_seq {
                         if item.seq <= *min_seq {
                             // Return token + nodes but no value (requester already has this or newer)
-                            let closest = self.routing_table.read().closest(target, K);
+                            let closest = self.routing_table.read().closest(target, RESPONSE_K);
                             let nodes: Vec<CompactNodeInfo> = closest
                                 .into_iter()
                                 .map(|n| CompactNodeInfo {
@@ -1494,7 +1496,7 @@ impl DhtActor {
                     }
                 } else {
                     // Not found — return closer nodes
-                    let closest = self.routing_table.read().closest(target, K);
+                    let closest = self.routing_table.read().closest(target, RESPONSE_K);
                     let nodes: Vec<CompactNodeInfo> = closest
                         .into_iter()
                         .map(|n| CompactNodeInfo {
@@ -1681,7 +1683,7 @@ impl DhtActor {
             }
             // BEP 51: sample_infohashes
             KrpcQuery::SampleInfohashes { id: _, target } => {
-                let closest = self.routing_table.read().closest(target, K);
+                let closest = self.routing_table.read().closest(target, RESPONSE_K);
                 let nodes: Vec<CompactNodeInfo> = closest
                     .into_iter()
                     .map(|n| CompactNodeInfo {

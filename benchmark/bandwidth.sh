@@ -4,12 +4,12 @@
 # Usage:
 #   benchmark/bandwidth.sh [seconds] [docker-compose-dir]
 #
-# Defaults: 600s window, ./dht-crawler compose dir. Prints MB/s (in/out),
+# Defaults: 600s window, ./crawler compose dir. Prints MB/s (in/out),
 # GB/day and GB/month projections. Assumes `gluetun` is a running service.
 set -euo pipefail
 
 WINDOW="${1:-600}"
-COMPOSE_DIR="${2:-$(cd "$(dirname "$0")/.." && pwd)/dht-crawler}"
+COMPOSE_DIR="${2:-$(cd "$(dirname "$0")/.." && pwd)/crawler}"
 CONTAINER="gluetun"
 
 cd "$COMPOSE_DIR"

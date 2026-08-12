@@ -2,10 +2,11 @@ schema: spec-driven
 
 context: |
   Language: Rust (edition 2021), async runtime: tokio
-  Project: dht-crawler — a lightweight, high-throughput BitTorrent DHT crawler that
+  Project: crawler — a lightweight, high-throughput BitTorrent DHT crawler that
   indexes movie and TV torrents into a local SQLite database.
-  Stack: irontide-dht (Kademlia DHT actor, BEP 51 sample_infohashes, persistent
-  routing table), rusqlite (SQLite storage), clap (CLI), tracing (logging).
+  Stack: gaia-dht (owned irontide-dht fork, Kademlia DHT actor, BEP 51
+  sample_infohashes, persistent routing table), rusqlite (SQLite storage), clap
+  (CLI), tracing (logging).
   Protocol: BEP 5 (DHT), BEP 10 (extension protocol), BEP 9 (ut_metadata), BEP 51
   (DHT infohash indexing).
   Key principles: zero TCP for crawling itself (UDP DHT only); names come ONLY from

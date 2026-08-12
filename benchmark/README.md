@@ -1,7 +1,7 @@
 # Benchmark scripts
 
 Reusable `.sh` scripts to measure and compare crawler performance on remote-dev.
-All default to the `./dht-crawler` compose stack (docker context `remote-dev`),
+All default to the `./crawler` compose stack (docker context `remote-dev`),
 require the stack to be up, and accept a seconds window as `$1` and a compose
 directory as `$2`.
 

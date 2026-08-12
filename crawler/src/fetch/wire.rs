@@ -55,7 +55,7 @@ pub async fn fetch_from_peer(
 
     // 2. Extension handshake advertising ut_metadata (length-delimited).
     let mut ext = ExtHandshake::new();
-    ext.v = Some("dht-crawler".into());
+    ext.v = Some("crawler".into());
     let ext_msg = Message::Extended {
         ext_id: 0,
         payload: ext.to_bytes()?,

@@ -25,9 +25,9 @@ use parse::extract_metadata;
 use wire::{fetch_from_peer, sha1_info};
 
 /// Cap on distinct peers tried per infohash before giving up.
-const MAX_PEERS_PER_HASH: usize = 50;
+const MAX_PEERS_PER_HASH: usize = 16;
 /// How many peers are dialed concurrently per infohash; first verified success wins.
-const PARALLEL_DIALS: usize = 16;
+const PARALLEL_DIALS: usize = 4;
 /// Per-hash wall-clock budget for peer iteration. Successful fetches almost
 /// always complete in the first few dials; the shared dead-peer cache prevents
 /// re-dialing known-dead IPs, so a moderate window finds live peers without
@@ -40,10 +40,11 @@ const RECV_TIMEOUT: Duration = Duration::from_secs(4);
 /// Dials to attempt before concluding a hash is dead (all connect failures).
 /// If this many consecutive dials fail with no successful handshake, the fetch
 /// aborts early instead of waiting out `FETCH_DEADLINE`.
-const EARLY_ABORT_DIALS: usize = 64;
-/// Per-peer connect/fetch timeout. 5s (down from 10s) churns dead peers faster
-/// now that a larger stream of distinct hashes flows through the pool.
-const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+const EARLY_ABORT_DIALS: usize = 24;
+/// Per-peer connect/fetch timeout. 3s churns dead peers fast (most fetch
+/// attempts hit dead peers — only ~1% verify), and a live peer handshake +
+/// ut_metadata exchange completes well within it.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(3);
 /// Grace period for in-flight fetches during shutdown before they are cancelled.
 const SHUTDOWN_DRAIN: Duration = Duration::from_secs(10);
 

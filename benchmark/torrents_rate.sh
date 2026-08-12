@@ -4,13 +4,13 @@
 # Usage:
 #   benchmark/torrents_rate.sh [seconds] [docker-compose-dir] [db-container-path]
 #
-# Defaults: 600s window, ./dht-crawler compose dir, /data/crawler.sqlite.
+# Defaults: 600s window, ./crawler compose dir, /data/crawler.sqlite.
 # Prints torrents found in the window and the implied rate (per hr / per day).
 set -euo pipefail
 
 WINDOW="${1:-600}"
-COMPOSE_DIR="${2:-$(cd "$(dirname "$0")/.." && pwd)/dht-crawler}"
-CONTAINER="dht-crawler"
+COMPOSE_DIR="${2:-$(cd "$(dirname "$0")/.." && pwd)/crawler}"
+CONTAINER="crawler"
 DB_PATH="${3:-/data/crawler.sqlite}"
 
 cd "$COMPOSE_DIR"

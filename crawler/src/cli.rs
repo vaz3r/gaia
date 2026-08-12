@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "dht-crawler", about = "DHT torrent crawler indexing movie/TV torrents into SQLite")]
+#[command(name = "crawler", about = "DHT torrent crawler indexing movie/TV torrents into SQLite")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -117,7 +117,7 @@ pub struct RunArgs {
     #[arg(long)]
     pub redis_url: Option<String>,
 
-    /// Override the RUST_LOG tracing filter (e.g. "dht_crawler=debug").
+    /// Override the RUST_LOG tracing filter (e.g. "crawler=debug").
     #[arg(long)]
     pub log: Option<String>,
 }

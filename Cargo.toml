@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "dht-crawler",
-    "vendor/gaia-bencode",
-    "vendor/gaia-core",
-    "vendor/gaia-wire",
-    "vendor/gaia-dht",
+    "crawler",
+    "crawler/crates/gaia-bencode",
+    "crawler/crates/gaia-core",
+    "crawler/crates/gaia-wire",
+    "crawler/crates/gaia-dht",
 ]
 resolver = "2"

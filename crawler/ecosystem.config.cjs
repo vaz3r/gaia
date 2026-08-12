@@ -1,10 +1,10 @@
 /**
- * PM2 configuration for dht-crawler.
+ * PM2 configuration for crawler.
  *
  * Start:     pm2 start ecosystem.config.cjs
- * Restart:   pm2 restart dht-crawler
- * Logs:      pm2 logs dht-crawler
- * Stop:      pm2 stop dht-crawler
+ * Restart:   pm2 restart crawler
+ * Logs:      pm2 logs crawler
+ * Stop:      pm2 stop crawler
  * Auto-start on boot: pm2 save && pm2 startup
  *
  * The binary handles SIGTERM gracefully (drains in-flight fetches, flushes
@@ -17,10 +17,10 @@
 module.exports = {
   apps: [
     {
-      name: "dht-crawler",
+      name: "crawler",
       cwd: __dirname,
-      script: "../target/release/dht-crawler",
-      args: "run --db crawler.sqlite --state-dir state --port 6881 --instances 4 --log dht_crawler=info",
+      script: "../target/release/crawler",
+      args: "run --db crawler.sqlite --state-dir state --port 6881 --instances 4 --log crawler=info",
       // The crawler is a single long-running process; do not fork-mode cluster.
       instances: 1,
       exec_mode: "fork",

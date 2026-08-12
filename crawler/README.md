@@ -1,4 +1,4 @@
-# dht-crawler
+# crawler
 
 A lightweight BitTorrent DHT crawler that indexes torrents into a local SQLite
 database. It bootstraps and maintains a persistent Kademlia routing table,
@@ -12,13 +12,13 @@ SHA-1, and stores every accepted torrent with upsert semantics.
 cargo build --release
 
 # Crawl (daemon)
-./target/release/dht-crawler run \
+./target/release/crawler run \
   --db crawler.sqlite \
   --state-dir state \
   --port 6881
 
 # Search the index
-./target/release/dht-crawler query "matrix 1080p"
+./target/release/crawler query "matrix 1080p"
 ```
 
 ### Running under PM2 (recommended for 24/7)
@@ -29,9 +29,9 @@ runs the release binary directly (PM2 captures the logs) and raises
 
 ```sh
 pm2 start ecosystem.config.cjs     # start / auto-restart on crash
-pm2 logs dht-crawler               # tail crawl stats
-pm2 restart dht-crawler            # graceful restart (drains + persists)
-pm2 stop dht-crawler               # graceful stop
+pm2 logs crawler               # tail crawl stats
+pm2 restart crawler            # graceful restart (drains + persists)
+pm2 stop crawler               # graceful stop
 pm2 save && pm2 startup            # auto-start on boot
 ```
 
@@ -57,10 +57,10 @@ for the database and routing state. Confirm the context first:
 `docker context use remote-dev`.
 
 ```sh
-cd dht-crawler
+cd crawler
 cp .env.example .env            # fill in WireGuard keys (gitignored)
 docker compose up -d --build
-docker compose logs -f dht-crawler
+docker compose logs -f crawler
 ```
 
 Warm-start migration (first run): copy the existing DB + state into the named
@@ -140,7 +140,8 @@ SQLite (WAL, batched upserts)
 | `--qps <N>` | `2000` | Aggregate DHT query budget shared by sampling and peer lookups |
 | `--sampler-qps <N>` | `400` | Sampler query budget across all sampling loops |
 | `--sampler-loops <N>` | `32` | Number of concurrent sampling loops |
-| `--min-seen <N>` | `2` | Emit an infohash only after N distinct sampling responses reported it (culls the junk tail) |
+| `--min-seen <N>` | `1` | Emit an infohash to the fetcher on first sighting (bloom filter prevents re-fetching known-dead hashes) |
+| `--scale <N>` | `10` | Concurrency scale factor (bitmagnet `scaling_factor`): multiplies sampler QPS/loops, fetch/lookup concurrency, and buffers |
 | `--lookup-concurrency <N>` | `256` | Max concurrent DHT `get_peers` lookups |
 | `--max-nodes <N>` | `4096` | Maximum number of nodes in the DHT routing table |
 | `--no-restrict-ips` | off | Disable one-node-per-IP routing restriction (opt-in for NAT) |
@@ -161,8 +162,8 @@ which tells us passive announce capture is not worth building.
 ### `query`
 
 ```
-dht-crawler query <NAME> [--db <DB>]
-dht-crawler query <NAME> [--db <DB>] --failures
+crawler query <NAME> [--db <DB>]
+crawler query <NAME> [--db <DB>] --failures
 ```
 
 Prints matching `name / size / file count`. With `--failures`, prints an
@@ -172,7 +173,7 @@ from the `scanned` table instead.
 ### `purge`
 
 ```
-dht-crawler purge [--db <DB>] [--state-dir <DIR>] [--yes]
+crawler purge [--db <DB>] [--state-dir <DIR>] [--yes]
 ./run.sh --purge
 ```
 
@@ -197,10 +198,11 @@ confirmation unless `--yes` is given.
   its dominant `failure_reason` (`timeout`, `connect_refused`, `no_bep10`,
   `no_ut_metadata`, `metadata_rejected`, `sha1_mismatch`, `empty_peers`,
   `deadline`, `early_abort`, `other`) so you can diagnose why hashes fail with
-  `dht-crawler query anything --failures`. All verified torrents store their raw
+  `crawler query anything --failures`. All verified torrents store their raw
   `info` dictionary for offline re-analysis.
-- `--min-seen 2` (default) skips the single-sighting junk tail, so fetch slots
-  go to hashes confirmed by multiple nodes; raising it to `3` culls further at
+- `--min-seen 1` (default) emits every unique hash immediately; the in-memory
+  bloom filter caches known-blocked verdicts so re-sampled dead hashes skip the
+  database instead of re-fetching. Raising it culls the single-sighting tail at
   the cost of delaying rare releases. The popularity value also controls
   processing order regardless of the threshold.
 - Failed hashes retry after exponential backoff starting at 1 minute (capped at
@@ -227,5 +229,5 @@ that actually reduce or relocate your exposure.
 ## Licensing
 
 This binary links `irontide-dht`, which is **GPL-3.0-or-later**; that license
-propagates to `dht-crawler`. This is fine for local/personal use but must be
+propagates to `crawler`. This is fine for local/personal use but must be
 reconsidered before any public distribution.

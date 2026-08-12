@@ -5,33 +5,33 @@
 # Usage:
 #   benchmark/bench.sh [seconds] [docker-compose-dir]
 #
-# Defaults: 600s window, ./dht-crawler compose dir. Requires the stack to be
-# up (gluetun + dht-crawler + redis). Prints a report suitable for comparing
+# Defaults: 600s window, ./crawler compose dir. Requires the stack to be
+# up (gluetun + crawler + redis). Prints a report suitable for comparing
 # crawler configs against the original baseline (~27.8k torrents/GB).
 set -euo pipefail
 
 WINDOW="${1:-600}"
-COMPOSE_DIR="${2:-$(cd "$(dirname "$0")/.." && pwd)/dht-crawler}"
+COMPOSE_DIR="${2:-$(cd "$(dirname "$0")/.." && pwd)/crawler}"
 BENCH_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 cd "$COMPOSE_DIR"
 
 # --- Pre-window snapshots ---
 echo "Capturing baseline (${WINDOW}s window)..."
-docker cp dht-crawler:/data/crawler.sqlite /tmp/bench_pre.sqlite >/dev/null 2>&1
+docker cp crawler:/data/crawler.sqlite /tmp/bench_pre.sqlite >/dev/null 2>&1
 pre_rx=$(docker exec gluetun sh -c 'cat /proc/net/dev | grep tun0' | tr -s ' ' | awk '{print $2}')
 pre_tx=$(docker exec gluetun sh -c 'cat /proc/net/dev | grep tun0' | tr -s ' ' | awk '{print $10}')
 pre_count=$(python3 -c "import sqlite3; print(sqlite3.connect('file:/tmp/bench_pre.sqlite?mode=ro',uri=True).execute('SELECT COUNT(*) FROM torrents').fetchone()[0])")
-pre_stats=$(docker compose logs dht-crawler --since 1m 2>&1 | grep "crawl stats" | tail -1)
+pre_stats=$(docker compose logs crawler --since 1m 2>&1 | grep "crawl stats" | tail -1)
 
 sleep "$WINDOW"
 
 # --- Post-window snapshots ---
-docker cp dht-crawler:/data/crawler.sqlite /tmp/bench_post.sqlite >/dev/null 2>&1
+docker cp crawler:/data/crawler.sqlite /tmp/bench_post.sqlite >/dev/null 2>&1
 post_rx=$(docker exec gluetun sh -c 'cat /proc/net/dev | grep tun0' | tr -s ' ' | awk '{print $2}')
 post_tx=$(docker exec gluetun sh -c 'cat /proc/net/dev | grep tun0' | tr -s ' ' | awk '{print $10}')
 post_count=$(python3 -c "import sqlite3; print(sqlite3.connect('file:/tmp/bench_post.sqlite?mode=ro',uri=True).execute('SELECT COUNT(*) FROM torrents').fetchone()[0])")
-post_stats=$(docker compose logs dht-crawler --since 1m 2>&1 | grep "crawl stats" | tail -1)
+post_stats=$(docker compose logs crawler --since 1m 2>&1 | grep "crawl stats" | tail -1)
 
 # --- Compute ---
 GB=1073741824

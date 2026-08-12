@@ -24,6 +24,13 @@ use gaia_core::Id20;
 /// sampling and, therefore, unique-hash discovery.
 pub const K: usize = 80;
 
+/// Maximum nodes returned in inbound-query responses (`find_node` /
+/// `get_peers` / `get` / `sample_infohashes`). Decoupled from the table `K` so
+/// a large routing table does not inflate every UDP response payload 10x: the
+/// table keeps `K=80` for capacity, but responses carry at most `RESPONSE_K`
+/// nodes (BEP 5 semantics), keeping each answer in a single small UDP packet.
+pub const RESPONSE_K: usize = 16;
+
 /// Maximum number of buckets (one per bit of the ID).
 const MAX_BUCKETS: usize = 160;
 

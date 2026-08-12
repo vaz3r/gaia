@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE="$(dirname "$SCRIPT_DIR")"
-BIN="${WORKSPACE}/target/release/dht-crawler"
+BIN="${WORKSPACE}/target/release/crawler"
 DB="${SCRIPT_DIR}/crawler.sqlite"
 STATE="${SCRIPT_DIR}/state"
 LOG="${SCRIPT_DIR}/crawl.log"
@@ -22,10 +22,10 @@ case "${1:-}" in
         ;;
     --aggressive)
         AGGRESSIVE="--aggressive"
-        echo "Starting dht-crawler (AGGRESSIVE MODE)"
+        echo "Starting crawler (AGGRESSIVE MODE)"
         ;;
     *)
-        echo "Starting dht-crawler"
+        echo "Starting crawler"
         echo "  Tip: run with --aggressive for VPS-optimized settings, or --purge to wipe data"
         ;;
 esac
@@ -41,5 +41,5 @@ exec "$BIN" run \
   --state-dir "$STATE" \
   --port 6881 \
   $AGGRESSIVE \
-  --log dht_crawler=info \
+  --log crawler=info \
   >"$LOG" 2>&1

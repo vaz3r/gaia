@@ -53,11 +53,11 @@ services:
       timeout: 5s
       retries: 3
 
-  dht-crawler:
+  crawler:
     build:
       context: ..
-      dockerfile: dht-crawler/Dockerfile
-    container_name: dht-crawler
+      dockerfile: crawler/Dockerfile
+    container_name: crawler
     restart: unless-stopped
     # Share Gluetun's network namespace: all crawler traffic egresses via the
     # WireGuard tunnel from the Oracle public IP. Redis is reached on the local
@@ -92,7 +92,7 @@ services:
       - --redis-url
       - redis://redis:6379
       - --log
-      - dht_crawler=info
+      - crawler=info
 
 volumes:
   dht-data:
