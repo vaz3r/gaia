@@ -175,13 +175,17 @@ impl LivenessCounter {
         let window = self.cfg.window;
         let mut evicted = Vec::new();
 
-        // Per-report expiry + record max sources before removal.
+        // Per-report expiry + record max sources before removal. Snapshot the
+        // distinct-source count BEFORE pruning: `max_reached()` reflects the
+        // current reports length, which is 0 after all reports expired — so the
+        // near-miss bucket must use the pre-prune count.
         self.inner.retain(|hash, entry| {
+            let pre_prune = entry.reports.len();
             entry.reports.retain(|(_, t)| now.duration_since(*t) <= window);
             if entry.reports.is_empty() {
                 evicted.push(SweepEviction {
                     hash: *hash,
-                    max_sources: entry.max_reached(),
+                    max_sources: pre_prune,
                 });
                 false
             } else {
@@ -329,6 +333,26 @@ mod tests {
         let evicted = lc.sweep(now + Duration::from_secs(200));
         assert_eq!(evicted.len(), 2, "both one-hit-wonders expired");
         assert_eq!(lc.len(), 0);
+    }
+
+    #[test]
+    fn sweep_reports_pre_prune_distinct_count() {
+        // Regression: `max_reached()` reflects the current reports length, which
+        // is 0 after all reports expired during pruning. The sweep must report
+        // the pre-prune distinct-source count so near-miss buckets work.
+        let lc = LivenessCounter::new(cfg());
+        let now = Instant::now();
+        let hash = [1u8; 20];
+        lc.record(&hash, id(1), now);
+        lc.record(&hash, id(2), now + Duration::from_secs(1));
+        // Both reports expire; sweep must report max_sources == 2.
+        let evicted = lc.sweep(now + Duration::from_secs(200));
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(
+            evicted[0].max_sources, 2,
+            "sweep must report the pre-prune distinct count, got {}",
+            evicted[0].max_sources
+        );
     }
 
     #[test]
