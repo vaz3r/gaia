@@ -59,6 +59,10 @@ services:
       dockerfile: crawler/Dockerfile
     container_name: crawler
     restart: unless-stopped
+    # Bound the crawler so a runaway can't OOM/swap the 16 GiB host. The DHT
+    # node + fetch pool at --scale 3 stays well under this in practice.
+    mem_limit: 6g
+    pids_limit: 8192
     # Share Gluetun's network namespace: all crawler traffic egresses via the
     # WireGuard tunnel from the Oracle public IP. Redis is reached on the local
     # compose network (via gluetun's shared eth0), so coordination is free.
@@ -85,7 +89,7 @@ services:
       - --min-seen
       - "1"
       - --scale
-      - "10"
+      - "3"
       - --max-nodes
       - "8192"
       - --no-restrict-ips

@@ -24,8 +24,12 @@ const FAIL_BACKOFF: Duration = Duration::from_secs(10);
 const STALE_BACKOFF: Duration = Duration::from_secs(300);
 /// Cap on the per-node interval map (LRU-evicted).
 const INTERVAL_MAP_CAP: usize = 8192;
-/// Cap on the in-memory occurrence map (FIFO-evicted).
-const SEEN_CAP: usize = 1_000_000;
+/// Cap on the in-memory occurrence map (FIFO-evicted). Sized small because the
+/// shared in-memory bloom filter (not this map) is the primary re-fetch guard;
+/// this per-loop map only counts distinct sightings toward `--min-seen`, so a
+/// modest cap keeps memory flat across many sampler loops (scale multiplies
+/// loops, so a large per-loop cap would blow up heap linearly).
+const SEEN_CAP: usize = 16_384;
 /// Cap on the per-node quality map (LRU-evicted).
 const NODE_STATS_CAP: usize = 32_768;
 /// Minimum time to wait when no node is re-queryable.
