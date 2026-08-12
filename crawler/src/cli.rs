@@ -115,8 +115,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub no_restrict_ips: bool,
 
-    /// Timeout in seconds for individual DHT queries.
-    #[arg(long, default_value_t = 5)]
+    /// Timeout in seconds for individual DHT queries. 3s drains slow/dead
+    /// queries faster, reducing the in-flight KRPC backlog (`pending_queries`)
+    /// and the memory held by long-lived lookups.
+    #[arg(long, default_value_t = 3)]
     pub query_timeout: u64,
 
     /// Aggressive preset: crank up sampling and fetch rates for VPS deployments.
@@ -176,17 +178,23 @@ impl RunArgs {
         self.scale.max(1)
     }
 
-    /// Effective sampler QPS after applying the aggressive preset and `--scale`
-    /// (bitmagnet `scaling_factor`).
+    /// Effective sampler QPS after applying the aggressive preset and `--scale`.
+    /// Capped: the sampler can only usefully query distinct nodes, bounded by
+    /// (routing table size / per-node re-query interval) ≈ ~73/sec at a 4,000-node
+    /// table. An uncapped scale here fires thousands of queries/sec against a
+    /// small ready set, each held in the actor's pending map for up to the query
+    /// timeout — the source of the `pending_queries` memory growth. 300 is ample.
     pub fn effective_sampler_qps(&self) -> usize {
         let base = if self.aggressive { 1000 } else { self.sampler_qps };
-        base.saturating_mul(self.scale())
+        base.saturating_mul(self.scale()).min(300)
     }
 
     /// Effective sampler loops after applying the aggressive preset and `--scale`.
+    /// Capped to match the sampler QPS ceiling: more loops than qps/1 is
+    /// pointless (each loop needs its own query budget) and adds task overhead.
     pub fn effective_sampler_loops(&self) -> usize {
         let base = if self.aggressive { 64 } else { self.sampler_loops };
-        base.saturating_mul(self.scale())
+        base.saturating_mul(self.scale()).min(32)
     }
 
     /// Effective concurrency after applying the aggressive preset and `--scale`.
@@ -196,9 +204,13 @@ impl RunArgs {
     }
 
     /// Effective lookup concurrency after applying the aggressive preset and `--scale`.
+    /// Capped: concurrent get_peers lookups are the main source of long-lived
+    /// DhtLookup tasks (each holds a routing walk), so an unbounded scale here
+    /// grows `active_lookups` and memory. 96 is ample given the fetch pool runs
+    /// well under capacity.
     pub fn effective_lookup_concurrency(&self) -> usize {
         let base = if self.aggressive { 256 } else { self.lookup_concurrency };
-        base.saturating_mul(self.scale())
+        base.saturating_mul(self.scale()).min(96)
     }
 
     /// Effective DHT QPS after applying the aggressive preset.

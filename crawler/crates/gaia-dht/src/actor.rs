@@ -228,6 +228,10 @@ pub struct DhtStats {
     pub peer_store_peers: usize,
     /// Number of in-flight KRPC queries.
     pub pending_queries: usize,
+    /// Number of in-flight `DhtLookup` tasks.
+    pub active_lookups: usize,
+    /// Number of retained announce tokens (bounded by `MAX_ANNOUNCE_TOKENS`).
+    pub announce_tokens: usize,
     /// Total KRPC queries sent since startup.
     pub total_queries_sent: u64,
     /// Total KRPC responses received since startup.
@@ -720,7 +724,13 @@ struct DhtActor {
     next_txn_id: Arc<AtomicU16>,
     stats: ActorStats,
     /// Announce tokens collected from active lookups via the token channel.
+    /// Bounded: tokens are only consumed when WE announce a hash, which this
+    /// read-only crawler never does (its `get_peers` growth lookups use random
+    /// targets). Without a cap, every grower lookup leaks an entry here — the
+    /// source of an unbounded RSS growth under load.
     announce_tokens: HashMap<Id20, HashMap<Id20, (SocketAddr, Vec<u8>)>>,
+    /// Insertion order for `announce_tokens` LRU eviction (oldest first).
+    announce_token_order: std::collections::VecDeque<Id20>,
     /// Sender for lookup token channel (cloned to each `DhtLookup`).
     lookup_token_tx: mpsc::UnboundedSender<(Id20, Id20, SocketAddr, Vec<u8>)>,
     /// Receiver for lookup token channel.
@@ -882,6 +892,10 @@ const MAINTENANCE_INTERVAL: Duration = Duration::from_mins(1);
 const CLEANUP_INTERVAL: Duration = Duration::from_mins(5);
 /// Interval for pinging questionable nodes.
 const PING_INTERVAL: Duration = Duration::from_secs(5);
+/// Max announce tokens retained per actor. Tokens from random-target growth
+/// lookups are never consumed by this read-only crawler; the cap bounds the
+/// otherwise-unbounded `announce_tokens` growth that caused an RSS leak.
+const MAX_ANNOUNCE_TOKENS: usize = 4096;
 
 impl DhtActor {
     fn new(
@@ -922,6 +936,7 @@ impl DhtActor {
                 total_responses_received: 0,
             },
             announce_tokens: HashMap::new(),
+            announce_token_order: std::collections::VecDeque::new(),
             lookup_token_tx,
             lookup_token_rx,
             lookup_node_tx,
@@ -1159,10 +1174,24 @@ impl DhtActor {
 
                 // Drain tokens from active DhtLookup tasks
                 Some((info_hash, node_id, addr, token)) = self.lookup_token_rx.recv() => {
+                    let is_new = !self.announce_tokens.contains_key(&info_hash);
                     self.announce_tokens
                         .entry(info_hash)
                         .or_default()
                         .insert(node_id, (addr, token));
+                    if is_new {
+                        self.announce_token_order.push_back(info_hash);
+                    }
+                    // Bound the map: evict the oldest info_hash when over the
+                    // cap. Tokens for random-target growth lookups are never
+                    // consumed, so this only discards never-used data.
+                    while self.announce_tokens.len() > MAX_ANNOUNCE_TOKENS {
+                        if let Some(oldest) = self.announce_token_order.pop_front() {
+                            self.announce_tokens.remove(&oldest);
+                        } else {
+                            break;
+                        }
+                    }
                 }
 
                 // Drain discovered nodes from active DhtLookup tasks
@@ -2096,7 +2125,12 @@ impl DhtActor {
             info_hash,
             crate::dht_lookup::LookupConfig {
                 max_depth: 4,
-                max_nodes: 256,
+                // 64-node walks instead of 256: a crawler's get_peers lookups
+                // (routing growth + fetch peer discovery) only need a few peers
+                // / nodes, and 256-node walks hold ~4x the in-flight query state
+                // per lookup. At high lookup churn that 4x was the dominant
+                // memory growth source.
+                max_nodes: 64,
             },
             self.address_family,
             self.socket.clone(),
@@ -3070,6 +3104,8 @@ impl DhtActor {
             peer_store_info_hashes: self.peer_store.info_hash_count(),
             peer_store_peers: self.peer_store.peer_count(),
             pending_queries: self.pending.len(),
+            active_lookups: self.active_lookups.len(),
+            announce_tokens: self.announce_tokens.len(),
             total_queries_sent: self.stats.total_queries_sent,
             total_responses_received: self.stats.total_responses_received,
             dht_item_count: immutable + mutable,

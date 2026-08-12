@@ -28,11 +28,12 @@ use wire::{fetch_from_peer, sha1_info};
 const MAX_PEERS_PER_HASH: usize = 16;
 /// How many peers are dialed concurrently per infohash; first verified success wins.
 const PARALLEL_DIALS: usize = 4;
-/// Per-hash wall-clock budget for peer iteration. Successful fetches almost
-/// always complete in the first few dials; the shared dead-peer cache prevents
-/// re-dialing known-dead IPs, so a moderate window finds live peers without
-/// excessive churn.
-const FETCH_DEADLINE: Duration = Duration::from_secs(15);
+/// Per-hash wall-clock budget for peer iteration. 8s (down from 15s): each
+/// fetch holds a `get_peers` DhtLookup open for this long, and with high fetch
+/// volume the hold time × fetch rate is the number of concurrent long-lived
+/// lookups (and their memory). Successful fetches complete in the first dials;
+/// 8s still finds a live peer while bounding lookup churn.
+const FETCH_DEADLINE: Duration = Duration::from_secs(8);
 /// How long to wait for the next `get_peers` batch before giving up. The
 /// DhtLookup streams batches into the channel; a slow or empty lookup must not
 /// hold a pool slot indefinitely.

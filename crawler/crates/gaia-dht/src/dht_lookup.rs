@@ -204,6 +204,18 @@ impl DhtLookup {
                 result = futures.next(), if !futures.is_empty() => {
                     match result {
                         Some((addr, Ok((sender_id, gp)))) => {
+                            // Fast-exit: if the consumer dropped the reply
+                            // channel (e.g. a routing grower that only wants
+                            // node discovery, not peers), stop injecting more
+                            // queries and wind down immediately instead of
+                            // walking the whole keyspace.
+                            if self.peer_tx.is_closed() {
+                                debug!(
+                                    target = %self.target,
+                                    "DhtLookup: peer channel closed mid-response, shutting down"
+                                );
+                                break;
+                            }
                             self.process_response(addr, sender_id, &gp, &mut futures);
                         }
                         Some((addr, Err(()))) => {

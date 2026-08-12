@@ -78,7 +78,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
         let handle = handle.clone();
         let shutdown = shutdown.clone();
         growers.spawn(async move {
-            discovery::grow_routing(handle, Duration::from_millis(100), shutdown).await;
+            discovery::grow_routing(handle, Duration::from_millis(250), shutdown).await;
         });
     }
 
@@ -337,6 +337,13 @@ async fn stats_loop(
             .await
             .map(|s| s.peer_store_info_hashes)
             .unwrap_or(0);
+        // DHT actor diagnostics: active lookups / announce tokens / pending
+        // queries from the primary instance (leak tracking).
+        let (active_lookups, announce_tokens, pending_queries) = primary
+            .stats()
+            .await
+            .map(|s| (s.active_lookups, s.announce_tokens, s.pending_queries))
+            .unwrap_or((0, 0, 0));
         let s = &stats;
         let r = std::sync::atomic::Ordering::Relaxed;
         // Unique-hash discovery rate over the last tick (unique/hr) so the
@@ -350,6 +357,9 @@ async fn stats_loop(
             routing_nodes = routing,
             instance_nodes = per_instance.join(","),
             announced_hashes = announced,
+            active_lookups = active_lookups,
+            announce_tokens = announce_tokens,
+            pending_queries = pending_queries,
             hashes_sampled = s.hashes_sampled.load(r),
             hashes_unique = unique_now,
             unique_per_hr = format!("{unique_per_hr:.1}"),

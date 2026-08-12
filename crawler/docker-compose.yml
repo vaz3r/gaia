@@ -76,6 +76,11 @@ services:
       - dht-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
+      # Bound glibc malloc arenas: the crawler's many short-lived per-query
+      # allocations fragment memory across arenas (observed as many ~64 MiB
+      # mmap regions + RSS creep under load). 2 arenas covers the 5 threads
+      # without the default 8x-cores arena bloat.
+      - MALLOC_ARENA_MAX=2
     command:
       - run
       - --db

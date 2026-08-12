@@ -121,13 +121,28 @@ pub async fn start_dht(
 /// Continuously grow the routing table by issuing `get_peers` on random 20-byte
 /// targets. Each lookup walks toward the target and injects discovered nodes
 /// into the routing table, so the table climbs toward `--max-nodes` throughout
-/// the crawl rather than stalling after the startup warmup. Queries are
-/// throttled to `interval` and stop on cancellation.
+/// the crawl rather than stalling after the startup warmup.
+///
+/// Table-size aware: while the table is cold (below `WARM_TABLE_NODES`) it
+/// queries every `interval` (fast warmup); once warm it slows to
+/// `WARM_INTERVAL` because sampling + announce traffic keep the table fresh and
+/// a full `get_peers` walk per grower tick is expensive (each spawns a DhtLookup
+/// that runs 10s-timeout queries — spawning 64/sec when warm is what backlogs
+/// `active_lookups` and leaks memory). Queries stop on cancellation.
 pub async fn grow_routing(
     handle: DhtHandle,
     interval: Duration,
     shutdown: CancellationToken,
 ) {
+    /// Routing-table size above which the table is considered warm.
+    const WARM_TABLE_NODES: usize = 1_500;
+    /// Slow interval once warm: sampling + announce traffic keep the table
+    /// fresh, so the grower only needs an occasional sweep. Each grower tick
+    /// spawns a full DhtLookup (64-node walk), which is the dominant source of
+    /// long-lived lookups — keeping it rare when warm bounds `active_lookups`
+    /// and the memory they hold.
+    const WARM_INTERVAL: Duration = Duration::from_secs(60);
+
     loop {
         if shutdown.is_cancelled() {
             return;
@@ -136,9 +151,11 @@ pub async fn grow_routing(
         rand::thread_rng().fill_bytes(&mut bytes);
         let target = Id20(bytes);
         // Even with no peers, the DhtLookup injects nodes into the routing
-        // table. Drop the receiver immediately.
+        // table. Drop the receiver immediately (the lookup fast-exits when the
+        // channel closes, so it winds down instead of walking the keyspace).
         let _ = handle.get_peers(target).await;
-        tokio::time::sleep(interval).await;
+        let warm = handle.node_count().await.unwrap_or(0) >= WARM_TABLE_NODES;
+        tokio::time::sleep(if warm { WARM_INTERVAL } else { interval }).await;
     }
 }
 
