@@ -1,0 +1,6 @@
+{
+  "git": {
+    "sha1": "14f13d3e328f3b348c58606b99ceccae46bc1d78"
+  },
+  "path_in_vcs": "crates/irontide-dht"
+}

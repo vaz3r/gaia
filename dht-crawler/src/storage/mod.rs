@@ -98,12 +98,62 @@ impl Storage {
     /// True if `info_hash` should not be fetched right now: already accepted,
     /// already filtered out, or a recent failure still inside its backoff
     /// window. `now` is a unix timestamp in seconds.
+    ///
+    /// Retained as the scalar primitive used by tests; production admission
+    /// uses the batched `scan_blocked_batch`.
+    #[allow(dead_code)]
     pub fn scan_blocked(&self, info_hash: &[u8; 20], now: i64) -> Result<bool> {
         Ok(match self.scan_status(info_hash)? {
             None => false,
             Some(ScannedStatus::Ok) | Some(ScannedStatus::Skipped) => true,
             Some(ScannedStatus::Failed { next_attempt, .. }) => next_attempt > now,
         })
+    }
+
+    /// Batched `scan_blocked`: returns the subset of `info_hashes` that should
+    /// NOT be fetched right now (accepted, filtered, or inside a backoff
+    /// window). One `IN` query instead of N point lookups keeps pipeline
+    /// admission cheap as the unique-hash stream grows. Hashes absent from the
+    /// `scanned` table are never blocked.
+    pub fn scan_blocked_batch(&self, info_hashes: &[[u8; 20]], now: i64) -> Result<Vec<[u8; 20]>> {
+        if info_hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = std::iter::repeat_n("?", info_hashes.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT info_hash, status, next_attempt FROM scanned WHERE info_hash IN ({placeholders})"
+        );
+        let conn = self.read.lock().unwrap();
+        let mut stmt = conn
+            .prepare(&sql)
+            .context("prepare batched scan check")?;
+        let mut rows = stmt.query_map(
+            rusqlite::params_from_iter(info_hashes.iter().map(|h| h.as_slice())),
+            |r| {
+                let hash_bytes: Vec<u8> = r.get(0)?;
+                let status: String = r.get(1)?;
+                let next_attempt: i64 = r.get(2)?;
+                Ok((hash_bytes, status, next_attempt))
+            },
+        )?;
+        let mut blocked = Vec::new();
+        while let Some(Ok((hash_bytes, status, next_attempt))) = rows.next() {
+            if hash_bytes.len() != 20 {
+                continue;
+            }
+            let mut h = [0u8; 20];
+            h.copy_from_slice(&hash_bytes);
+            let is_blocked = match status.as_str() {
+                "ok" | "skipped" => true,
+                _ => next_attempt > now,
+            };
+            if is_blocked {
+                blocked.push(h);
+            }
+        }
+        Ok(blocked)
     }
 
     /// Upsert a `scanned` row. A `Failed` record increments the attempt count
@@ -303,11 +353,51 @@ mod tests {
     }
 
     #[test]
+    fn scan_blocked_batch_flags_only_blocked() {
+        let db = tmp_db("scan_batch");
+        let now = 1_700_000_000i64;
+        let accepted = [1u8; 20];
+        let in_backoff = [2u8; 20];
+        let fresh = [3u8; 20];
+
+        db.record_scanned(&ScannedRecord {
+            info_hash: accepted,
+            status: ScannedStatus::Ok,
+            info_bytes: Some(vec![1]),
+            raw_name: None,
+            last_attempt: now,
+        })
+        .unwrap();
+        db.record_scanned(&ScannedRecord {
+            info_hash: in_backoff,
+            status: ScannedStatus::Failed {
+                attempts: 1,
+                next_attempt: now + 60,
+                failure_reason: Some("timeout".into()),
+            },
+            info_bytes: None,
+            raw_name: None,
+            last_attempt: now,
+        })
+        .unwrap();
+
+        let blocked = db
+            .scan_blocked_batch(&[accepted, in_backoff, fresh], now)
+            .unwrap();
+        assert_eq!(blocked.len(), 2, "accepted + backoff blocked, fresh not");
+        assert!(blocked.contains(&accepted));
+        assert!(blocked.contains(&in_backoff));
+        assert!(!blocked.contains(&fresh));
+
+        // Empty input is a no-op.
+        assert!(db.scan_blocked_batch(&[], now).unwrap().is_empty());
+    }
+
+    #[test]
     fn scanned_failure_increments_attempts() {
         let db = tmp_db("scanned_fail");
         let hash = [8u8; 20];
-        let now = 1_700_000_000i64;
-        db.record_scanned(&ScannedRecord {
+        let now = 1_700_000_000i64;        db.record_scanned(&ScannedRecord {
             info_hash: hash,
             status: ScannedStatus::Failed {
                 attempts: 1,

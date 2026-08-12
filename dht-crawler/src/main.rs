@@ -1,4 +1,5 @@
 mod cli;
+mod bloom;
 mod crawler;
 mod discovery;
 mod fetch;

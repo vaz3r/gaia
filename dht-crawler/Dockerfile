@@ -4,15 +4,23 @@
 FROM rust:1-slim AS builder
 WORKDIR /build
 
-# Cache dependencies: copy manifests first.
+# Cache dependencies: copy manifests first (workspace + crawler + owned gaia-*).
 COPY Cargo.toml ./
 COPY dht-crawler/Cargo.toml dht-crawler/
+COPY vendor/gaia-bencode/Cargo.toml vendor/gaia-bencode/
+COPY vendor/gaia-core/Cargo.toml vendor/gaia-core/
+COPY vendor/gaia-wire/Cargo.toml vendor/gaia-wire/
+COPY vendor/gaia-dht/Cargo.toml vendor/gaia-dht/
 RUN mkdir -p dht-crawler/src && \
     echo 'fn main() {}' > dht-crawler/src/main.rs && \
     cargo build --release -p dht-crawler 2>/dev/null || true
 
 # Real sources.
 COPY dht-crawler/src dht-crawler/src
+COPY vendor/gaia-bencode/src vendor/gaia-bencode/src/
+COPY vendor/gaia-core/src vendor/gaia-core/src/
+COPY vendor/gaia-wire/src vendor/gaia-wire/src/
+COPY vendor/gaia-dht/src vendor/gaia-dht/src/
 RUN touch dht-crawler/src/main.rs && \
     cargo build --release -p dht-crawler
 

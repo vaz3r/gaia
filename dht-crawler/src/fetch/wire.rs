@@ -4,8 +4,8 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
-use irontide_core::Id20;
-use irontide_wire::{ExtHandshake, Handshake, Message, MessageCodec, MetadataMessage, MetadataMessageType};
+use gaia_core::Id20;
+use gaia_wire::{ExtHandshake, Handshake, Message, MessageCodec, MetadataMessage, MetadataMessageType};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
@@ -191,7 +191,7 @@ pub fn sha1_info(info_bytes: &[u8]) -> [u8; 20] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use irontide_bencode::to_bytes;
+    use gaia_bencode::to_bytes;
     use serde::Serialize;
 
     #[derive(Serialize)]

@@ -3,8 +3,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use irontide_core::Id20;
-use irontide_dht::DhtHandle;
+use gaia_core::Id20;
+use gaia_dht::DhtHandle;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 use tokio::sync::mpsc;
@@ -12,10 +12,16 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::stats::CrawlStats;
-use crate::storage::Storage;
+use crate::discovery::FetchRequest;
+use crate::storage::{ScannedStatus, Storage};
 
 /// How often a node that failed to answer is retried.
 const FAIL_BACKOFF: Duration = Duration::from_secs(10);
+/// How long a node that answered but returned zero *new* hashes is skipped.
+/// Mirrors bitmagnet's `NodeSampleInfoHashesRes` deprioritization: dead BEP 51
+/// nodes that keep echoing the same old hashes are re-queried far less often,
+/// freeing the budget for nodes that surface new unique hashes.
+const STALE_BACKOFF: Duration = Duration::from_secs(300);
 /// Cap on the per-node interval map (LRU-evicted).
 const INTERVAL_MAP_CAP: usize = 8192;
 /// Cap on the in-memory occurrence map (FIFO-evicted).
@@ -56,12 +62,15 @@ pub struct SamplerConfig {
     pub max_interval_secs: u64,
 }
 
-/// A distinct infohash emitted into the fetch pipeline together with the
-/// number of sampling responses that reported it (its popularity signal).
+/// Result of routing one sampled hash through `emit_sample`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SampledHash {
-    pub hash: Id20,
-    pub occurrences: u32,
+enum EmitOutcome {
+    /// The pipeline is shut down; the sampler loop must stop.
+    Shutdown,
+    /// The hash was already known to this loop (a repeat).
+    Repeat,
+    /// The hash was newly seen by this loop (first sighting).
+    New,
 }
 
 /// A node address → (last_query_time, re-query interval) map with LRU cap.
@@ -217,23 +226,26 @@ impl QpsGate {
 /// share one query budget.
 pub struct Sampler {
     handle: DhtHandle,
-    emit: mpsc::Sender<SampledHash>,
+    emit: mpsc::Sender<crate::discovery::FetchRequest>,
     storage: Storage,
     stats: Arc<CrawlStats>,
     cfg: SamplerConfig,
     shutdown: CancellationToken,
     shared: crate::redis::SharedState,
+    seen: crate::bloom::SharedBloom,
 }
 
 impl Sampler {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         handle: DhtHandle,
-        emit: mpsc::Sender<SampledHash>,
+        emit: mpsc::Sender<crate::discovery::FetchRequest>,
         storage: Storage,
         cfg: &SamplerConfig,
         stats: Arc<CrawlStats>,
         shutdown: CancellationToken,
         shared: crate::redis::SharedState,
+        seen: crate::bloom::SharedBloom,
     ) -> Self {
         Self {
             handle,
@@ -243,6 +255,7 @@ impl Sampler {
             cfg: cfg.clone(),
             shutdown,
             shared,
+            seen,
         }
     }
 
@@ -266,6 +279,7 @@ impl Sampler {
                 min_seen: self.cfg.min_seen.max(1),
                 max_interval,
                 shared: self.shared.clone(),
+                seen_bloom: self.seen.clone(),
                 shutdown: self.shutdown.clone(),
             };
             tasks.spawn(async move { loop_.run_loop().await });
@@ -292,7 +306,7 @@ impl Sampler {
 /// One independent sampling loop with its own interval/cooldown state.
 struct SamplerLoop {
     handle: DhtHandle,
-    emit: mpsc::Sender<SampledHash>,
+    emit: mpsc::Sender<crate::discovery::FetchRequest>,
     storage: Storage,
     stats: Arc<CrawlStats>,
     intervals: IntervalMap,
@@ -302,6 +316,7 @@ struct SamplerLoop {
     min_seen: u32,
     max_interval: Duration,
     shared: crate::redis::SharedState,
+    seen_bloom: crate::bloom::SharedBloom,
     shutdown: CancellationToken,
 }
 
@@ -345,8 +360,7 @@ impl SamplerLoop {
             match result {
                 Ok(res) => {
                     let advertised = Duration::from_secs(res.interval.max(0) as u64);
-                    let interval = advertised.min(self.max_interval);
-                    self.intervals.record(node_addr, interval, now);
+                    let mut interval = advertised.min(self.max_interval);
                     self.node_stats
                         .get_mut(node_addr)
                         .samples += res.samples.len() as u64;
@@ -358,11 +372,21 @@ impl SamplerLoop {
                         closer_nodes = res.nodes.len(),
                         "sample_infohashes ok"
                     );
+                    let mut new_count = 0u32;
                     for sample in res.samples {
-                        if !self.emit_sample(sample).await {
-                            return; // channel closed → shutdown
+                        match self.emit_sample(sample).await {
+                            EmitOutcome::Shutdown => return,
+                            EmitOutcome::Repeat => {}
+                            EmitOutcome::New => new_count += 1,
                         }
                     }
+                    // A node that echoed only already-known hashes is stale:
+                    // deprioritize it so the budget goes to fresher nodes.
+                    if new_count == 0 {
+                        interval = interval.max(STALE_BACKOFF);
+                        self.node_stats.get_mut(node_addr).failures += 1;
+                    }
+                    self.intervals.record(node_addr, interval, now);
                     // Response nodes were already fed back into the routing table
                     // by the DHT actor.
                 }
@@ -376,27 +400,43 @@ impl SamplerLoop {
         }
     }
 
-    /// Emit a hash exactly once when its occurrence count reaches `min_seen`.
-    /// Returns `false` if the pipeline is shut down.
-    async fn emit_sample(&mut self, hash: Id20) -> bool {
+    /// Route a sampled hash through local counting, the bloom/DB pre-filter,
+    /// and shared fleet dedup. Reports whether the hash was new to this loop.
+    /// `EmitOutcome::Shutdown` means the pipeline is shut down.
+    async fn emit_sample(&mut self, hash: Id20) -> EmitOutcome {
         self.stats
             .hashes_sampled
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // Never queue hashes already accepted/filtered or still in backoff.
-        if self.storage.scan_blocked(hash.as_bytes(), unix_secs()).unwrap_or(false) {
-            return true;
+        // The bloom caches *terminal* skip verdicts (Ok/Skipped) so repeated
+        // re-sampling of dead hashes stops hitting the database after the first
+        // authoritative check per hash. Hashes in a *backoff* window are still
+        // skipped but NOT cached, so they can be retried once the backoff
+        // expires — matching the pre-bloom behavior.
+        if self.seen_bloom.contains(hash.as_bytes()) {
+            return EmitOutcome::Repeat;
+        }
+        match self.storage.scan_status(hash.as_bytes()) {
+            Ok(Some(ScannedStatus::Ok | ScannedStatus::Skipped)) => {
+                self.seen_bloom.insert(hash.as_bytes());
+                return EmitOutcome::Repeat;
+            }
+            Ok(Some(ScannedStatus::Failed { next_attempt, .. })) if next_attempt > unix_secs() => {
+                return EmitOutcome::Repeat;
+            }
+            _ => {}
         }
 
         let count = self.seen.record(hash);
         if count != self.min_seen {
-            return true;
+            return if count == 1 { EmitOutcome::New } else { EmitOutcome::Repeat };
         }
 
         // Fleet-wide dedup: if another instance already emitted this hash,
         // skip it here (best-effort; Redis failure returns false).
         if self.shared.seen_contains(hash.as_bytes()).await {
-            return true;
+            return EmitOutcome::Repeat;
         }
 
         self.stats
@@ -404,11 +444,15 @@ impl SamplerLoop {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let ok = self
             .emit
-            .send(SampledHash { hash, occurrences: count })
+            .send(FetchRequest {
+                hash,
+                occurrences: count,
+                peer_hint: None,
+            })
             .await
             .is_ok();
         self.shared.seen_add(hash.as_bytes()).await;
-        ok
+        if ok { EmitOutcome::New } else { EmitOutcome::Shutdown }
     }
 }
 

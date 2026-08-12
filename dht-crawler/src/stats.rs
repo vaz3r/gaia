@@ -5,6 +5,8 @@ use std::sync::atomic::AtomicU64;
 pub struct CrawlStats {
     pub hashes_sampled: AtomicU64,
     pub hashes_unique: AtomicU64,
+    /// Fetch requests emitted by the passive announce-intake path.
+    pub hashes_announced: AtomicU64,
     pub fetches_attempted: AtomicU64,
     pub fetches_failed: AtomicU64,
     pub metadata_verified: AtomicU64,

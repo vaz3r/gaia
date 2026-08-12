@@ -83,7 +83,10 @@ services:
       - --instances
       - "4"
       - --min-seen
-      - "2"
+      - "1"
+      - --max-nodes
+      - "8192"
+      - --no-restrict-ips
       - --redis-url
       - redis://redis:6379
       - --log

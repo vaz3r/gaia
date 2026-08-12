@@ -1,0 +1,734 @@
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+
+use crate::WebSeedStats;
+
+fn default_neg_one() -> i64 {
+    -1
+}
+
+/// A partial piece that was in progress when the torrent was paused/stopped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnfinishedPiece {
+    /// Piece index.
+    pub piece: i64,
+    /// Bitmask of which blocks within the piece have been downloaded.
+    #[serde(with = "serde_bytes")]
+    pub bitmask: Vec<u8>,
+}
+
+/// libtorrent-compatible fast-resume data in bencode format.
+///
+/// This struct matches libtorrent's resume file format so that resume data
+/// can be read/written by both Torrent and libtorrent-based clients.
+/// Every field uses `#[serde(rename = "...")]` to match libtorrent's exact
+/// bencode dictionary keys.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FastResumeData {
+    /// Always "libtorrent resume file".
+    #[serde(rename = "file-format")]
+    pub file_format: String,
+
+    /// Always 1.
+    #[serde(rename = "file-version")]
+    pub file_version: i64,
+
+    /// 20-byte SHA1 info hash.
+    #[serde(rename = "info-hash")]
+    #[serde(with = "serde_bytes")]
+    pub info_hash: Vec<u8>,
+
+    /// Torrent name.
+    #[serde(rename = "name")]
+    pub name: String,
+
+    /// Path where files are saved.
+    #[serde(rename = "save_path")]
+    pub save_path: String,
+
+    /// Bitfield indicating which pieces are complete.
+    #[serde(rename = "pieces")]
+    #[serde(with = "serde_bytes")]
+    pub pieces: Vec<u8>,
+
+    /// Partially downloaded pieces.
+    #[serde(rename = "unfinished")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub unfinished: Vec<UnfinishedPiece>,
+
+    /// Total bytes uploaded.
+    #[serde(rename = "total_uploaded")]
+    pub total_uploaded: i64,
+
+    /// Total bytes downloaded.
+    #[serde(rename = "total_downloaded")]
+    pub total_downloaded: i64,
+
+    /// Total time active in seconds.
+    #[serde(rename = "active_time")]
+    pub active_time: i64,
+
+    /// Total time spent seeding in seconds.
+    #[serde(rename = "seeding_time")]
+    pub seeding_time: i64,
+
+    /// Total time in finished state in seconds.
+    #[serde(rename = "finished_time")]
+    pub finished_time: i64,
+
+    /// POSIX timestamp when the torrent was added.
+    #[serde(rename = "added_time")]
+    pub added_time: i64,
+
+    /// POSIX timestamp when the torrent completed.
+    #[serde(rename = "completed_time")]
+    #[serde(default)]
+    pub completed_time: i64,
+
+    /// POSIX timestamp of last download activity.
+    #[serde(rename = "last_download")]
+    #[serde(default)]
+    pub last_download: i64,
+
+    /// POSIX timestamp of last upload activity.
+    #[serde(rename = "last_upload")]
+    #[serde(default)]
+    pub last_upload: i64,
+
+    /// Whether the torrent is paused (0 or 1).
+    #[serde(rename = "paused")]
+    #[serde(default)]
+    pub paused: i64,
+
+    /// Whether the torrent is queued by auto-manage (0 or 1).
+    #[serde(rename = "queued")]
+    #[serde(default)]
+    pub queued: i64,
+
+    /// Whether the torrent is auto-managed.
+    #[serde(rename = "auto_managed")]
+    #[serde(default)]
+    pub auto_managed: i64,
+
+    /// Queue position (-1 = not queued).
+    #[serde(rename = "queue_position")]
+    #[serde(default = "default_neg_one")]
+    pub queue_position: i64,
+
+    /// Whether sequential download is enabled.
+    #[serde(rename = "sequential_download")]
+    #[serde(default)]
+    pub sequential_download: i64,
+
+    /// M253/ER2: whether first/last-pieces-first ordering is enabled.
+    #[serde(rename = "prioritize_first_last_pieces")]
+    #[serde(default)]
+    pub prioritize_first_last_pieces: i64,
+
+    /// Whether seed mode is enabled.
+    #[serde(rename = "seed_mode")]
+    #[serde(default)]
+    pub seed_mode: i64,
+
+    /// Tracker tiers (list of lists of tracker URLs).
+    #[serde(rename = "trackers")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub trackers: Vec<Vec<String>>,
+
+    /// Compact IPv4 peers (6 bytes each: 4 IP + 2 port).
+    #[serde(rename = "peers")]
+    #[serde(with = "serde_bytes")]
+    #[serde(default)]
+    pub peers: Vec<u8>,
+
+    /// Compact IPv6 peers (18 bytes each: 16 IP + 2 port).
+    #[serde(rename = "peers6")]
+    #[serde(with = "serde_bytes")]
+    #[serde(default)]
+    pub peers6: Vec<u8>,
+
+    /// Per-file priority values.
+    #[serde(rename = "file_priority")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub file_priority: Vec<i64>,
+
+    /// Per-piece priority values.
+    #[serde(rename = "piece_priority")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub piece_priority: Vec<i64>,
+
+    /// Upload rate limit in bytes/sec (-1 = unlimited).
+    #[serde(rename = "upload_rate_limit")]
+    #[serde(default)]
+    pub upload_rate_limit: i64,
+
+    /// Download rate limit in bytes/sec (-1 = unlimited).
+    #[serde(rename = "download_rate_limit")]
+    #[serde(default)]
+    pub download_rate_limit: i64,
+
+    /// Max connections for this torrent (-1 = unlimited).
+    #[serde(rename = "max_connections")]
+    #[serde(default)]
+    pub max_connections: i64,
+
+    /// Max upload slots for this torrent (-1 = unlimited).
+    #[serde(rename = "max_uploads")]
+    #[serde(default)]
+    pub max_uploads: i64,
+
+    /// Raw bencoded info dictionary (for magnet links that have resolved).
+    #[serde(rename = "info")]
+    #[serde(with = "serde_bytes")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub info: Option<Vec<u8>>,
+
+    /// BEP 16: whether super seeding was enabled.
+    #[serde(rename = "super_seeding")]
+    #[serde(default)]
+    pub super_seeding: i64,
+
+    /// BEP 19 web seed URLs (GetRight-style).
+    #[serde(rename = "url_seeds")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub url_seeds: Vec<String>,
+
+    /// BEP 17 HTTP seed URLs (Hoffman-style).
+    #[serde(rename = "http_seeds")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub http_seeds: Vec<String>,
+
+    /// SHA-256 v2 info hash (32 bytes, BEP 52).
+    #[serde(rename = "info-hash2")]
+    #[serde(with = "serde_bytes")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub info_hash2: Option<Vec<u8>>,
+
+    /// Cached piece-layer Merkle hashes per file.
+    /// Key: hex-encoded file root hash. Value: concatenated 32-byte piece hashes.
+    /// Allows skipping piece-layer hash requests on resume.
+    #[serde(rename = "trees")]
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
+    pub trees: HashMap<String, Vec<u8>>,
+
+    // ── M170: qBt v2 *arr-minimal surface ──
+    //
+    // These three fields persist the per-torrent category label and torrent
+    // metadata (creator + creation timestamp) so that they survive session
+    // restart. All three use `skip_serializing_if = "Option::is_none"` so
+    // older resume files without them deserialize cleanly (missing key →
+    // `None`), and newer resume files only include them when a value is set.
+    /// User-assigned category label (qBt-compat). `None` = uncategorised.
+    #[serde(rename = "category")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub category: Option<String>,
+    /// M252/ER5: how the files were materialized on disk. `None` on
+    /// pre-M252 resume files — those were all stored `Original`.
+    #[serde(rename = "content_layout")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub content_layout: Option<crate::ContentLayout>,
+    /// Torrent creator string from `TorrentMetaV1.created_by`. `None` if the
+    /// torrent was added via magnet before metadata resolved.
+    #[serde(rename = "created_by")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub created_by: Option<String>,
+    /// UNIX timestamp (seconds) when the torrent was authored, from
+    /// `TorrentMetaV1.creation_date`. `None` if not present in the .torrent
+    /// file or if metadata has not yet resolved for a magnet-added torrent.
+    #[serde(rename = "creation_date")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub creation_date: Option<i64>,
+
+    // ── M171: qBt v2 parity ──
+    /// User-assigned tags (qBt-compat). Multi-valued per torrent. Empty vec
+    /// when no tags set; `skip_serializing_if = "Vec::is_empty"` keeps older
+    /// resume files (which have no `tags` key) bit-identical on save.
+    #[serde(rename = "tags")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tags: Vec<String>,
+
+    // ── M178: web seed stats ──
+    /// Per-URL web-seed stats (BEP 17/19), keyed by URL. Empty map when no
+    /// stats accumulated; `skip_serializing_if` keeps older resume files
+    /// (which have no `web_seed_stats` key) bit-identical on save.
+    /// Backward-compat: `#[serde(default)]` means legacy resume files load
+    /// with an empty map.
+    #[serde(rename = "web_seed_stats")]
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
+    pub web_seed_stats: HashMap<String, WebSeedStats>,
+}
+
+impl FastResumeData {
+    /// Create a new `FastResumeData` with format markers pre-filled and all
+    /// other fields zeroed/empty. Rate limits default to -1 (unlimited).
+    #[must_use]
+    pub fn new(info_hash: Vec<u8>, name: String, save_path: String) -> Self {
+        Self {
+            file_format: "libtorrent resume file".into(),
+            file_version: 1,
+            info_hash,
+            name,
+            save_path,
+            pieces: Vec::new(),
+            unfinished: Vec::new(),
+            total_uploaded: 0,
+            total_downloaded: 0,
+            active_time: 0,
+            seeding_time: 0,
+            finished_time: 0,
+            added_time: 0,
+            completed_time: 0,
+            last_download: 0,
+            last_upload: 0,
+            paused: 0,
+            queued: 0,
+            auto_managed: 0,
+            queue_position: -1,
+            sequential_download: 0,
+            prioritize_first_last_pieces: 0,
+            seed_mode: 0,
+            trackers: Vec::new(),
+            peers: Vec::new(),
+            peers6: Vec::new(),
+            file_priority: Vec::new(),
+            piece_priority: Vec::new(),
+            upload_rate_limit: -1,
+            download_rate_limit: -1,
+            max_connections: -1,
+            max_uploads: -1,
+            super_seeding: 0,
+            info: None,
+            url_seeds: Vec::new(),
+            http_seeds: Vec::new(),
+            info_hash2: None,
+            trees: HashMap::new(),
+            // M170 fields default to None.
+            category: None,
+            content_layout: None,
+            created_by: None,
+            creation_date: None,
+            // M171: tags default to empty vec.
+            tags: Vec::new(),
+            // M178: web seed stats default to empty map.
+            web_seed_stats: HashMap::new(),
+        }
+    }
+}
+
+/// Returns `true` if the `pieces` bitfield has the correct length for
+/// `num_pieces` pieces (i.e. `ceil(num_pieces / 8)` bytes).
+///
+/// This is used to decide whether a resume file's piece bitfield is
+/// trustworthy and hash verification can be skipped on restart.
+///
+/// Lives here (next to [`FastResumeData`]) rather than in session-core's
+/// `persistence` module since M244b: the per-torrent actor (now in
+/// `irontide-engine`) validates restored bitfields, and the engine crate must
+/// not depend back on session-core. A pure piece-geometry leaf belongs in
+/// `irontide-core`, the shared bottom both layers already consume.
+#[must_use]
+pub fn validate_resume_bitfield(pieces: &[u8], num_pieces: u32) -> bool {
+    if num_pieces == 0 {
+        return pieces.is_empty();
+    }
+    let expected = num_pieces.div_ceil(8) as usize;
+    pieces.len() == expected
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn fast_resume_data_bencode_round_trip() {
+        let mut resume =
+            FastResumeData::new(vec![0xAA; 20], "test-torrent".into(), "/downloads".into());
+        resume.total_uploaded = 1024 * 1024;
+        resume.total_downloaded = 2048 * 1024;
+        resume.active_time = 3600;
+        resume.added_time = 1_700_000_000;
+        resume.trackers = vec![
+            vec!["http://tracker1.example.com/announce".into()],
+            vec![
+                "http://tracker2.example.com/announce".into(),
+                "http://tracker3.example.com/announce".into(),
+            ],
+        ];
+        resume.pieces = vec![0xFF; 10];
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert_eq!(resume, decoded);
+    }
+
+    /// M253/ER2: both ordering flags round-trip through bencode; a legacy
+    /// payload without the new key deserializes to 0 (off).
+    #[test]
+    fn m253_ordering_flags_round_trip_and_legacy_default() {
+        let mut rd = FastResumeData::new(vec![0xAA; 20], "m253".into(), "/dl".into());
+        rd.sequential_download = 1;
+        rd.prioritize_first_last_pieces = 1;
+        let bytes = gaia_bencode::to_bytes(&rd).unwrap();
+        let back: FastResumeData = gaia_bencode::from_bytes(&bytes).unwrap();
+        assert_eq!(back.sequential_download, 1);
+        assert_eq!(back.prioritize_first_last_pieces, 1);
+
+        // Legacy: serialize an unset struct, strip nothing — the absent-key
+        // path is what `#[serde(default)]` covers; 0 must come back as 0.
+        let legacy = FastResumeData::new(vec![0xBB; 20], "legacy".into(), "/dl".into());
+        let bytes = gaia_bencode::to_bytes(&legacy).unwrap();
+        let back: FastResumeData = gaia_bencode::from_bytes(&bytes).unwrap();
+        assert_eq!(back.prioritize_first_last_pieces, 0);
+    }
+
+    /// M252/ER5: `content_layout` round-trips through bencode; absent key
+    /// (legacy resume file) deserializes to `None`.
+    #[test]
+    fn m252_resume_content_layout_round_trips_and_legacy_defaults_none() {
+        let mut rd = FastResumeData::new(vec![0xBB; 20], "m252".into(), "/dl".into());
+        rd.content_layout = Some(crate::ContentLayout::NoSubfolder);
+        let bytes = gaia_bencode::to_bytes(&rd).unwrap();
+        let back: FastResumeData = gaia_bencode::from_bytes(&bytes).unwrap();
+        assert_eq!(back.content_layout, Some(crate::ContentLayout::NoSubfolder));
+
+        let mut legacy = FastResumeData::new(vec![0xCC; 20], "legacy".into(), "/dl".into());
+        legacy.content_layout = None;
+        let bytes = gaia_bencode::to_bytes(&legacy).unwrap();
+        let back: FastResumeData = gaia_bencode::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            back.content_layout, None,
+            "skip_serializing_if keeps the legacy wire shape"
+        );
+    }
+
+    #[test]
+    fn unfinished_piece_bencode_round_trip() {
+        let piece = UnfinishedPiece {
+            piece: 42,
+            bitmask: vec![0b1010_1010, 0b0101_0101],
+        };
+
+        let encoded = gaia_bencode::to_bytes(&piece).unwrap();
+        let decoded: UnfinishedPiece = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert_eq!(piece, decoded);
+    }
+
+    #[test]
+    fn resume_data_with_unfinished_pieces() {
+        let mut resume = FastResumeData::new(
+            vec![0xBB; 20],
+            "partial-torrent".into(),
+            "/downloads".into(),
+        );
+        resume.unfinished = vec![
+            UnfinishedPiece {
+                piece: 5,
+                bitmask: vec![0xFF, 0x0F],
+            },
+            UnfinishedPiece {
+                piece: 12,
+                bitmask: vec![0xF0],
+            },
+        ];
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert_eq!(resume, decoded);
+    }
+
+    #[test]
+    fn default_fields_serialize_correctly() {
+        let resume = FastResumeData::new(vec![0x00; 20], "minimal".into(), "/tmp".into());
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert_eq!(resume, decoded);
+
+        // Verify default values survived the round-trip.
+        assert_eq!(decoded.total_uploaded, 0);
+        assert_eq!(decoded.total_downloaded, 0);
+        assert_eq!(decoded.paused, 0);
+        assert_eq!(decoded.upload_rate_limit, -1);
+        assert_eq!(decoded.download_rate_limit, -1);
+        assert_eq!(decoded.max_connections, -1);
+        assert_eq!(decoded.max_uploads, -1);
+        assert!(decoded.trackers.is_empty());
+        assert!(decoded.unfinished.is_empty());
+        assert!(decoded.file_priority.is_empty());
+        assert!(decoded.info.is_none());
+    }
+
+    #[test]
+    fn info_dict_embedding_round_trip() {
+        let mut resume =
+            FastResumeData::new(vec![0xCC; 20], "with-info".into(), "/downloads".into());
+        // Simulate a raw bencoded info dict.
+        resume.info = Some(
+            b"d4:name10:test-torte12:piece lengthi262144e6:pieces20:AAAAAAAAAAAAAAAAAAAAe".to_vec(),
+        );
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert_eq!(resume, decoded);
+        assert!(decoded.info.is_some());
+        assert_eq!(decoded.info.unwrap().len(), resume.info.unwrap().len());
+    }
+
+    #[test]
+    fn resume_data_queue_position_default() {
+        let rd = FastResumeData::new(vec![0; 20], "test".into(), "/tmp".into());
+        assert_eq!(rd.queue_position, -1);
+    }
+
+    #[test]
+    fn format_markers_correct() {
+        let resume = FastResumeData::new(vec![0x00; 20], "test".into(), "/tmp".into());
+        assert_eq!(resume.file_format, "libtorrent resume file");
+        assert_eq!(resume.file_version, 1);
+    }
+
+    #[test]
+    fn resume_data_url_seeds_round_trip() {
+        let mut resume =
+            FastResumeData::new(vec![0xDD; 20], "web-seed-test".into(), "/downloads".into());
+        resume.url_seeds = vec![
+            "http://example.com/files".into(),
+            "http://mirror.example.com/".into(),
+        ];
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert_eq!(decoded.url_seeds, resume.url_seeds);
+    }
+
+    #[test]
+    fn resume_data_http_seeds_round_trip() {
+        let mut resume =
+            FastResumeData::new(vec![0xEE; 20], "http-seed-test".into(), "/downloads".into());
+        resume.http_seeds = vec!["http://seed.example.com/seed".into()];
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert_eq!(decoded.http_seeds, resume.http_seeds);
+    }
+
+    #[test]
+    fn resume_data_super_seeding_round_trip() {
+        let mut resume = FastResumeData::new(
+            vec![0xFF; 20],
+            "super-seed-test".into(),
+            "/downloads".into(),
+        );
+        resume.super_seeding = 1;
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert_eq!(decoded.super_seeding, 1);
+
+        // Default should be 0
+        let default_resume = FastResumeData::new(vec![0; 20], "test".into(), "/tmp".into());
+        assert_eq!(default_resume.super_seeding, 0);
+    }
+
+    #[test]
+    fn resume_data_v2_fields_round_trip() {
+        let mut resume =
+            FastResumeData::new(vec![0xAA; 20], "v2-torrent".into(), "/downloads".into());
+        resume.info_hash2 = Some(vec![0xBB; 32]);
+        resume.trees.insert(
+            hex::encode([0xCC; 32]),
+            vec![0xDD; 64], // 2 piece hashes
+        );
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert_eq!(decoded.info_hash2, Some(vec![0xBB; 32]));
+        assert_eq!(decoded.trees.len(), 1);
+    }
+
+    #[test]
+    fn resume_data_v1_backward_compat() {
+        let resume = FastResumeData::new(vec![0x00; 20], "v1-torrent".into(), "/tmp".into());
+        assert!(resume.info_hash2.is_none());
+        assert!(resume.trees.is_empty());
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert!(decoded.info_hash2.is_none());
+        assert!(decoded.trees.is_empty());
+    }
+
+    #[test]
+    fn resume_data_v2_empty_trees_not_serialized() {
+        let resume = FastResumeData::new(vec![0x00; 20], "minimal".into(), "/tmp".into());
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        // "5:trees" (bencode key) should not appear in output when empty
+        let encoded_str = String::from_utf8_lossy(&encoded);
+        assert!(!encoded_str.contains("5:trees"));
+    }
+
+    #[test]
+    fn resume_data_empty_seeds_not_serialized() {
+        let resume = FastResumeData::new(vec![0x00; 20], "no-seeds".into(), "/tmp".into());
+        assert!(resume.url_seeds.is_empty());
+        assert!(resume.http_seeds.is_empty());
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert!(decoded.url_seeds.is_empty());
+        assert!(decoded.http_seeds.is_empty());
+    }
+
+    #[test]
+    fn resume_data_m170_fields_round_trip() {
+        // M170: category, created_by, creation_date must survive a
+        // bencode round-trip exactly.
+        let mut resume =
+            FastResumeData::new(vec![0xA1; 20], "m170-torrent".into(), "/downloads".into());
+        resume.category = Some("sonarr".into());
+        resume.created_by = Some("irontide/0.170".into());
+        resume.creation_date = Some(1_700_000_000);
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert_eq!(decoded.category.as_deref(), Some("sonarr"));
+        assert_eq!(decoded.created_by.as_deref(), Some("irontide/0.170"));
+        assert_eq!(decoded.creation_date, Some(1_700_000_000));
+        assert_eq!(resume, decoded);
+    }
+
+    #[test]
+    fn resume_data_m170_backward_compat_missing_fields() {
+        // An "old" resume file has no category/created_by/creation_date
+        // keys at all. Deserialising it must produce None for all three
+        // fields, not fail.
+        let mut resume =
+            FastResumeData::new(vec![0xB2; 20], "legacy-torrent".into(), "/downloads".into());
+        // Synthesise the "pre-M170" shape: encode with the new type but
+        // with all M170 fields None (skip_serializing_if strips them), then
+        // decode back. The wire form must not contain the M170 keys.
+        resume.category = None;
+        resume.created_by = None;
+        resume.creation_date = None;
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let encoded_str = String::from_utf8_lossy(&encoded);
+        // skip_serializing_if must strip each missing field.
+        assert!(!encoded_str.contains("8:category"));
+        assert!(!encoded_str.contains("10:created_by"));
+        assert!(!encoded_str.contains("13:creation_date"));
+
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert!(decoded.category.is_none());
+        assert!(decoded.created_by.is_none());
+        assert!(decoded.creation_date.is_none());
+    }
+
+    #[test]
+    fn resume_data_m171_tags_round_trip() {
+        // M171: tags must round-trip through bencode cleanly.
+        let mut resume =
+            FastResumeData::new(vec![0xC3; 20], "m171-tags".into(), "/downloads".into());
+        resume.tags = vec!["sonarr".into(), "kids".into()];
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert_eq!(decoded.tags, vec!["sonarr".to_string(), "kids".to_string()]);
+        assert_eq!(resume, decoded);
+    }
+
+    #[test]
+    fn resume_data_m171_tags_backward_compat_missing_field() {
+        // Empty tags vec must not appear in the wire form (skip_serializing_if
+        // gate) so older decoders are none the wiser. And a decode round-trip
+        // yields an empty vec on the new-style end.
+        let resume =
+            FastResumeData::new(vec![0xD4; 20], "legacy-no-tags".into(), "/downloads".into());
+        assert!(resume.tags.is_empty());
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let encoded_str = String::from_utf8_lossy(&encoded);
+        assert!(
+            !encoded_str.contains("4:tags"),
+            "empty tags vec must not serialize: got {encoded_str:?}",
+        );
+
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert!(decoded.tags.is_empty());
+    }
+
+    #[test]
+    fn resume_data_hybrid_both_hashes() {
+        // Hybrid torrents store both v1 (SHA-1, 20 bytes) and v2 (SHA-256, 32 bytes)
+        let mut resume =
+            FastResumeData::new(vec![0x11; 20], "hybrid-torrent".into(), "/downloads".into());
+        resume.info_hash2 = Some(vec![0x22; 32]);
+        resume.trees.insert(
+            hex::encode([0x33; 32]),
+            vec![0x44; 96], // 3 piece hashes
+        );
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+
+        // Both hashes present and distinct
+        assert_eq!(decoded.info_hash, vec![0x11; 20]);
+        assert_eq!(decoded.info_hash2.as_deref(), Some([0x22; 32].as_ref()));
+
+        // Trees preserved
+        assert_eq!(decoded.trees.len(), 1);
+        let layer = decoded.trees.values().next().unwrap();
+        assert_eq!(layer.len(), 96);
+    }
+
+    #[test]
+    fn resume_data_missing_queued_field_defaults_to_zero() {
+        let resume = FastResumeData::new(vec![0xaa; 20], "test".into(), "/tmp".into());
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+
+        // Decode and verify queued defaults to 0
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert_eq!(decoded.queued, 0);
+    }
+
+    #[test]
+    fn resume_data_queued_field_round_trips() {
+        let mut resume = FastResumeData::new(vec![0xbb; 20], "queued-test".into(), "/dl".into());
+        resume.queued = 1;
+
+        let encoded = gaia_bencode::to_bytes(&resume).unwrap();
+        let decoded: FastResumeData = gaia_bencode::from_bytes(&encoded).unwrap();
+        assert_eq!(decoded.queued, 1);
+        assert_eq!(decoded.paused, 0);
+    }
+
+    #[test]
+    fn validate_resume_bitfield_correct_length() {
+        // 8 pieces -> 1 byte
+        assert!(validate_resume_bitfield(&[0xFF], 8));
+        // 9 pieces -> 2 bytes
+        assert!(validate_resume_bitfield(&[0xFF, 0x80], 9));
+        // 16 pieces -> 2 bytes
+        assert!(validate_resume_bitfield(&[0xFF, 0xFF], 16));
+        // 1 piece -> 1 byte
+        assert!(validate_resume_bitfield(&[0x80], 1));
+    }
+
+    #[test]
+    fn validate_resume_bitfield_wrong_length() {
+        // 8 pieces with 2 bytes -> wrong
+        assert!(!validate_resume_bitfield(&[0xFF, 0x00], 8));
+        // 9 pieces with 1 byte -> wrong
+        assert!(!validate_resume_bitfield(&[0xFF], 9));
+        // 0 pieces with 1 byte of data -> wrong
+        assert!(!validate_resume_bitfield(&[0x00], 0));
+    }
+
+    #[test]
+    fn validate_resume_bitfield_zero_pieces() {
+        // 0 pieces with empty data -> true
+        assert!(validate_resume_bitfield(&[], 0));
+    }
+}

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use irontide_dht::DhtHandle;
+use gaia_dht::DhtHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -70,14 +70,15 @@ pub async fn run(args: RunArgs) -> Result<()> {
 
     // Spawn one continuous routing grower per instance so each routing table
     // climbs toward --max-nodes throughout the crawl (not just at startup).
-    // A ~100ms interval keeps tables filling steadily without dominating the
-    // DHT query budget.
+    // 100ms keeps the table filling toward the 4096-node target; the node pool
+    // is the binding constraint on unique discovery, so we spend more of the
+    // DHT budget here than the efficient phase did (which throttled to 1s).
     let mut growers = tokio::task::JoinSet::new();
     for handle in &handles {
         let handle = handle.clone();
         let shutdown = shutdown.clone();
         growers.spawn(async move {
-            discovery::grow_routing(handle, Duration::from_secs(1), shutdown).await;
+            discovery::grow_routing(handle, Duration::from_millis(100), shutdown).await;
         });
     }
 
@@ -92,6 +93,10 @@ pub async fn run(args: RunArgs) -> Result<()> {
     };
 
     // All instances share the hash channel; the fetcher consumes from it once.
+    // One in-memory bloom filter caches known-blocked hashes so repeated
+    // re-sampling of dead hashes stops hitting the database after the first
+    // authoritative check per hash.
+    let seen_bloom = crate::bloom::SharedBloom::new(27, 7);
     let mut samplers = tokio::task::JoinSet::new();
     for handle in &handles {
         let sampler = Sampler::new(
@@ -102,11 +107,36 @@ pub async fn run(args: RunArgs) -> Result<()> {
             stats.clone(),
             shutdown.clone(),
             shared.clone(),
+            seen_bloom.clone(),
         );
         samplers.spawn(async move { sampler.run().await });
     }
-    // The shared channel must outlive all sampler clones: keep a live sender
-    // owned by this scope until samplers finish.
+
+    // Passive intake: one subscriber per instance drains inbound announce_peer
+    // events into the fetch pipeline with a live-peer dial hint. These hashes
+    // are live by construction and skip get_peers discovery — the core of the
+    // passive-intake architecture.
+    let mut intake = tokio::task::JoinSet::new();
+    for handle in &handles {
+        let handle = handle.clone();
+        let intake_tx = hash_tx.clone();
+        let intake_stats = stats.clone();
+        let intake_shared = shared.clone();
+        let intake_shutdown = shutdown.clone();
+        intake.spawn(async move {
+            discovery::run_passive_intake(
+                handle,
+                intake_tx,
+                intake_stats,
+                intake_shared,
+                intake_shutdown,
+            )
+            .await;
+        });
+    }
+
+    // The shared channel must outlive all sampler + intake clones: keep a live
+    // sender owned by this scope until they finish.
     drop(hash_tx);
 
     let primary = handles[0].clone();
@@ -132,11 +162,12 @@ pub async fn run(args: RunArgs) -> Result<()> {
 
     info!("shutdown signal received, draining pipeline");
 
-    // Cancel the sampler loops so they drop their `emit` clones and close the
-    // fetch channel; the fetcher then drains its in-flight work internally.
+    // Cancel the sampler + intake loops so they drop their `emit` clones and
+    // close the fetch channel; the fetcher then drains its in-flight work.
     shutdown.cancel();
     while growers.join_next().await.is_some() {}
     while samplers.join_next().await.is_some() {}
+    while intake.join_next().await.is_some() {}
     let _ = tokio::time::timeout(SHUTDOWN_DRAIN + Duration::from_secs(5), &mut fetcher).await;
     fetcher.abort();
     // Dropping the fetcher aborts its JoinSet; the fetch tasks' `record_tx`
@@ -200,6 +231,7 @@ async fn write_loop(
 async fn stats_loop(handles: Vec<DhtHandle>, stats: Arc<CrawlStats>) {
     let mut tick = tokio::time::interval(STATS_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_unique: u64 = 0;
     loop {
         tick.tick().await;
         let primary = &handles[0];
@@ -213,10 +245,10 @@ async fn stats_loop(handles: Vec<DhtHandle>, stats: Arc<CrawlStats>) {
             per_instance.push(format!("{n}/{}q", total));
         }
         // Passive announcement intake: hashes other nodes announced to us that
-        // are sitting in the actor's internal peer_store. If this stays near 0,
-        // announcement capture is not worth patching irontide for; if it grows
-        // large, a `peer_store_hashes()` reader becomes a valuable second
-        // discovery source alongside BEP 51 sampling.
+        // are sitting in the actor's internal peer_store. Measured in the
+        // node-diversity phase: a peer_store drain would require patching
+        // irontide, and the announced-hash yield (~1.9% of unique) didn't
+        // justify it — so this stays a diagnostic counter only.
         let announced = primary
             .stats()
             .await
@@ -224,12 +256,21 @@ async fn stats_loop(handles: Vec<DhtHandle>, stats: Arc<CrawlStats>) {
             .unwrap_or(0);
         let s = &stats;
         let r = std::sync::atomic::Ordering::Relaxed;
+        // Unique-hash discovery rate over the last tick (unique/hr) so the
+        // node-diversity and keyspace-sweep levers are visible independently of
+        // fetch success.
+        let unique_now = s.hashes_unique.load(r);
+        let unique_delta = unique_now.saturating_sub(last_unique);
+        let unique_per_hr = unique_delta as f64 / STATS_INTERVAL.as_secs_f64() * 3600.0;
+        last_unique = unique_now;
         info!(
             routing_nodes = routing,
             instance_nodes = per_instance.join(","),
             announced_hashes = announced,
             hashes_sampled = s.hashes_sampled.load(r),
-            hashes_unique = s.hashes_unique.load(r),
+            hashes_unique = unique_now,
+            unique_per_hr = format!("{unique_per_hr:.1}"),
+            hashes_announced = s.hashes_announced.load(r),
             fetches_attempted = s.fetches_attempted.load(r),
             fetches_failed = s.fetches_failed.load(r),
             fetch_in_flight = s.fetch_in_flight.load(r),

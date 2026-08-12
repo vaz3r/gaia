@@ -36,7 +36,7 @@ struct InfoDict {
 /// Unknown fields are tolerated; a missing `name` is treated as an empty
 /// string rather than a hard failure.
 pub fn extract_metadata(info_bytes: &[u8]) -> Result<ExtractedMetadata> {
-    let dict: InfoDict = irontide_bencode::from_bytes_lenient(info_bytes)
+    let dict: InfoDict = gaia_bencode::from_bytes_lenient(info_bytes)
         .context("parse bencoded info dictionary")?;
 
     let name = String::from_utf8_lossy(&dict.name).into_owned();
@@ -76,7 +76,7 @@ pub fn extract_metadata(info_bytes: &[u8]) -> Result<ExtractedMetadata> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use irontide_bencode::to_bytes;
+    use gaia_bencode::to_bytes;
     use serde::Serialize;
 
     #[derive(Serialize)]

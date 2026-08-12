@@ -1,3 +1,9 @@
 [workspace]
-members = ["dht-crawler"]
+members = [
+    "dht-crawler",
+    "vendor/gaia-bencode",
+    "vendor/gaia-core",
+    "vendor/gaia-wire",
+    "vendor/gaia-dht",
+]
 resolver = "2"
