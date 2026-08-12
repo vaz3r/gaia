@@ -17,6 +17,8 @@ pub struct CrawlStats {
     /// distinct sources (detect window/threshold coupling).
     pub shadow_near_miss_1: AtomicU64,
     pub shadow_near_miss_2: AtomicU64,
+    /// Number of liveness sweep task invocations (confirms the backstop runs).
+    pub liveness_sweeps: AtomicU64,
     pub fetches_attempted: AtomicU64,
     pub fetches_failed: AtomicU64,
     pub metadata_verified: AtomicU64,

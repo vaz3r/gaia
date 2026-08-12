@@ -212,8 +212,7 @@ impl LivenessCounter {
         evicted
     }
 
-    /// Number of tracked hashes (diagnostic; used by tests and future stats).
-    #[allow(dead_code)]
+    /// Number of tracked hashes (diagnostic).
     pub fn len(&self) -> usize {
         self.inner.len()
     }

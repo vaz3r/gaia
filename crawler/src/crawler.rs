@@ -123,6 +123,13 @@ pub async fn run(args: RunArgs) -> Result<()> {
             }
             let evicted = sweep_liveness.sweep(Instant::now());
             let rel = std::sync::atomic::Ordering::Relaxed;
+            sweep_stats.liveness_sweeps.fetch_add(1, rel);
+            tracing::debug!(
+                sweep = sweep_stats.liveness_sweeps.load(rel),
+                evicted = evicted.len(),
+                entries = sweep_liveness.len(),
+                "liveness sweep"
+            );
             // Sample-log a fraction of filtered hashes so the shadow run can
             // inspect whether they look like dead garbage or plausible-live
             // torrents (hex hash + max distinct sources reached).
@@ -218,7 +225,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
 
     let writer = tokio::spawn(write_loop(record_rx, storage.clone(), stats.clone()));
 
-    let stats_task = tokio::spawn(stats_loop(handles.clone(), stats.clone()));
+    let stats_task = tokio::spawn(stats_loop(handles.clone(), stats.clone(), liveness.clone()));
 
     wait_for_shutdown().await;
 
@@ -291,7 +298,11 @@ async fn write_loop(
     let _ = stats;
 }
 
-async fn stats_loop(handles: Vec<DhtHandle>, stats: Arc<CrawlStats>) {
+async fn stats_loop(
+    handles: Vec<DhtHandle>,
+    stats: Arc<CrawlStats>,
+    liveness: Arc<discovery::LivenessCounter>,
+) {
     let mut tick = tokio::time::interval(STATS_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_unique: u64 = 0;
@@ -338,6 +349,8 @@ async fn stats_loop(handles: Vec<DhtHandle>, stats: Arc<CrawlStats>) {
             shadow_filtered = s.shadow_filtered.load(r),
             shadow_near_miss_1 = s.shadow_near_miss_1.load(r),
             shadow_near_miss_2 = s.shadow_near_miss_2.load(r),
+            liveness_entries = liveness.len(),
+            liveness_sweeps = s.liveness_sweeps.load(r),
             fetches_attempted = s.fetches_attempted.load(r),
             fetches_failed = s.fetches_failed.load(r),
             fetch_in_flight = s.fetch_in_flight.load(r),
