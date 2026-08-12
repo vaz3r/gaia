@@ -82,8 +82,10 @@ pub async fn run(args: RunArgs) -> Result<()> {
         });
     }
 
-    let (hash_tx, hash_rx) = tokio::sync::mpsc::channel(SAMPLER_CHANNEL);
-    let (record_tx, record_rx) = tokio::sync::mpsc::channel(RECORD_CHANNEL);
+    let (hash_tx, hash_rx) =
+        tokio::sync::mpsc::channel(SAMPLER_CHANNEL.saturating_mul(args.scale.max(1)));
+    let (record_tx, record_rx) =
+        tokio::sync::mpsc::channel(RECORD_CHANNEL.saturating_mul(args.scale.max(1)));
 
     let sampler_cfg = SamplerConfig {
         queries_per_second: args.effective_sampler_qps(),

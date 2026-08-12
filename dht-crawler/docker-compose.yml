@@ -84,6 +84,8 @@ services:
       - "4"
       - --min-seen
       - "1"
+      - --scale
+      - "10"
       - --max-nodes
       - "8192"
       - --no-restrict-ips

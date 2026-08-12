@@ -3198,7 +3198,7 @@ mod tests {
         let (handle, _ip_rx) = DhtHandle::start(config).await.unwrap();
         let stats = handle.stats().await.unwrap();
         assert_eq!(stats.routing_table_size, 0);
-        assert_eq!(stats.bucket_count, 1);
+        assert_eq!(stats.bucket_count, 160);
         assert_eq!(stats.pending_queries, 0);
         handle.shutdown().await.unwrap();
     }
@@ -3328,7 +3328,7 @@ mod tests {
         let (handle, _ip_rx) = DhtHandle::start(config).await.unwrap();
         let stats = handle.stats().await.unwrap();
         assert_eq!(stats.routing_table_size, 0);
-        assert_eq!(stats.bucket_count, 1);
+        assert_eq!(stats.bucket_count, 160);
         assert_eq!(stats.pending_queries, 0);
         assert_eq!(stats.total_queries_sent, 0);
         handle.shutdown().await.unwrap();

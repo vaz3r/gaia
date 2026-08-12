@@ -63,6 +63,13 @@ pub struct RunArgs {
     #[arg(long, default_value_t = 32)]
     pub sampler_loops: usize,
 
+    /// Concurrency scale factor (bitmagnet's `scaling_factor`). Multiplies the
+    /// effective sampler QPS, sampler loops, fetch concurrency, lookup
+    /// concurrency, and pipeline buffer sizes. Default 10 matches bitmagnet's
+    /// proven baseline; raise to 50 for aggressive day-one aggregation.
+    #[arg(long, default_value_t = 10)]
+    pub scale: usize,
+
     /// Emit an infohash to the fetcher after this many distinct sampling
     /// responses reported it (1 = fetch on first sighting; the in-memory bloom
     /// filter already prevents re-fetching hashes confirmed Ok/Skipped, so a
@@ -146,24 +153,34 @@ pub struct PurgeArgs {
 }
 
 impl RunArgs {
-    /// Effective sampler QPS after applying the aggressive preset.
+    /// The concurrency scale factor, clamped to a sane range.
+    fn scale(&self) -> usize {
+        self.scale.max(1)
+    }
+
+    /// Effective sampler QPS after applying the aggressive preset and `--scale`
+    /// (bitmagnet `scaling_factor`).
     pub fn effective_sampler_qps(&self) -> usize {
-        if self.aggressive { 1000 } else { self.sampler_qps }
+        let base = if self.aggressive { 1000 } else { self.sampler_qps };
+        base.saturating_mul(self.scale())
     }
 
-    /// Effective sampler loops after applying the aggressive preset.
+    /// Effective sampler loops after applying the aggressive preset and `--scale`.
     pub fn effective_sampler_loops(&self) -> usize {
-        if self.aggressive { 64 } else { self.sampler_loops }
+        let base = if self.aggressive { 64 } else { self.sampler_loops };
+        base.saturating_mul(self.scale())
     }
 
-    /// Effective concurrency after applying the aggressive preset.
+    /// Effective concurrency after applying the aggressive preset and `--scale`.
     pub fn effective_concurrency(&self) -> usize {
-        if self.aggressive { 512 } else { self.concurrency }
+        let base = if self.aggressive { 512 } else { self.concurrency };
+        base.saturating_mul(self.scale())
     }
 
-    /// Effective lookup concurrency after applying the aggressive preset.
+    /// Effective lookup concurrency after applying the aggressive preset and `--scale`.
     pub fn effective_lookup_concurrency(&self) -> usize {
-        if self.aggressive { 256 } else { self.lookup_concurrency }
+        let base = if self.aggressive { 256 } else { self.lookup_concurrency };
+        base.saturating_mul(self.scale())
     }
 
     /// Effective DHT QPS after applying the aggressive preset.
