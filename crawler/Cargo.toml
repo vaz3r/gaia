@@ -9,6 +9,7 @@ description = "Lightweight BitTorrent DHT crawler indexing movie/TV torrents int
 anyhow = "1"
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
+dashmap = "6"
 futures-util = "0.3"
 gaia-bencode = { path = "crates/gaia-bencode" }
 gaia-core = { path = "crates/gaia-core" }
@@ -21,6 +22,7 @@ serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = "1"
 sha1 = "0.10"
+smallvec = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 tracing = "0.1"

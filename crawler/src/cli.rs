@@ -12,7 +12,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Start the crawl daemon (DHT sampler + metadata fetcher + storage).
-    Run(RunArgs),
+    Run(Box<RunArgs>),
     /// Search the local database for torrent names.
     Query(QueryArgs),
     /// Delete the database and routing state so the next run starts fresh.
@@ -75,6 +75,25 @@ pub struct RunArgs {
     /// filter already prevents re-fetching hashes confirmed Ok/Skipped).
     #[arg(long, default_value_t = 1)]
     pub min_seen: u32,
+
+    /// Optional liveness-gate shadow threshold: observe what `--min-seen` would
+    /// filter (log `shadow_filtered`/`shadow_emitted`/near-miss counters) while
+    /// the live path keeps emitting at `--min-seen`. 0 = disabled.
+    #[arg(long, default_value_t = 0)]
+    pub min_seen_shadow: u32,
+
+    /// Rolling window (seconds) for the liveness gate: a distinct-source report
+    /// older than this expires.
+    #[arg(long, default_value_t = 120)]
+    pub liveness_window_secs: u64,
+
+    /// Max distinct sources tracked per hash before the oldest is evicted.
+    #[arg(long, default_value_t = 8)]
+    pub liveness_cap: usize,
+
+    /// Global liveness entry backstop (oldest evicted past this).
+    #[arg(long, default_value_t = 100_000)]
+    pub liveness_max_entries: usize,
 
     /// Upper bound (seconds) on the per-node re-query interval advertised by
     /// BEP 51 nodes. Nodes reporting longer intervals are re-queried after

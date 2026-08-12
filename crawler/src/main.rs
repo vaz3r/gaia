@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Run(args) => {
             init_tracing(&args.log);
-            crawler::run(args).await
+            crawler::run(*args).await
         }
         Command::Query(args) => query::query(args),
         Command::Purge(args) => purge::purge(&args),

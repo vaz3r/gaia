@@ -1,7 +1,8 @@
+mod liveness;
 mod sampler;
 
+pub use liveness::{LivenessConfig, LivenessCounter, RecordOutcome};
 pub use sampler::{Sampler, SamplerConfig};
-
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;

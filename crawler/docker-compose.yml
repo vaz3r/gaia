@@ -88,6 +88,8 @@ services:
       - "4"
       - --min-seen
       - "1"
+      - --min-seen-shadow
+      - "3"
       - --scale
       - "3"
       - --max-nodes

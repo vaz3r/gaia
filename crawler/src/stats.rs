@@ -7,6 +7,16 @@ pub struct CrawlStats {
     pub hashes_unique: AtomicU64,
     /// Fetch requests emitted by the passive announce-intake path.
     pub hashes_announced: AtomicU64,
+    /// Shadow-mode liveness gate: hashes that reached the shadow threshold
+    /// (would be emitted under `--min-seen-shadow`).
+    pub shadow_emitted: AtomicU64,
+    /// Shadow-mode liveness gate: hashes that expired below the shadow
+    /// threshold (would be filtered under `--min-seen-shadow`).
+    pub shadow_filtered: AtomicU64,
+    /// Shadow-mode near-miss buckets: expired having reached exactly 1 or 2
+    /// distinct sources (detect window/threshold coupling).
+    pub shadow_near_miss_1: AtomicU64,
+    pub shadow_near_miss_2: AtomicU64,
     pub fetches_attempted: AtomicU64,
     pub fetches_failed: AtomicU64,
     pub metadata_verified: AtomicU64,

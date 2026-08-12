@@ -24,12 +24,6 @@ const FAIL_BACKOFF: Duration = Duration::from_secs(10);
 const STALE_BACKOFF: Duration = Duration::from_secs(300);
 /// Cap on the per-node interval map (LRU-evicted).
 const INTERVAL_MAP_CAP: usize = 8192;
-/// Cap on the in-memory occurrence map (FIFO-evicted). Sized small because the
-/// shared in-memory bloom filter (not this map) is the primary re-fetch guard;
-/// this per-loop map only counts distinct sightings toward `--min-seen`, so a
-/// modest cap keeps memory flat across many sampler loops (scale multiplies
-/// loops, so a large per-loop cap would blow up heap linearly).
-const SEEN_CAP: usize = 16_384;
 /// Cap on the per-node quality map (LRU-evicted).
 const NODE_STATS_CAP: usize = 32_768;
 /// Minimum time to wait when no node is re-queryable.
@@ -60,6 +54,9 @@ pub struct SamplerConfig {
     /// responses reported it. Higher values cull the long-tail of junk but
     /// delay rare-but-valid releases.
     pub min_seen: u32,
+    /// Optional shadow threshold: observe what `--min-seen` would filter while
+    /// keeping the live threshold. Entry lifetime = max(min_seen, shadow).
+    pub min_seen_shadow: Option<u32>,
     /// Upper bound (seconds) on the per-node re-query interval advertised by
     /// BEP 51 nodes. Nodes that report longer intervals are still re-queried
     /// after this period so the routing table keeps growing.
@@ -114,42 +111,6 @@ impl IntervalMap {
                 self.map.remove(&old);
             }
         }
-    }
-}
-
-/// Bounded, FIFO-evicted hash → distinct-reporting-nodes counter.
-struct SeenCounts {
-    map: HashMap<Id20, u32>,
-    order: VecDeque<Id20>,
-    cap: usize,
-}
-
-impl SeenCounts {
-    fn new(cap: usize) -> Self {
-        Self {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-            cap,
-        }
-    }
-
-    /// Bump the count for `h` and return it. Evicts the oldest entry past cap.
-    fn record(&mut self, h: Id20) -> u32 {
-        let new = !self.map.contains_key(&h);
-        let count = {
-            let entry = self.map.entry(h).or_insert(0);
-            *entry += 1;
-            *entry
-        };
-        if new {
-            self.order.push_back(h);
-            while self.order.len() > self.cap {
-                if let Some(old) = self.order.pop_front() {
-                    self.map.remove(&old);
-                }
-            }
-        }
-        count
     }
 }
 
@@ -237,6 +198,7 @@ pub struct Sampler {
     shutdown: CancellationToken,
     shared: crate::redis::SharedState,
     seen: crate::bloom::SharedBloom,
+    liveness: Arc<crate::discovery::LivenessCounter>,
 }
 
 impl Sampler {
@@ -250,6 +212,7 @@ impl Sampler {
         shutdown: CancellationToken,
         shared: crate::redis::SharedState,
         seen: crate::bloom::SharedBloom,
+        liveness: Arc<crate::discovery::LivenessCounter>,
     ) -> Self {
         Self {
             handle,
@@ -260,6 +223,7 @@ impl Sampler {
             shutdown,
             shared,
             seen,
+            liveness,
         }
     }
 
@@ -277,13 +241,14 @@ impl Sampler {
                 storage: self.storage.clone(),
                 stats: self.stats.clone(),
                 intervals: IntervalMap::new(INTERVAL_MAP_CAP),
-                seen: SeenCounts::new(SEEN_CAP),
                 gate: gate.clone(),
                 node_stats: NodeStats::new(NODE_STATS_CAP),
                 min_seen: self.cfg.min_seen.max(1),
+                min_seen_shadow: self.cfg.min_seen_shadow,
                 max_interval,
                 shared: self.shared.clone(),
                 seen_bloom: self.seen.clone(),
+                liveness: self.liveness.clone(),
                 shutdown: self.shutdown.clone(),
             };
             tasks.spawn(async move { loop_.run_loop().await });
@@ -314,13 +279,14 @@ struct SamplerLoop {
     storage: Storage,
     stats: Arc<CrawlStats>,
     intervals: IntervalMap,
-    seen: SeenCounts,
     gate: Arc<QpsGate>,
     node_stats: NodeStats,
     min_seen: u32,
+    min_seen_shadow: Option<u32>,
     max_interval: Duration,
     shared: crate::redis::SharedState,
     seen_bloom: crate::bloom::SharedBloom,
+    liveness: Arc<crate::discovery::LivenessCounter>,
     shutdown: CancellationToken,
 }
 
@@ -378,7 +344,9 @@ impl SamplerLoop {
                     );
                     let mut new_count = 0u32;
                     for sample in res.samples {
-                        match self.emit_sample(sample).await {
+                        // `target` is the sampled node's own ID — the source of
+                        // this report for the liveness counter.
+                        match self.emit_sample(sample, target).await {
                             EmitOutcome::Shutdown => return,
                             EmitOutcome::Repeat => {}
                             EmitOutcome::New => new_count += 1,
@@ -404,13 +372,37 @@ impl SamplerLoop {
         }
     }
 
-    /// Route a sampled hash through local counting, the bloom/DB pre-filter,
-    /// and shared fleet dedup. Reports whether the hash was new to this loop.
-    /// `EmitOutcome::Shutdown` means the pipeline is shut down.
-    async fn emit_sample(&mut self, hash: Id20) -> EmitOutcome {
+    /// Route a sampled hash through the shared liveness gate, the bloom/DB
+    /// pre-filter, and shared fleet dedup. `source` is the DHT node ID that
+    /// reported `hash`. Reports whether the hash was new to the liveness
+    /// counter. `EmitOutcome::Shutdown` means the pipeline is shut down.
+    async fn emit_sample(&mut self, hash: Id20, source: Id20) -> EmitOutcome {
         self.stats
             .hashes_sampled
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        let now = Instant::now();
+        // Record the report BEFORE the bloom/DB gate so shadow mode can observe
+        // a hash accumulating distinct sources even after a live emit (the
+        // entry survives to the shadow threshold). In-process DashMap op, not
+        // a Redis round-trip.
+        let outcome = self.liveness.record(hash.as_bytes(), source, now);
+        let new = match outcome {
+            crate::discovery::RecordOutcome::New => true,
+            crate::discovery::RecordOutcome::Repeat => false,
+            crate::discovery::RecordOutcome::Gained { distinct } => distinct == 1,
+        };
+
+        // Shadow accounting: if the hash reached the shadow threshold, count it
+        // as "would be emitted" and remove the entry (its purpose is served).
+        if let Some(shadow) = self.min_seen_shadow {
+            if self.liveness.live_count(hash.as_bytes(), now) as u32 >= shadow {
+                self.stats
+                    .shadow_emitted
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.liveness.remove(hash.as_bytes());
+            }
+        }
 
         // Never queue hashes already accepted/filtered or still in backoff.
         // The bloom caches *terminal* skip verdicts (Ok/Skipped) so repeated
@@ -419,28 +411,30 @@ impl SamplerLoop {
         // skipped but NOT cached, so they can be retried once the backoff
         // expires — matching the pre-bloom behavior.
         if self.seen_bloom.contains(hash.as_bytes()) {
-            return EmitOutcome::Repeat;
+            return if new { EmitOutcome::New } else { EmitOutcome::Repeat };
         }
         match self.storage.scan_status(hash.as_bytes()) {
             Ok(Some(ScannedStatus::Ok | ScannedStatus::Skipped)) => {
                 self.seen_bloom.insert(hash.as_bytes());
-                return EmitOutcome::Repeat;
+                return if new { EmitOutcome::New } else { EmitOutcome::Repeat };
             }
             Ok(Some(ScannedStatus::Failed { next_attempt, .. })) if next_attempt > unix_secs() => {
-                return EmitOutcome::Repeat;
+                return if new { EmitOutcome::New } else { EmitOutcome::Repeat };
             }
             _ => {}
         }
 
-        let count = self.seen.record(hash);
-        if count != self.min_seen {
-            return if count == 1 { EmitOutcome::New } else { EmitOutcome::Repeat };
+        // Liveness gate: only emit once enough distinct sources corroborated
+        // this hash within the window.
+        let distinct = self.liveness.live_count(hash.as_bytes(), now) as u32;
+        if distinct < self.min_seen {
+            return if new { EmitOutcome::New } else { EmitOutcome::Repeat };
         }
 
         // Fleet-wide dedup: if another instance already emitted this hash,
         // skip it here (best-effort; Redis failure returns false).
         if self.shared.seen_contains(hash.as_bytes()).await {
-            return EmitOutcome::Repeat;
+            return if new { EmitOutcome::New } else { EmitOutcome::Repeat };
         }
 
         self.stats
@@ -450,12 +444,20 @@ impl SamplerLoop {
             .emit
             .send(FetchRequest {
                 hash,
-                occurrences: count,
+                occurrences: distinct,
                 peer_hint: None,
             })
             .await
             .is_ok();
         self.shared.seen_add(hash.as_bytes()).await;
+
+        // Entry lifetime is governed by max(min_seen, min_seen_shadow): a live
+        // emit must not delete an entry shadow mode still needs to observe.
+        let shadow = self.min_seen_shadow.unwrap_or(0);
+        if shadow <= self.min_seen {
+            self.liveness.remove(hash.as_bytes());
+        }
+
         if ok { EmitOutcome::New } else { EmitOutcome::Shutdown }
     }
 }
@@ -547,19 +549,6 @@ mod tests {
         m.record(c, Duration::from_secs(60), now);
         assert!(m.map.len() <= 2, "map must stay capped");
         assert!(!m.map.contains_key(&a), "oldest entry evicted first");
-    }
-
-    #[test]
-    fn seen_counts_bump_and_evict() {
-        let mut s = SeenCounts::new(2);
-        assert_eq!(s.record(id(1)), 1);
-        assert_eq!(s.record(id(1)), 2, "counts accumulate per hash");
-        assert_eq!(s.record(id(2)), 1);
-        assert_eq!(s.record(id(3)), 1);
-        assert!(!s.map.contains_key(&id(1)), "oldest evicted");
-        assert!(s.map.contains_key(&id(2)));
-        assert!(s.map.contains_key(&id(3)));
-        assert_eq!(s.record(id(2)), 2, "surviving hash keeps counting");
     }
 
     #[test]

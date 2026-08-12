@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use gaia_dht::DhtHandle;
@@ -91,6 +91,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
         queries_per_second: args.effective_sampler_qps(),
         concurrency: args.effective_sampler_loops(),
         min_seen: args.effective_min_seen(),
+        min_seen_shadow: (args.min_seen_shadow > 0).then_some(args.min_seen_shadow),
         max_interval_secs: args.sampler_max_interval,
     };
 
@@ -99,6 +100,64 @@ pub async fn run(args: RunArgs) -> Result<()> {
     // re-sampling of dead hashes stops hitting the database after the first
     // authoritative check per hash.
     let seen_bloom = crate::bloom::SharedBloom::new(27, 7);
+    // One shared liveness counter across all instances' sampler loops: a hash
+    // is fetched only after N distinct DHT nodes corroborate it within the
+    // rolling window (the liveness gate), with shadow-mode observation.
+    let liveness = discovery::LivenessCounter::new(discovery::LivenessConfig {
+        window: Duration::from_secs(args.liveness_window_secs),
+        cap: args.liveness_cap,
+        max_entries: args.liveness_max_entries,
+    });
+    // Periodic sweep: expire one-hit-wonders and enforce the global backstop,
+    // feeding shadow near-miss counters.
+    let sweep_liveness = liveness.clone();
+    let sweep_stats = stats.clone();
+    let sweep_shutdown = shutdown.clone();
+    let sweep_shadow = (args.min_seen_shadow > 0).then_some(args.min_seen_shadow);
+    let mut sweep = tokio::task::JoinSet::new();
+    sweep.spawn(async move {
+        loop {
+            tokio::select! {
+                _ = sweep_shutdown.cancelled() => return,
+                _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+            }
+            let evicted = sweep_liveness.sweep(Instant::now());
+            let rel = std::sync::atomic::Ordering::Relaxed;
+            // Sample-log a fraction of filtered hashes so the shadow run can
+            // inspect whether they look like dead garbage or plausible-live
+            // torrents (hex hash + max distinct sources reached).
+            let mut sample_logged = 0usize;
+            for ev in evicted {
+                if sweep_shadow.is_none() {
+                    continue;
+                }
+                match ev.max_sources {
+                    1 => { sweep_stats.shadow_near_miss_1.fetch_add(1, rel); }
+                    2 => { sweep_stats.shadow_near_miss_2.fetch_add(1, rel); }
+                    _ => {}
+                }
+                // Everything expired without reaching the shadow threshold is
+                // "would be filtered" under `--min-seen-shadow`.
+                sweep_stats.shadow_filtered.fetch_add(1, rel);
+                // Log ~1 in 1000 filtered hashes for qualitative inspection.
+                let n = sweep_stats.shadow_filtered.load(rel);
+                if n % 1000 == 1 && sample_logged < 3 {
+                    sample_logged += 1;
+                    let hex = ev
+                        .hash
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<String>();
+                    tracing::debug!(
+                        shadow_filtered_hash = %hex,
+                        max_sources = ev.max_sources,
+                        "shadow: would filter under --min-seen-shadow"
+                    );
+                }
+            }
+        }
+    });
+
     let mut samplers = tokio::task::JoinSet::new();
     for handle in &handles {
         let sampler = Sampler::new(
@@ -110,6 +169,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
             shutdown.clone(),
             shared.clone(),
             seen_bloom.clone(),
+            liveness.clone(),
         );
         samplers.spawn(async move { sampler.run().await });
     }
@@ -170,6 +230,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
     while growers.join_next().await.is_some() {}
     while samplers.join_next().await.is_some() {}
     while intake.join_next().await.is_some() {}
+    while sweep.join_next().await.is_some() {}
     let _ = tokio::time::timeout(SHUTDOWN_DRAIN + Duration::from_secs(5), &mut fetcher).await;
     fetcher.abort();
     // Dropping the fetcher aborts its JoinSet; the fetch tasks' `record_tx`
@@ -273,6 +334,10 @@ async fn stats_loop(handles: Vec<DhtHandle>, stats: Arc<CrawlStats>) {
             hashes_unique = unique_now,
             unique_per_hr = format!("{unique_per_hr:.1}"),
             hashes_announced = s.hashes_announced.load(r),
+            shadow_emitted = s.shadow_emitted.load(r),
+            shadow_filtered = s.shadow_filtered.load(r),
+            shadow_near_miss_1 = s.shadow_near_miss_1.load(r),
+            shadow_near_miss_2 = s.shadow_near_miss_2.load(r),
             fetches_attempted = s.fetches_attempted.load(r),
             fetches_failed = s.fetches_failed.load(r),
             fetch_in_flight = s.fetch_in_flight.load(r),
