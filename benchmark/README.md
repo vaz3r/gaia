@@ -11,6 +11,22 @@ directory as `$2`.
 | `bandwidth.sh` | Tunnel bandwidth (MB/s) through Gluetun `tun0`, plus GB/day and GB/month projections vs Oracle Always Free limits | `./benchmark/bandwidth.sh 600` |
 | `torrents_rate.sh` | Torrents found over a window → rate per hr / per day | `./benchmark/torrents_rate.sh 600` |
 | `bench.sh` | Full report: stats + bandwidth + torrent rate + **efficiency (torrents/GB)** in one window | `./benchmark/bench.sh 600` |
+| `liveness.sh` | **SQLite performance dashboard**: overall fetch/verified/success, verified per hour, fetches vs verified per hour, failure breakdown, and (with `--live`) the liveness-gate counters | `./benchmark/liveness.sh 12` / `./benchmark/liveness.sh 6 --live` |
+
+## The performance dashboard (`liveness.sh`)
+
+Reads the live `scanned` + `torrents` tables on remote-dev and renders ASCII/box
+tables — the rotation-proof source of truth (no reliance on rotating logs). The
+live WAL DB is snapshotted as a single tar stream (a plain `docker cp` is torn
+mid-write), then read with host `python3` (no sqlite3 dependency).
+
+| Section | What it answers |
+|---|---|
+| Overall | total fetch attempts, verified, failed, torrents indexed, fetch success rate |
+| Verified per hour | the business metric (new torrents indexed per hour) |
+| Fetches vs verified per hour | efficiency over time (attempts → verified, success %) |
+| Failure breakdown | why bandwidth is spent (`empty_peers`/`timeout`/etc.) |
+| `--live` liveness | `liveness_entries` (dashmap size) + `liveness_sweeps` (best-effort, from the rotating log) |
 
 ## Reading efficiency
 
