@@ -68,6 +68,16 @@ WAL-free, consistent while running). Current snapshot ~4M scans.
   vs ~150/hr baseline before this session's work. ~40% improvement.
 - Tracker path contributes ~20% of verified now (verified_tracker climbing).
 
+### F9 — min-seen corroboration gate definitively ruled out (retest)
+- Re-tested min-seen=2 with warm tables + trackers active (was tested cold
+  before). Same catastrophic result: unique 500k -> 3.2k/hr, verified ~9/hr
+  (vs ~213/hr at min-seen=1).
+- Root cause: a genuine torrent is almost always reported by exactly ONE DHT
+  node within the 120s window. Shadow `near_miss_2` (~6.8k/hr) is mostly dead
+  too. Corroboration-by-distinct-sources is the wrong signal for DHT liveness.
+- **Conclusion: min-seen MUST stay 1.** Verified comes from single-sighting
+  hashes. This is now proven twice (cold + warm), so the gate is not re-tried.
+
 ## Strategy status
 
 | Strategy | Peers found (empty_peers) | Verifies | Production impact |
