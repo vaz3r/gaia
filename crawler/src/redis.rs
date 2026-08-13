@@ -70,6 +70,48 @@ impl SharedState {
         }
     }
 
+    /// True if this hash has already been fetched via the announce path.
+    /// Uses a SEPARATE set from `seen` so an announce carrying a live peer
+    /// hint is never dropped just because the sampler already fetched the
+    /// hash blindly (announce fetches convert far higher).
+    pub async fn announced_contains(&self, hash: &[u8; 20]) -> bool {
+        let Some(conn) = &self.conn else { return false };
+        let key = format!("{}:announced", self.prefix);
+        let mut c = conn.as_ref().clone();
+        let r: redis::RedisResult<bool> = c.sismember(key, hash).await;
+        r.unwrap_or(false)
+    }
+
+    /// Mark `hash` as fetched via the announce path.
+    pub async fn announced_add(&self, hash: &[u8; 20]) {
+        let Some(conn) = &self.conn else { return };
+        let key = format!("{}:announced", self.prefix);
+        let mut c = conn.as_ref().clone();
+        if let Err(e) = c.sadd::<_, _, i64>(key, hash).await {
+            warn!(error = %e, "redis announced_add failed");
+        }
+    }
+
+    /// True if this hash was already emitted via the get_peers (looked-up)
+    /// path. Separate set so each passive source dedups independently.
+    pub async fn looked_up_contains(&self, hash: &[u8; 20]) -> bool {
+        let Some(conn) = &self.conn else { return false };
+        let key = format!("{}:lookedup", self.prefix);
+        let mut c = conn.as_ref().clone();
+        let r: redis::RedisResult<bool> = c.sismember(key, hash).await;
+        r.unwrap_or(false)
+    }
+
+    /// Mark `hash` as emitted via the get_peers path.
+    pub async fn looked_up_add(&self, hash: &[u8; 20]) {
+        let Some(conn) = &self.conn else { return };
+        let key = format!("{}:lookedup", self.prefix);
+        let mut c = conn.as_ref().clone();
+        if let Err(e) = c.sadd::<_, _, i64>(key, hash).await {
+            warn!(error = %e, "redis looked_up_add failed");
+        }
+    }
+
     /// Whether `ip` is currently flagged dead fleet-wide. Best-effort; returns
     /// false on error so a peer is not spuriously skipped.
     pub async fn dead_contains(&self, ip: std::net::IpAddr) -> bool {

@@ -51,4 +51,16 @@ pub struct CrawlStats {
     pub connection_reset: AtomicU64,
     pub connection_closed: AtomicU64,
     pub parse_error: AtomicU64,
+    /// Verified torrents split by discovery source, so we can see which path
+    /// actually converts (announce-with-peer-hint vs sampled).
+    pub verified_announced: AtomicU64,
+    pub verified_sampled: AtomicU64,
+    /// Hashes the sparse/stalled discriminator withheld (single-source, never
+    /// refreshed). Rising with ~constant verified = the gate is working.
+    pub discriminator_filtered: AtomicU64,
+    /// get_peers passive-intake funnel: unique hashes emitted / deduped.
+    pub lookups_emitted: AtomicU64,
+    pub lookups_deduped_redis: AtomicU64,
+    /// Verified torrents that entered via the get_peers (sought) path.
+    pub verified_lookedup: AtomicU64,
 }

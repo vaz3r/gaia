@@ -17,7 +17,7 @@ use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinSet;
 use tracing::debug;
 
-use crate::discovery::FetchRequest;
+use crate::discovery::{FetchRequest, FetchSource};
 use crate::net::{Blocklist, DeadPeerCache};
 use crate::stats::CrawlStats;
 use crate::storage::{
@@ -200,10 +200,12 @@ pub async fn run_fetcher(
                 let dead_peers = dead_peers.clone();
                 let shared = cfg.shared.clone();
                 let peer_hint = req.peer_hint;
+                let source = req.source;
                 tasks.spawn(async move {
                     let outcome = fetch_one(
                         req.hash,
                         peer_hint,
+                        source,
                         handle,
                         tx,
                         peer_id,
@@ -302,6 +304,7 @@ pub async fn run_fetcher(
 async fn fetch_one(
     info_hash: Id20,
     peer_hint: Option<SocketAddr>,
+    source: FetchSource,
     handle: DhtHandle,
     tx: mpsc::Sender<TorrentRecord>,
     peer_id: Id20,
@@ -341,9 +344,7 @@ async fn fetch_one(
                     .await;
             if let Ok(Ok(meta)) = result {
                 if sha1_info(&meta.info_bytes) == *info_hash.as_bytes() {
-                    stats
-                        .metadata_verified
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    record_verified(source, stats);
                     let extracted = extract_metadata(&meta.info_bytes).ok();
                     if let Some(extracted) = extracted {
                         let now = unix_secs();
@@ -500,6 +501,7 @@ async fn fetch_one(
             stats
                 .metadata_verified
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            record_verified(source, stats);
 
             let extracted = match extract_metadata(&meta.info_bytes) {
                 Ok(e) => e,
@@ -550,6 +552,17 @@ async fn fetch_one(
         reason: anyhow!("no reachable peer yielded verified metadata"),
         dominant_failure: dominant,
     })
+}
+
+/// Record a verified torrent into the total + per-source counters.
+fn record_verified(source: FetchSource, stats: &CrawlStats) {
+    use crate::discovery::FetchSource as S;
+    let rel = std::sync::atomic::Ordering::Relaxed;
+    match source {
+        S::Announced => stats.verified_announced.fetch_add(1, rel),
+        S::LookedUp => stats.verified_lookedup.fetch_add(1, rel),
+        S::Sampled => stats.verified_sampled.fetch_add(1, rel),
+    };
 }
 
 /// Record a classified peer failure into the per-kind diagnostic counters.
@@ -607,12 +620,14 @@ mod tests {
             hash: hash(1),
             occurrences: 10,
             peer_hint: None,
+            source: crate::discovery::FetchSource::Sampled,
         });
         // ...and a hinted announce with a single occurrence.
         q.push(FetchRequest {
             hash: hash(2),
             occurrences: 1,
             peer_hint: Some(addr(2)),
+            source: crate::discovery::FetchSource::Announced,
         });
         let first = q.pop().expect("a request");
         assert_eq!(first.hash, hash(2), "hinted announce must pop before sampled");
@@ -626,12 +641,14 @@ mod tests {
             hash: hash(1),
             occurrences: 5,
             peer_hint: None,
+            source: crate::discovery::FetchSource::Sampled,
         });
         // A later announce for the same hash adds the hint.
         q.push(FetchRequest {
             hash: hash(1),
             occurrences: 5,
             peer_hint: Some(addr(1)),
+            source: crate::discovery::FetchSource::Announced,
         });
         let got = q.pop().expect("a request");
         assert_eq!(got.hash, hash(1));
@@ -645,12 +662,14 @@ mod tests {
             hash: hash(1),
             occurrences: 7,
             peer_hint: None,
+            source: crate::discovery::FetchSource::Sampled,
         });
         // A lower occurrence report must be ignored.
         q.push(FetchRequest {
             hash: hash(1),
             occurrences: 3,
             peer_hint: Some(addr(1)),
+            source: crate::discovery::FetchSource::Announced,
         });
         let got = q.pop().expect("a request");
         assert_eq!(got.occurrences, 7);

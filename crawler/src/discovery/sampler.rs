@@ -63,6 +63,12 @@ pub struct SamplerConfig {
     /// responses reported it. Higher values cull the long-tail of junk but
     /// delay rare-but-valid releases.
     pub min_seen: u32,
+    /// A single-source hash is emitted only after this many report events
+    /// from the SAME source (the sparse/stalled discriminator). Sightings ≥ 2
+    /// from one source means the node kept re-reporting the hash = live; a
+    /// first sighting alone from a backoff-stalled node is dead. 0/1 disables
+    /// (emit on first sighting as before).
+    pub min_sightings: u32,
     /// Optional shadow threshold: observe what `--min-seen` would filter while
     /// keeping the live threshold. Entry lifetime = max(min_seen, shadow).
     pub min_seen_shadow: Option<u32>,
@@ -292,6 +298,7 @@ impl Sampler {
                 gate: gate.clone(),
                 node_stats: node_stats.clone(),
                 min_seen: self.cfg.min_seen.max(1),
+                min_sightings: self.cfg.min_sightings.max(1),
                 min_seen_shadow: self.cfg.min_seen_shadow,
                 max_interval,
                 cursor: 0,
@@ -332,6 +339,7 @@ struct SamplerLoop {
     gate: Arc<QpsGate>,
     node_stats: Arc<std::sync::Mutex<NodeStats>>,
     min_seen: u32,
+    min_sightings: u32,
     min_seen_shadow: Option<u32>,
     max_interval: Duration,
     shared: crate::redis::SharedState,
@@ -497,10 +505,29 @@ impl SamplerLoop {
             _ => {}
         }
 
-        // Liveness gate: only emit once enough distinct sources corroborated
-        // this hash within the window.
+        // Liveness gate: emit when either (a) at least two distinct sources
+        // corroborated this hash within the window, or (b) the sparse/stalled
+        // discriminator passed — the same source kept re-reporting it
+        // (sightings ≥ min_sightings ≥ 2), which is the live signal for hashes
+        // seen from only one node. A first sighting from a backoff-stalled
+        // node (sightings == 1, never refreshed) is dead and is NOT emitted
+        // when the discriminator is enabled. With min_sightings <= 1 the gate
+        // degenerates to the pre-change distinct-source check (min_seen).
         let distinct = self.liveness.live_count(hash.as_bytes(), now) as u32;
-        if distinct < self.min_seen {
+        let discriminator_on = self.min_sightings >= 2;
+        let corroborated = if discriminator_on {
+            distinct >= self.min_seen.max(2)
+        } else {
+            distinct >= self.min_seen
+        };
+        let refreshed = discriminator_on
+            && self.liveness.live_sightings(hash.as_bytes(), now) >= self.min_sightings;
+        if !corroborated && !refreshed {
+            if discriminator_on {
+                self.stats
+                    .discriminator_filtered
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             return if new { EmitOutcome::New } else { EmitOutcome::Repeat };
         }
 
@@ -519,6 +546,7 @@ impl SamplerLoop {
                 hash,
                 occurrences: distinct,
                 peer_hint: None,
+                source: crate::discovery::FetchSource::Sampled,
             })
             .await
             .is_ok();

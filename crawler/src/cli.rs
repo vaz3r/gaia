@@ -76,6 +76,13 @@ pub struct RunArgs {
     #[arg(long, default_value_t = 1)]
     pub min_seen: u32,
 
+    /// Sparse/stalled discriminator: when ≥ 2, a single-source hash is emitted
+    /// only after the SAME source re-reports it this many times (its node kept
+    /// refreshing = live), instead of on a first sighting from a backoff-stalled
+    /// node. Corroboration (≥ 2 distinct sources) still emits immediately.
+    #[arg(long, default_value_t = 1)]
+    pub min_sightings: u32,
+
     /// Optional liveness-gate shadow threshold: observe what `--min-seen` would
     /// filter (log `shadow_filtered`/`shadow_emitted`/near-miss counters) while
     /// the live path keeps emitting at `--min-seen`. 0 = disabled.

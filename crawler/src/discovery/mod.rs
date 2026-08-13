@@ -23,11 +23,22 @@ use crate::cli::RunArgs;
 /// directly before falling back to a `get_peers` lookup. This is the
 /// passive-intake discovery path (bitmagnet's `PutHash` pattern): announced
 /// hashes have a dramatically higher fetch-success rate than sampled ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchSource {
+    /// Discovered via BEP 51 sampling.
+    Sampled,
+    /// Inbound `announce_peer` carrying a live dial hint.
+    Announced,
+    /// Inbound `get_peers` — someone actively seeking the hash.
+    LookedUp,
+}
+
 #[derive(Debug, Clone)]
 pub struct FetchRequest {
     pub hash: Id20,
     pub occurrences: u32,
     pub peer_hint: Option<SocketAddr>,
+    pub source: FetchSource,
 }
 
 /// Load known-live nodes from a persisted routing table (`dht_state.json`)
@@ -182,34 +193,69 @@ pub async fn run_passive_intake(
             _ = shutdown.cancelled() => return,
             event = events.recv() => {
                 let Ok(event) = event else { return };
-                let gaia_dht::DhtEvent::Announced { info_hash, peer_addr } = event else {
-                    continue;
-                };
-                // Best-effort fleet dedup; a Redis miss lets the hash through.
-                if shared.seen_contains(info_hash.as_bytes()).await {
-                    stats
-                        .announces_deduped_redis
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    continue;
+                match event {
+                    gaia_dht::DhtEvent::Announced { info_hash, peer_addr } => {
+                        // Dedup only against OTHER announce fetches, not the
+                        // sampler's blind fetches: an announce carries a live
+                        // peer hint and converts far higher, so it must never
+                        // be dropped because the sampler already tried (and
+                        // probably failed on) this hash.
+                        if shared.announced_contains(info_hash.as_bytes()).await {
+                            stats
+                                .announces_deduped_redis
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            continue;
+                        }
+                        stats
+                            .hashes_announced
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        stats
+                            .announces_emitted
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if emit
+                            .send(FetchRequest {
+                                hash: info_hash,
+                                occurrences: 1,
+                                peer_hint: Some(peer_addr),
+                                source: FetchSource::Announced,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return; // pipeline closed → shutdown
+                        }
+                        shared.announced_add(info_hash.as_bytes()).await;
+                    }
+                    gaia_dht::DhtEvent::LookedUp { info_hash, .. } => {
+                        // Someone is actively seeking this hash right now — a
+                        // live signal with far more volume than announce_peer.
+                        // No peer hint (the seeker is a DHT node, not a torrent
+                        // peer), so the fetch uses the normal get_peers→dial
+                        // path. Dedup against other looked-up hashes.
+                        if shared.looked_up_contains(info_hash.as_bytes()).await {
+                            stats
+                                .lookups_deduped_redis
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            continue;
+                        }
+                        stats
+                            .lookups_emitted
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if emit
+                            .send(FetchRequest {
+                                hash: info_hash,
+                                occurrences: 1,
+                                peer_hint: None,
+                                source: FetchSource::LookedUp,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return; // pipeline closed → shutdown
+                        }
+                        shared.looked_up_add(info_hash.as_bytes()).await;
+                    }
                 }
-                stats
-                    .hashes_announced
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                stats
-                    .announces_emitted
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if emit
-                    .send(FetchRequest {
-                        hash: info_hash,
-                        occurrences: 1,
-                        peer_hint: Some(peer_addr),
-                    })
-                    .await
-                    .is_err()
-                {
-                    return; // pipeline closed → shutdown
-                }
-                shared.seen_add(info_hash.as_bytes()).await;
             }
         }
     }

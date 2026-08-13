@@ -174,6 +174,17 @@ impl LivenessCounter {
         }
     }
 
+    /// Total report events for `hash` within the window, including same-source
+    /// refreshes (the sparse/stalled discriminator: sightings ≥ 2 with a single
+    /// distinct source means the source kept re-reporting it = live; sightings
+    /// == 1 means the source reported once and never refreshed = dead).
+    pub fn live_sightings(&self, hash: &[u8; 20], _now: Instant) -> u32 {
+        match self.inner.get(hash) {
+            Some(e) => e.sightings,
+            None => 0,
+        }
+    }
+
     /// Remove a hash entry (after it was emitted or shadow-emitted).
     pub fn remove(&self, hash: &[u8; 20]) {
         self.inner.remove(hash);

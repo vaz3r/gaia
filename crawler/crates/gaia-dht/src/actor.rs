@@ -244,6 +244,8 @@ pub struct DhtStats {
     pub announces_token_rejected: u64,
     /// Passive-intake funnel: announces suppressed by read-only mode.
     pub announces_suppressed_readonly: u64,
+    /// Passive-intake funnel: inbound `get_peers` queries (active seekers).
+    pub lookups_received: u64,
 }
 
 /// Result of a `sample_infohashes` query (BEP 51).
@@ -798,6 +800,9 @@ struct ActorStats {
     announces_received: u64,
     announces_token_rejected: u64,
     announces_suppressed_readonly: u64,
+    /// Inbound `get_peers` queries (someone actively seeking a hash) — a live
+    /// signal and a potential high-volume passive source.
+    lookups_received: u64,
 }
 
 /// A pending KRPC query awaiting a response.
@@ -948,6 +953,7 @@ impl DhtActor {
                 announces_received: 0,
                 announces_token_rejected: 0,
                 announces_suppressed_readonly: 0,
+                lookups_received: 0,
             },
             announce_tokens: HashMap::new(),
             announce_token_order: std::collections::VecDeque::new(),
@@ -1382,6 +1388,7 @@ impl DhtActor {
                 want: _,
             } => {
                 let ip = addr.ip();
+                self.stats.lookups_received += 1;
                 // Passive intake: someone is actively seeking this hash.
                 let _ = self.events_tx.send(DhtEvent::LookedUp {
                     info_hash: *info_hash,
@@ -3128,6 +3135,7 @@ impl DhtActor {
             announces_received: self.stats.announces_received,
             announces_token_rejected: self.stats.announces_token_rejected,
             announces_suppressed_readonly: self.stats.announces_suppressed_readonly,
+            lookups_received: self.stats.lookups_received,
         }
     }
 }

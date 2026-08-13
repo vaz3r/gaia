@@ -130,6 +130,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
         queries_per_second: args.effective_sampler_qps(),
         concurrency: args.effective_sampler_loops(),
         min_seen: args.effective_min_seen(),
+        min_sightings: args.min_sightings,
         min_seen_shadow: (args.min_seen_shadow > 0).then_some(args.min_seen_shadow),
         max_interval_secs: args.sampler_max_interval,
     };
@@ -408,6 +409,8 @@ async fn stats_loop(
                 )
             })
             .unwrap_or((0, 0, 0));
+        // Inbound get_peers queries — a high-volume passive live signal.
+        let lookups_received = primary.stats().await.map(|s| s.lookups_received).unwrap_or(0);
         let s = &stats;
         let r = std::sync::atomic::Ordering::Relaxed;
         // Unique-hash discovery rate over the last tick (unique/hr) so the
@@ -439,6 +442,7 @@ async fn stats_loop(
             announces_received = announces_received,
             announces_token_rejected = announces_token_rejected,
             announces_suppressed_readonly = announces_suppressed_readonly,
+            lookups_received = lookups_received,
             announces_deduped_redis = s.announces_deduped_redis.load(r),
             announces_emitted = s.announces_emitted.load(r),
             hashes_sampled = s.hashes_sampled.load(r),
@@ -458,6 +462,12 @@ async fn stats_loop(
             fetch_in_flight = s.fetch_in_flight.load(r),
             queue_depth = s.queue_depth.load(r),
             metadata_verified = s.metadata_verified.load(r),
+            verified_announced = s.verified_announced.load(r),
+            verified_sampled = s.verified_sampled.load(r),
+            verified_lookedup = s.verified_lookedup.load(r),
+            lookups_emitted = s.lookups_emitted.load(r),
+            lookups_deduped_redis = s.lookups_deduped_redis.load(r),
+            discriminator_filtered = s.discriminator_filtered.load(r),
             records_persisted = s.records_persisted.load(r),
             "crawl stats"
         );
