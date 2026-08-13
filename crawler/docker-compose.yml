@@ -96,7 +96,7 @@ services:
       - --min-seen-shadow
       - "3"
       - --scale
-      - "6"
+      - "3"
       - --max-nodes
       - "8192"
       - --no-restrict-ips
