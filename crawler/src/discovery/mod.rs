@@ -141,12 +141,10 @@ pub async fn start_dht(
 /// into the routing table, so the table climbs toward `--max-nodes` throughout
 /// the crawl rather than stalling after the startup warmup.
 ///
-/// Table-size aware: while the table is cold (below `WARM_TABLE_NODES`) it
-/// queries every `interval` (fast warmup); once warm it slows to
-/// `WARM_INTERVAL` because sampling + announce traffic keep the table fresh and
-/// a full `get_peers` walk per grower tick is expensive (each spawns a DhtLookup
-/// that runs 10s-timeout queries — spawning 64/sec when warm is what backlogs
-/// `active_lookups` and leaks memory). Queries stop on cancellation.
+/// The grower keeps each lookup's reply channel open and drains up to
+/// `GROWER_DRAIN_BATCHES` peer batches, which makes the DhtLookup walk deeper
+/// toward the random target and inject more discovered nodes per tick.
+pub const GROWER_DRAIN_BATCHES: u32 = 8;
 pub async fn grow_routing(
     handle: DhtHandle,
     interval: Duration,
@@ -159,10 +157,25 @@ pub async fn grow_routing(
         let mut bytes = [0u8; 20];
         rand::thread_rng().fill_bytes(&mut bytes);
         let target = Id20(bytes);
-        // Even with no peers, the DhtLookup injects nodes into the routing
-        // table. Drop the receiver immediately (the lookup fast-exits when the
-        // channel closes, so it winds down instead of walking the keyspace).
-        let _ = handle.get_peers(target).await;
+        // Keep the reply channel open and drain a few peer batches so the
+        // DhtLookup walks deeper toward the target instead of fast-exiting
+        // after two responses. A deeper walk injects more discovered nodes
+        // into the routing table each grower tick — the table is the binding
+        // constraint on unique discovery. Bounded so a slow lookup can't
+        // hold the grower forever.
+        if let Ok(mut rx) = handle.get_peers(target).await {
+            for _ in 0..GROWER_DRAIN_BATCHES {
+                match tokio::time::timeout(
+                    Duration::from_secs(1),
+                    rx.recv(),
+                )
+                .await
+                {
+                    Ok(Some(_)) => {}
+                    _ => break,
+                }
+            }
+        }
         // Grow continuously at `interval` (250ms from crawler.rs): the routing
         // table is the binding constraint on unique discovery, so we keep the
         // table climbing toward --max-nodes at all times. The leak fixes

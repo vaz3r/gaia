@@ -29,7 +29,7 @@ services:
       # use public resolvers through the tunnel instead.
       - DNS_UPSTREAM_PLAIN_ADDRESSES=1.1.1.1:53,8.8.8.8:53
       # Allow inbound DHT queries to reach the crawler through the tunnel.
-      - FIREWALL_VPN_INPUT_PORTS=6881,6882,6883,6884
+      - FIREWALL_VPN_INPUT_PORTS=6881,6882,6883,6884,6885,6886,6887,6888
       - TZ=UTC
     healthcheck:
       # Gluetun's own health server (127.0.0.1:9999) reflects tunnel
@@ -90,7 +90,7 @@ services:
       - --port
       - "6881"
       - --instances
-      - "4"
+      - "8"
       - --min-seen
       - "1"
       - --min-seen-shadow
