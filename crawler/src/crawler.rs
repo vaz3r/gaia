@@ -13,6 +13,45 @@ use crate::net::Blocklist;
 use crate::stats::CrawlStats;
 use crate::storage::{Storage, TorrentRecord};
 
+/// Read current jemalloc heap stats (MB). `None` when the allocator isn't
+/// jemalloc or the ctl API is unavailable; the stats loop logs 0 then.
+fn jemalloc_allocator_stats() -> (u64, u64, u64, u64) {
+    use jemalloc_ctl::{epoch, stats};
+    let _ = epoch::advance();
+    let mb = |v: Option<usize>| v.map_or(0, |v| (v / (1024 * 1024)) as u64);
+    (
+        mb(stats::allocated::read().ok()),
+        mb(stats::active::read().ok()),
+        mb(stats::mapped::read().ok()),
+        mb(stats::retained::read().ok()),
+    )
+}
+
+/// Trigger a jemalloc heap profile dump (`prof.dump` mallctl). Requires the
+/// process to have been started with `MALLOC_CONF=prof:true` (and a
+/// `prof_prefix`), otherwise this is a no-op. Each dump appends a suffixed
+/// file under the configured prefix; diff two dumps with `jeprof`.
+fn jemalloc_prof_dump() {
+    use std::os::raw::{c_char, c_void};
+    unsafe {
+        // mallctl("prof.dump", NULL, NULL, NULL, 0) — null value triggers a
+        // dump to the configured prof_prefix with an auto-suffixed filename.
+        let name = c"prof.dump".as_ptr() as *const c_char;
+        let r = jemalloc_sys::mallctl(
+            name,
+            std::ptr::null_mut::<c_void>(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+        );
+        if r != 0 {
+            tracing::warn!(ret = r, "jemalloc prof.dump failed");
+        } else {
+            tracing::info!("jemalloc prof.dump written");
+        }
+    }
+}
+
 const SAMPLER_CHANNEL: usize = 8192;
 const RECORD_CHANNEL: usize = 4096;
 const STATS_INTERVAL: Duration = Duration::from_secs(30);
@@ -315,8 +354,20 @@ async fn stats_loop(
     let mut tick = tokio::time::interval(STATS_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_unique: u64 = 0;
+    // Heap profiling: when GAIA_PROF_DUMP_EVERY_TICKS is set, dump a jemalloc
+    // heap profile every N ticks (requires MALLOC_CONF=prof:true,prof_prefix).
+    let prof_every = std::env::var("GAIA_PROF_DUMP_EVERY_TICKS")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok());
+    let mut tick_count: u32 = 0;
     loop {
         tick.tick().await;
+        tick_count = tick_count.wrapping_add(1);
+        if let Some(every) = prof_every {
+            if every > 0 && tick_count.is_multiple_of(every) {
+                jemalloc_prof_dump();
+            }
+        }
         let primary = &handles[0];
         let routing = primary.node_count().await.unwrap_or(0);
         // Per-instance routing node counts so a redundant instance (one that
@@ -353,7 +404,19 @@ async fn stats_loop(
         let unique_delta = unique_now.saturating_sub(last_unique);
         let unique_per_hr = unique_delta as f64 / STATS_INTERVAL.as_secs_f64() * 3600.0;
         last_unique = unique_now;
+        // Allocator state (jemalloc): allocated = live heap bytes; active =
+        // committed-but-used pages; mapped = address space; retained = pages
+        // kept for reuse but not committed (RSS is roughly active+retained).
+        // A real leak grows `allocated`; page-retention churn grows only
+        // `mapped`/`retained`. Diagnoses whether RSS creep is a true leak or
+        // allocator behavior.
+        let (jemalloc_allocated, jemalloc_active, jemalloc_mapped, jemalloc_retained) =
+            jemalloc_allocator_stats();
         info!(
+            jemalloc_allocated = jemalloc_allocated,
+            jemalloc_active = jemalloc_active,
+            jemalloc_mapped = jemalloc_mapped,
+            jemalloc_retained = jemalloc_retained,
             routing_nodes = routing,
             instance_nodes = per_instance.join(","),
             announced_hashes = announced,

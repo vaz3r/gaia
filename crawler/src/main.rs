@@ -16,6 +16,12 @@ use tracing_subscriber::EnvFilter;
 
 use cli::{Cli, Command};
 
+// Global allocator: jemalloc. Diagnostics via MALLOC_CONF=stats_print:true
+// (dumps allocator stats on exit) — used to attribute RSS growth. The leaked
+// allocation is bounded by this allocator; its stats name the live regions.
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();

@@ -15,6 +15,9 @@ gaia-bencode = { path = "crates/gaia-bencode" }
 gaia-core = { path = "crates/gaia-core" }
 gaia-dht = { path = "crates/gaia-dht" }
 gaia-wire = { path = "crates/gaia-wire" }
+jemalloc-ctl = "0.5"
+jemalloc-sys = { version = "0.5", default-features = false }
+jemallocator = { version = "0.5", features = ["profiling", "stats"] }
 rand = "0.8"
 redis = { version = "1.5", features = ["tokio-comp", "connection-manager"] }
 rusqlite = { version = "0.40", features = ["bundled"] }

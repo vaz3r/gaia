@@ -125,6 +125,7 @@ impl IntervalMap {
 
 /// Per-node sampling quality for biasing target selection toward productive
 /// (BEP 51 capable) nodes.
+#[derive(Default)]
 struct NodeStat {
     samples: u64,
     failures: u64,
@@ -156,7 +157,7 @@ impl NodeStats {
         }
     }
 
-    fn get_mut(&mut self, addr: SocketAddr) -> &mut NodeStat {
+    fn ensure_locked(&mut self, addr: SocketAddr) {
         if !self.map.contains_key(&addr) {
             self.order.push_back(addr);
             while self.order.len() > self.cap {
@@ -164,14 +165,42 @@ impl NodeStats {
                     self.map.remove(&old);
                 }
             }
+            self.map.insert(addr, NodeStat::default());
         }
-        self.map
-            .entry(addr)
-            .or_insert(NodeStat { samples: 0, failures: 0, consecutive_stale: 0 })
     }
 
-    fn score(&self, addr: &SocketAddr) -> i64 {
+    fn score_locked(&self, addr: &SocketAddr) -> i64 {
         self.map.get(addr).map_or(0, |s| s.score())
+    }
+
+    /// Register a query round against `addr`. `total_samples` is how many
+    /// infohashes the response reported (0 = empty/stale response). Returns the
+    /// updated consecutive-stale count so the caller can graduate the backoff.
+    fn record_result_locked(&mut self, addr: SocketAddr, total_samples: usize) -> u32 {
+        self.ensure_locked(addr);
+        let stat = self.map.get_mut(&addr).expect("ensured");
+        stat.samples = stat.samples.saturating_add(total_samples as u64);
+        if total_samples == 0 {
+            stat.consecutive_stale = stat.consecutive_stale.saturating_add(1);
+            stat.failures = stat.failures.saturating_add(1);
+        } else {
+            stat.consecutive_stale = 0;
+        }
+        stat.consecutive_stale
+    }
+
+    fn record_failure_locked(&mut self, addr: SocketAddr) {
+        self.ensure_locked(addr);
+        let stat = self.map.get_mut(&addr).expect("ensured");
+        stat.failures = stat.failures.saturating_add(1);
+        stat.consecutive_stale = 0;
+    }
+
+    fn record_hang_locked(&mut self, addr: SocketAddr) {
+        self.ensure_locked(addr);
+        let stat = self.map.get_mut(&addr).expect("ensured");
+        stat.failures = stat.failures.saturating_add(1);
+        stat.consecutive_stale = 0;
     }
 }
 
@@ -245,6 +274,13 @@ impl Sampler {
 
         let max_interval = Duration::from_secs(self.cfg.max_interval_secs.max(1));
         let gate = Arc::new(QpsGate::new(self.cfg.queries_per_second));
+        // Node backoff/quality is a property of the node, not the loop. A
+        // single shared copy keeps the footprint O(table) instead of O(table ×
+        // loops): 64 loops each duplicating a per-node map caused ~130 MB of
+        // steady RSS growth as the routing table churned through distinct
+        // addrs toward the per-loop caps (8192/32768).
+        let intervals = Arc::new(std::sync::Mutex::new(IntervalMap::new(INTERVAL_MAP_CAP)));
+        let node_stats = Arc::new(std::sync::Mutex::new(NodeStats::new(NODE_STATS_CAP)));
         let mut tasks = tokio::task::JoinSet::new();
         for _ in 0..self.cfg.concurrency.max(1) {
             let mut loop_ = SamplerLoop {
@@ -252,9 +288,9 @@ impl Sampler {
                 emit: self.emit.clone(),
                 storage: self.storage.clone(),
                 stats: self.stats.clone(),
-                intervals: IntervalMap::new(INTERVAL_MAP_CAP),
+                intervals: intervals.clone(),
                 gate: gate.clone(),
-                node_stats: NodeStats::new(NODE_STATS_CAP),
+                node_stats: node_stats.clone(),
                 min_seen: self.cfg.min_seen.max(1),
                 min_seen_shadow: self.cfg.min_seen_shadow,
                 max_interval,
@@ -285,15 +321,16 @@ impl Sampler {
     }
 }
 
-/// One independent sampling loop with its own interval/cooldown state.
+/// One independent sampling loop with its own rotating cursor. Per-node state
+/// (intervals, quality) is SHARED across loops via `Arc<Mutex<...>>`.
 struct SamplerLoop {
     handle: DhtHandle,
     emit: mpsc::Sender<crate::discovery::FetchRequest>,
     storage: Storage,
     stats: Arc<CrawlStats>,
-    intervals: IntervalMap,
+    intervals: Arc<std::sync::Mutex<IntervalMap>>,
     gate: Arc<QpsGate>,
-    node_stats: NodeStats,
+    node_stats: Arc<std::sync::Mutex<NodeStats>>,
     min_seen: u32,
     min_seen_shadow: Option<u32>,
     max_interval: Duration,
@@ -324,8 +361,12 @@ impl SamplerLoop {
             let Some((target, node_addr)) =
                 pick_target(&mut self.cursor, &self.intervals, &self.node_stats, &nodes, now)
             else {
+                let ready = {
+                    let iv = self.intervals.lock().unwrap();
+                    nodes.iter().filter(|(_, a)| iv.is_ready(a, now)).count()
+                };
                 debug!(
-                    ready = nodes.iter().filter(|(_, a)| self.intervals.is_ready(a, now)).count(),
+                    ready,
                     total = nodes.len(),
                     "pick_target found no ready node"
                 );
@@ -341,9 +382,8 @@ impl SamplerLoop {
                     debug!(%node_addr, "sample_infohashes hung, timed out");
                     // A non-responsive node gets a longer backoff than a healthy
                     // 0-new node — it may be offline. Reset the stale counter.
-                    self.intervals.record(node_addr, FAIL_BACKOFF, now);
-                    self.node_stats.get_mut(node_addr).failures += 1;
-                    self.node_stats.get_mut(node_addr).consecutive_stale = 0;
+                    self.intervals.lock().unwrap().record(node_addr, FAIL_BACKOFF, now);
+                    self.node_stats.lock().unwrap().record_hang_locked(node_addr);
                     continue;
                 }
             };
@@ -351,14 +391,12 @@ impl SamplerLoop {
                 Ok(res) => {
                     let advertised = Duration::from_secs(res.interval.max(0) as u64);
                     let mut interval = advertised.min(self.max_interval);
-                    self.node_stats
-                        .get_mut(node_addr)
-                        .samples += res.samples.len() as u64;
+                    let total_samples = res.samples.len();
                     debug!(
                         %node_addr,
                         interval_secs = res.interval,
                         capped = interval.as_secs(),
-                        samples = res.samples.len(),
+                        samples = total_samples,
                         closer_nodes = res.nodes.len(),
                         "sample_infohashes ok"
                     );
@@ -377,19 +415,19 @@ impl SamplerLoop {
                     // pick up hashes soon); only after STALE_GRADUATION
                     // consecutive empties does it earn the long shelf. A
                     // response with new hashes resets the counter.
+                    let stale_count = self
+                        .node_stats
+                        .lock()
+                        .unwrap()
+                        .record_result_locked(node_addr, total_samples);
                     if new_count == 0 {
-                        let stat = self.node_stats.get_mut(node_addr);
-                        stat.consecutive_stale += 1;
-                        if stat.consecutive_stale >= STALE_GRADUATION {
+                        if stale_count >= STALE_GRADUATION {
                             interval = interval.max(STALE_LONG_BACKOFF);
                         } else {
                             interval = interval.max(STALE_BACKOFF);
                         }
-                        stat.failures += 1;
-                    } else {
-                        self.node_stats.get_mut(node_addr).consecutive_stale = 0;
                     }
-                    self.intervals.record(node_addr, interval, now);
+                    self.intervals.lock().unwrap().record(node_addr, interval, now);
                     // Response nodes were already fed back into the routing table
                     // by the DHT actor.
                 }
@@ -398,9 +436,10 @@ impl SamplerLoop {
                     // A query error (timeout/refused) gets the longer
                     // non-response backoff; reset the stale counter.
                     self.intervals
+                        .lock()
+                        .unwrap()
                         .record(node_addr, FAIL_BACKOFF, now);
-                    self.node_stats.get_mut(node_addr).failures += 1;
-                    self.node_stats.get_mut(node_addr).consecutive_stale = 0;
+                    self.node_stats.lock().unwrap().record_failure_locked(node_addr);
                 }
             }
         }
@@ -508,15 +547,17 @@ impl SamplerLoop {
 /// because every ready node is a candidate.
 fn pick_target(
     cursor: &mut usize,
-    intervals: &IntervalMap,
-    node_stats: &NodeStats,
+    intervals: &Arc<std::sync::Mutex<IntervalMap>>,
+    node_stats: &Arc<std::sync::Mutex<NodeStats>>,
     nodes: &[(Id20, SocketAddr)],
     now: Instant,
 ) -> Option<(Id20, SocketAddr)> {
     let mut rng = thread_rng();
+    let iv = intervals.lock().unwrap();
+    let ns = node_stats.lock().unwrap();
     let mut ready: Vec<(Id20, SocketAddr)> = nodes
         .iter()
-        .filter(|(_, a)| intervals.is_ready(a, now))
+        .filter(|(_, a)| iv.is_ready(a, now))
         .map(|(id, addr)| (*id, *addr))
         .collect();
     if ready.is_empty() {
@@ -533,7 +574,7 @@ fn pick_target(
     let sample = ready.iter().take(PICK_CANDIDATES);
     let mut best: Option<(i64, Id20, SocketAddr)> = None;
     for (id, addr) in sample {
-        let score = node_stats.score(addr);
+        let score = ns.score_locked(addr);
         if best.as_ref().is_none_or(|(s, _, _)| score > *s) {
             best = Some((score, *id, *addr));
         }
@@ -608,11 +649,13 @@ mod tests {
         let mut ns = NodeStats::new(16);
         let a: SocketAddr = "127.0.0.1:1".parse().unwrap();
         let b: SocketAddr = "127.0.0.1:2".parse().unwrap();
-        ns.get_mut(a).samples = 10;
-        ns.get_mut(b).failures = 3;
-        assert!(ns.score(&a) > ns.score(&b));
-        assert_eq!(ns.score(&a), 10);
-        assert_eq!(ns.score(&b), -6);
+        ns.ensure_locked(a);
+        ns.ensure_locked(b);
+        ns.map.get_mut(&a).unwrap().samples = 10;
+        ns.map.get_mut(&b).unwrap().failures = 3;
+        assert!(ns.score_locked(&a) > ns.score_locked(&b));
+        assert_eq!(ns.score_locked(&a), 10);
+        assert_eq!(ns.score_locked(&b), -6);
     }
 
     #[test]
@@ -621,9 +664,9 @@ mod tests {
         let a: SocketAddr = "127.0.0.1:1".parse().unwrap();
         let b: SocketAddr = "127.0.0.1:2".parse().unwrap();
         let c: SocketAddr = "127.0.0.1:3".parse().unwrap();
-        ns.get_mut(a);
-        ns.get_mut(b);
-        ns.get_mut(c);
+        ns.ensure_locked(a);
+        ns.ensure_locked(b);
+        ns.ensure_locked(c);
         assert!(ns.map.len() <= 2);
         assert!(!ns.map.contains_key(&a));
     }
@@ -637,7 +680,14 @@ mod tests {
         let nodes = vec![(id(1), a), (id(2), b)];
 
         intervals.record(a, Duration::from_secs(60), now);
-        let (target, addr) = pick_target(&mut 0, &intervals, &NodeStats::new(16), &nodes, now).unwrap();
+        let (target, addr) = pick_target(
+            &mut 0,
+            &Arc::new(std::sync::Mutex::new(intervals)),
+            &Arc::new(std::sync::Mutex::new(NodeStats::new(16))),
+            &nodes,
+            now,
+        )
+        .unwrap();
         assert_eq!(addr, b, "cooling node must be skipped");
         assert_eq!(target, id(2), "target must be the picked node's own ID");
     }
@@ -651,11 +701,13 @@ mod tests {
         let nodes = vec![(id(1), a), (id(2), b)];
         intervals.record(a, Duration::from_secs(60), now);
         intervals.record(b, Duration::from_secs(60), now);
-        assert!(pick_target(&mut 0, &intervals, &NodeStats::new(16), &nodes, now).is_none());
+        let iv = Arc::new(std::sync::Mutex::new(intervals));
+        let ns = Arc::new(std::sync::Mutex::new(NodeStats::new(16)));
+        assert!(pick_target(&mut 0, &iv, &ns, &nodes, now).is_none());
 
         // After the interval elapses, a node becomes selectable again.
         let later = now + Duration::from_secs(61);
-        assert!(pick_target(&mut 0, &intervals, &NodeStats::new(16), &nodes, later).is_some());
+        assert!(pick_target(&mut 0, &iv, &ns, &nodes, later).is_some());
     }
 
     #[test]
@@ -663,13 +715,22 @@ mod tests {
         let mut node_stats = NodeStats::new(16);
         let a: SocketAddr = "127.0.0.1:1".parse().unwrap();
         let b: SocketAddr = "127.0.0.1:2".parse().unwrap();
-        node_stats.get_mut(b).samples = 50;
-        node_stats.get_mut(a).failures = 5;
+        node_stats.ensure_locked(b);
+        node_stats.ensure_locked(a);
+        node_stats.map.get_mut(&b).unwrap().samples = 50;
+        node_stats.map.get_mut(&a).unwrap().failures = 5;
 
         let intervals = IntervalMap::new(16);
         let nodes = vec![(id(1), a), (id(2), b)];
         let now = Instant::now();
-        let (target, addr) = pick_target(&mut 0, &intervals, &node_stats, &nodes, now).unwrap();
+        let (target, addr) = pick_target(
+            &mut 0,
+            &Arc::new(std::sync::Mutex::new(intervals)),
+            &Arc::new(std::sync::Mutex::new(node_stats)),
+            &nodes,
+            now,
+        )
+        .unwrap();
         assert_eq!(addr, b, "productive node must be picked over penalized one");
         assert_eq!(target, id(2));
     }

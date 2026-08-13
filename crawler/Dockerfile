@@ -4,6 +4,11 @@
 FROM rust:1-slim AS builder
 WORKDIR /build
 
+# jemalloc-sys needs a C toolchain (make/cc) in the build stage.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 # Cache dependencies: copy manifests first (workspace + crawler + owned gaia-*).
 COPY Cargo.toml ./
 COPY crawler/Cargo.toml crawler/

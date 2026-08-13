@@ -76,11 +76,11 @@ services:
       - dht-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
-      # Bound glibc malloc arenas: the crawler's many short-lived per-query
-      # allocations fragment memory across arenas (observed as many ~64 MiB
-      # mmap regions + RSS creep under load). 2 arenas covers the 5 threads
-      # without the default 8x-cores arena bloat.
-      - MALLOC_ARENA_MAX=2
+      # jemalloc conf: dump allocator stats on process exit. NOTE: this
+      # jemalloc is built with the `_rjem_` prefix, so the conf env var is
+      # _RJEM_MALLOC_CONF, not MALLOC_CONF (which jemalloc ignores).
+      - _RJEM_MALLOC_CONF=stats_print:true
+      - GAIA_PROF_DUMP_EVERY_TICKS=0
     command:
       - run
       - --db
