@@ -136,12 +136,13 @@ pub async fn grow_routing(
 ) {
     /// Routing-table size above which the table is considered warm.
     const WARM_TABLE_NODES: usize = 1_500;
-    /// Slow interval once warm: sampling + announce traffic keep the table
-    /// fresh, so the grower only needs an occasional sweep. Each grower tick
-    /// spawns a full DhtLookup (64-node walk), which is the dominant source of
-    /// long-lived lookups — keeping it rare when warm bounds `active_lookups`
-    /// and the memory they hold.
-    const WARM_INTERVAL: Duration = Duration::from_secs(60);
+    /// Slow interval once warm. 5s (not 60s): the leak fixes (announce_tokens
+    /// cap, 64-node lookups, fast-exit) keep memory bounded even with a
+    /// moderate grower rate, and the table needs steady growth to keep the
+    /// distinct-node sampling pool large (~4,000 nodes is what drives high
+    /// unique discovery). A 60s interval let the table plateau at ~2,250 and
+    /// capped discovery.
+    const WARM_INTERVAL: Duration = Duration::from_secs(5);
 
     loop {
         if shutdown.is_cancelled() {

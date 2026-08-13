@@ -179,22 +179,21 @@ impl RunArgs {
     }
 
     /// Effective sampler QPS after applying the aggressive preset and `--scale`.
-    /// Capped: the sampler can only usefully query distinct nodes, bounded by
-    /// (routing table size / per-node re-query interval) ≈ ~73/sec at a 4,000-node
-    /// table. An uncapped scale here fires thousands of queries/sec against a
-    /// small ready set, each held in the actor's pending map for up to the query
-    /// timeout — the source of the `pending_queries` memory growth. 300 is ample.
+    /// Capped at 800: the sampler can only usefully query distinct nodes
+    /// (bounded by table size / re-query interval), but a ceiling below the
+    /// real query demand starved discovery after the leak fixes. 800 lets the
+    /// backoff-inversion + rotating-cursor spread reach more of the table.
     pub fn effective_sampler_qps(&self) -> usize {
         let base = if self.aggressive { 1000 } else { self.sampler_qps };
-        base.saturating_mul(self.scale()).min(300)
+        base.saturating_mul(self.scale()).min(800)
     }
 
     /// Effective sampler loops after applying the aggressive preset and `--scale`.
-    /// Capped to match the sampler QPS ceiling: more loops than qps/1 is
-    /// pointless (each loop needs its own query budget) and adds task overhead.
+    /// Capped at 64: enough loops to spread sampling across the routing table
+    /// (with the rotating cursor) without per-loop overhead dominating.
     pub fn effective_sampler_loops(&self) -> usize {
         let base = if self.aggressive { 64 } else { self.sampler_loops };
-        base.saturating_mul(self.scale()).min(32)
+        base.saturating_mul(self.scale()).min(64)
     }
 
     /// Effective concurrency after applying the aggressive preset and `--scale`.
@@ -204,13 +203,13 @@ impl RunArgs {
     }
 
     /// Effective lookup concurrency after applying the aggressive preset and `--scale`.
-    /// Capped: concurrent get_peers lookups are the main source of long-lived
-    /// DhtLookup tasks (each holds a routing walk), so an unbounded scale here
-    /// grows `active_lookups` and memory. 96 is ample given the fetch pool runs
-    /// well under capacity.
+    /// Capped at 384 (was 96): the 96 ceiling starved concurrent get_peers
+    /// lookups, capping discovery. 384 is ample for the fetch pool while the
+    /// leak fixes (64-node lookups, fast-exit, bounded announce_tokens) keep
+    /// active_lookups memory controlled.
     pub fn effective_lookup_concurrency(&self) -> usize {
         let base = if self.aggressive { 256 } else { self.lookup_concurrency };
-        base.saturating_mul(self.scale()).min(96)
+        base.saturating_mul(self.scale()).min(384)
     }
 
     /// Effective DHT QPS after applying the aggressive preset.

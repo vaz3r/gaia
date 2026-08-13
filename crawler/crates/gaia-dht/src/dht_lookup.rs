@@ -204,19 +204,28 @@ impl DhtLookup {
                 result = futures.next(), if !futures.is_empty() => {
                     match result {
                         Some((addr, Ok((sender_id, gp)))) => {
-                            // Fast-exit: if the consumer dropped the reply
-                            // channel (e.g. a routing grower that only wants
-                            // node discovery, not peers), stop injecting more
-                            // queries and wind down immediately instead of
-                            // walking the whole keyspace.
+                            // Process the response first so the routing grower
+                            // gets this node's discovered nodes injected, THEN
+                            // fast-exit if the consumer dropped the channel. If
+                            // we exit before processing, a grower (which drops
+                            // the reply immediately) would never harvest nodes.
+                            self.process_response(addr, sender_id, &gp, &mut futures);
                             if self.peer_tx.is_closed() {
                                 debug!(
                                     target = %self.target,
-                                    "DhtLookup: peer channel closed mid-response, shutting down"
+                                    "DhtLookup: peer channel closed, winding down after response"
                                 );
+                                // Bound how long a grower lookup runs: drain at
+                                // most a couple more futures before exiting, so
+                                // it harvests a few nodes without a full walk.
+                                let mut drain = 2usize;
+                                while drain > 0 && !futures.is_empty() {
+                                    if futures.next().await.is_some() {
+                                        drain -= 1;
+                                    }
+                                }
                                 break;
                             }
-                            self.process_response(addr, sender_id, &gp, &mut futures);
                         }
                         Some((addr, Err(()))) => {
                             self.mark_error(addr);
