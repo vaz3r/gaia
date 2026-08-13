@@ -10,7 +10,7 @@ mod redis;
 mod stats;
 mod storage;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
@@ -32,7 +32,28 @@ async fn main() -> Result<()> {
         }
         Command::Query(args) => query::query(args),
         Command::Purge(args) => purge::purge(&args),
+        Command::Snapshot(args) => snapshot(&args),
     }
+}
+
+/// `VACUUM INTO` online backup: a consistent, WAL-free snapshot of the live
+/// database, safe to run while the crawler writes. Used to produce a clean DB
+/// copy for offline benchmark replays (the direct tar/cp snapshot of a live
+/// WAL-mode DB is not consistent).
+fn snapshot(args: &cli::SnapshotArgs) -> Result<()> {
+    if std::path::Path::new(&args.out).exists() {
+        std::fs::remove_file(&args.out)
+            .with_context(|| format!("remove existing snapshot {}", args.out))?;
+    }
+    let conn = rusqlite::Connection::open(&args.db)
+        .with_context(|| format!("open db {}", args.db))?;
+    conn.execute_batch(&format!(
+        "VACUUM INTO '{}';",
+        args.out.replace('\'', "''")
+    ))
+    .with_context(|| format!("vacuum into {}", args.out))?;
+    tracing::info!(out = %args.out, "snapshot written");
+    Ok(())
 }
 
 fn init_tracing(log: &Option<String>) {

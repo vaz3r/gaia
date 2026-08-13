@@ -17,6 +17,21 @@ pub enum Command {
     Query(QueryArgs),
     /// Delete the database and routing state so the next run starts fresh.
     Purge(PurgeArgs),
+    /// Write a consistent snapshot of the database via `VACUUM INTO` (online
+    /// backup; safe while the crawler is running). Output is a standalone DB
+    /// with no WAL, ideal for offline benchmark/analysis replays.
+    Snapshot(SnapshotArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct SnapshotArgs {
+    /// SQLite database file path to read from.
+    #[arg(long, default_value = "crawler.sqlite")]
+    pub db: String,
+
+    /// Destination path for the snapshot.
+    #[arg(long)]
+    pub out: String,
 }
 
 #[derive(Debug, Args)]
