@@ -31,18 +31,17 @@ TMPDIR="${TMPDIR:-/tmp}/opencode"
 DB_MAIN="$TMPDIR/crawler_perf.sqlite"
 mkdir -p "$TMPDIR"
 
-# 1. Consistent snapshot (single tar stream: main DB + WAL + SHM).
+# 1. Consistent snapshot. The tar-stream of a live WAL DB races (main file
+#    pages change while the WAL is being read => "malformed"), so use the
+#    crawler's own `snapshot` command (VACUUM INTO, WAL-free, consistent).
 rm -f "$TMPDIR/crawler_perf.sqlite"*
-# A transient WAL/SHM rotation inside the live container can make the tar stream
-# end non-zero; that's fine as long as the main DB file arrived. pipefail off for
-# this snapshot so a flaky sidecar doesn't abort the whole report.
-set +o pipefail
-docker exec "$CONTAINER" tar -cf - -C /data \
-    crawler.sqlite crawler.sqlite-wal crawler.sqlite-shm 2>/dev/null \
-    | tar -xf - -C "$TMPDIR" --transform 's/crawler/crawler_perf/'
-set -o pipefail
+docker exec "$CONTAINER" crawler snapshot \
+    --db /data/crawler.sqlite --out /data/crawler_perf.sqlite >/dev/null 2>&1 \
+    || { echo "ERROR: could not snapshot $CONTAINER (is the stack up?)" >&2; exit 1; }
+docker cp "$CONTAINER:/data/crawler_perf.sqlite" "$DB_MAIN" >/dev/null 2>&1 \
+    || { echo "ERROR: could not fetch snapshot from $CONTAINER" >&2; exit 1; }
 if [[ ! -s "$DB_MAIN" ]]; then
-    echo "ERROR: could not snapshot $CONTAINER:/data/crawler.sqlite (is the stack up?)" >&2
+    echo "ERROR: snapshot is empty ($DB_MAIN)" >&2
     exit 1
 fi
 
