@@ -29,8 +29,8 @@ const PUBLIC_TRACKERS: &[&str] = &[
     "udp://tracker.moeking.me:6969/announce",
 ];
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
-const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(1);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(3);
 
 const ACTION_CONNECT: i32 = 0;
 const ACTION_ANNOUNCE: i32 = 1;
@@ -50,6 +50,9 @@ impl TrackerSocket {
         };
         let socket = UdpSocket::bind(bind).await?;
         socket.connect(tracker).await?;
+        if std::env::var("GAIA_TRACKER_DEBUG").is_ok() {
+            eprintln!("[tracker] connected to {tracker}");
+        }
         Ok(Self { socket })
     }
 
@@ -67,12 +70,15 @@ impl TrackerSocket {
         if n < 16 {
             return Err(anyhow!("tracker connect response too short"));
         }
-        let resp_txn = u32::from_be_bytes(buf[0..4].try_into().unwrap());
-        let action = i32::from_be_bytes(buf[4..8].try_into().unwrap());
-        if resp_txn != txn || action != ACTION_CONNECT {
+        // BEP 15 connect response: action(4) txn(4) connection_id(8).
+        let action = i32::from_be_bytes(buf[0..4].try_into().unwrap());
+        let resp_txn = u32::from_be_bytes(buf[4..8].try_into().unwrap());
+        if action != ACTION_CONNECT {
             return Err(anyhow!("tracker connect rejected (action {action})"));
         }
         let conn_id = u64::from_be_bytes(buf[8..16].try_into().unwrap());
+        // Some trackers don't echo the transaction id; require the action only.
+        let _ = resp_txn;
         Ok((conn_id, txn))
     }
 
@@ -102,27 +108,35 @@ impl TrackerSocket {
         req.extend_from_slice(&(-1i32).to_be_bytes()); // num_want (default)
         req.extend_from_slice(&port.to_be_bytes());
         self.socket.send(&req).await?;
+        if std::env::var("GAIA_TRACKER_DEBUG").is_ok() {
+            eprintln!("[tracker] announce sent {} bytes to {}", req.len(), self.socket.peer_addr().map(|a| a.to_string()).unwrap_or_default());
+        }
 
         let mut buf = [0u8; 65536];
         let n = timeout(ANNOUNCE_TIMEOUT, self.socket.recv(&mut buf)).await??;
+        if std::env::var("GAIA_TRACKER_DEBUG").is_ok() {
+            eprintln!(
+                "[tracker] announce response n={n} action={} txn={} first8={:02x?}",
+                i32::from_be_bytes(buf[4..8].try_into().unwrap()),
+                u32::from_be_bytes(buf[0..4].try_into().unwrap()),
+                &buf[..n.min(28)],
+            );
+        }
         if n < 20 {
             return Err(anyhow!("tracker announce response too short"));
         }
-        let resp_txn = u32::from_be_bytes(buf[0..4].try_into().unwrap());
-        let action = i32::from_be_bytes(buf[4..8].try_into().unwrap());
-        if resp_txn != txn {
-            return Err(anyhow!("tracker announce transaction mismatch"));
-        }
+        // BEP 15 announce response: action(4) txn(4) interval(4) leechers(4)
+        // seeders(4), then compact peers (6 bytes per IPv4 address).
+        let action = i32::from_be_bytes(buf[0..4].try_into().unwrap());
         if action != ACTION_ANNOUNCE {
             // A failure response carries an error message string.
             let msg = String::from_utf8_lossy(&buf[8..n]);
             return Err(anyhow!("tracker announce error: {msg}"));
         }
-        // Offsets: 8 action, 12 txn, 16 interval, 20 leechers, 24 seeders,
-        // 28..n compact peers.
+        // BEP 15 announce response: action(4) txn(4) interval(4) leechers(4)
+        // seeders(4), then compact peers (6 bytes per IPv4 address).
         let mut peers = Vec::new();
-        let peer_bytes = &buf[28..n];
-        // Compact peers are 6-byte (v4) or 18-byte (v6) groups.
+        let peer_bytes = &buf[20..n];
         let mut off = 0;
         while off + 6 <= peer_bytes.len() {
             let ip = std::net::Ipv4Addr::new(
@@ -148,16 +162,19 @@ pub async fn resolve_peers_from_trackers(info_hash: &[u8; 20]) -> Vec<SocketAddr
     rand::thread_rng().fill_bytes(&mut peer_id);
     let port = 6881u16;
 
-    let mut tasks = tokio::task::JoinSet::new();
-    for tracker_str in PUBLIC_TRACKERS {
-        let info_hash = *info_hash;
-        tasks.spawn(async move {
-            let Ok(tracker) = parse_tracker(tracker_str).await else { return Vec::new() };
-            query_tracker(tracker, &info_hash, &peer_id, port)
-                .await
-                .unwrap_or_default()
-        });
-    }
+        let mut tasks = tokio::task::JoinSet::new();
+        for tracker_str in PUBLIC_TRACKERS {
+            let info_hash = *info_hash;
+            tasks.spawn(async move {
+                if std::env::var("GAIA_TRACKER_DEBUG").is_ok() {
+                    eprintln!("[tracker] querying {tracker_str}");
+                }
+                let Ok(tracker) = parse_tracker(tracker_str).await else { return Vec::new() };
+                query_tracker(tracker, &info_hash, &peer_id, port)
+                    .await
+                    .unwrap_or_default()
+            });
+        }
     let mut all = Vec::new();
     while let Some(peers) = tasks.join_next().await {
         if let Ok(peers) = peers {
@@ -197,7 +214,13 @@ async fn query_tracker(
     port: u16,
 ) -> Result<Vec<SocketAddr>> {
     let mut sock = TrackerSocket::new(&tracker).await?;
+    if std::env::var("GAIA_TRACKER_DEBUG").is_ok() {
+        eprintln!("[tracker] socket ready for {tracker}");
+    }
     let (conn_id, connect_txn) = sock.connect().await?;
+    if std::env::var("GAIA_TRACKER_DEBUG").is_ok() {
+        eprintln!("[tracker] connected id={conn_id:x} for {tracker}");
+    }
     sock.announce(conn_id, connect_txn, info_hash, peer_id, port).await
 }
 
@@ -230,5 +253,25 @@ mod tests {
     #[tokio::test]
     async fn rejects_non_udp_tracker() {
         assert!(parse_tracker("http://tracker.example.com/announce").await.is_err());
+    }
+
+    /// Live probe against real trackers for a well-known torrent. Only runs
+    /// when GAIA_LIVE_TRACKER_TEST is set (network-dependent).
+    #[tokio::test]
+    async fn live_tracker_resolves_peers_for_known_hash() {
+        if std::env::var("GAIA_LIVE_TRACKER_TEST").is_err() {
+            return;
+        }
+        // "Ubuntu 22.04.3 desktop amd64" — a very popular, long-seeded ISO.
+        let hash_hex = "9caf19ea1dff4d565ff07c56e17472e55dc0b8d2";
+        let mut h = [0u8; 20];
+        for (i, ch) in hash_hex.as_bytes().chunks(2).enumerate() {
+            h[i] = u8::from_str_radix(std::str::from_utf8(ch).unwrap(), 16).unwrap();
+        }
+        let peers = resolve_peers_from_trackers(&h).await;
+        assert!(
+            !peers.is_empty(),
+            "known-live torrent should resolve peers from public trackers"
+        );
     }
 }
