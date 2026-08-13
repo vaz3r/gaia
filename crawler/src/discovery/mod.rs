@@ -31,6 +31,8 @@ pub enum FetchSource {
     Announced,
     /// Inbound `get_peers` — someone actively seeking the hash.
     LookedUp,
+    /// Resolved via public trackers (BEP 15 UDP announce).
+    Tracker,
 }
 
 #[derive(Debug, Clone)]

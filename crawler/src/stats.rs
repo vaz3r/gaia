@@ -63,4 +63,8 @@ pub struct CrawlStats {
     pub lookups_deduped_redis: AtomicU64,
     /// Verified torrents that entered via the get_peers (sought) path.
     pub verified_lookedup: AtomicU64,
+    /// Tracker peer resolution (crawler-conversion): how many fetches got
+    /// peers from trackers, and how many verified via a tracker-resolved peer.
+    pub tracker_resolved: AtomicU64,
+    pub verified_tracker: AtomicU64,
 }

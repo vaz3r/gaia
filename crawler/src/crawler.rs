@@ -465,6 +465,8 @@ async fn stats_loop(
             verified_announced = s.verified_announced.load(r),
             verified_sampled = s.verified_sampled.load(r),
             verified_lookedup = s.verified_lookedup.load(r),
+            verified_tracker = s.verified_tracker.load(r),
+            tracker_resolved = s.tracker_resolved.load(r),
             lookups_emitted = s.lookups_emitted.load(r),
             lookups_deduped_redis = s.lookups_deduped_redis.load(r),
             discriminator_filtered = s.discriminator_filtered.load(r),

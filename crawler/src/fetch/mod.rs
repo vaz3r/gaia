@@ -1,5 +1,6 @@
 pub mod failure;
 pub mod parse;
+pub mod tracker;
 pub mod wire;
 
 pub use failure::FetchFailureKind;
@@ -49,6 +50,9 @@ const EARLY_ABORT_DIALS: usize = 24;
 /// attempts hit dead peers — only ~1% verify), and a live peer handshake +
 /// ut_metadata exchange completes well within it.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(3);
+/// Wall-clock budget for tracker peer resolution per fetch (queries run in
+/// parallel; this bounds the worst case on the hot path).
+const TRACKER_BUDGET: Duration = Duration::from_secs(2);
 /// Grace period for in-flight fetches during shutdown before they are cancelled.
 const SHUTDOWN_DRAIN: Duration = Duration::from_secs(10);
 
@@ -376,6 +380,68 @@ async fn fetch_one(
         }
     }
 
+    // Tracker peer resolution: query a small set of public trackers for this
+    // hash (BEP 15 UDP announce). A tracker returning peers is strong evidence
+    // those peers are live (they announced themselves), so dial them first —
+    // recovering a large share of the empty_peers failures where the DHT
+    // lookup finds nobody. Trackers are queried concurrently with a 1s
+    // per-tracker timeout; the whole resolution is bounded to TRACKER_BUDGET.
+    if peer_hint.is_none() {
+        let tracker_peers = tokio::time::timeout(
+            TRACKER_BUDGET,
+            tracker::resolve_peers_from_trackers(info_hash.as_bytes()),
+        )
+        .await
+        .unwrap_or_default();
+        if !tracker_peers.is_empty() {
+            stats
+                .tracker_resolved
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            any_peers_seen = true;
+            let now = unix_secs();
+            dead_peers.lock().unwrap().prune(now);
+            let mut candidates: Vec<SocketAddr> = Vec::with_capacity(PARALLEL_DIALS);
+            for peer in tracker_peers {
+                if tried >= MAX_PEERS_PER_HASH {
+                    break;
+                }
+                if blocklist.contains(peer.ip()) {
+                    continue;
+                }
+                if dead_peers.lock().unwrap().is_dead(peer.ip(), now) {
+                    continue;
+                }
+                if shared.dead_contains(peer.ip()).await {
+                    continue;
+                }
+                if !seen_peers.insert(peer) || !dialed_ips.insert(peer.ip()) {
+                    continue;
+                }
+                candidates.push(peer);
+                tried += 1;
+                if candidates.len() >= PARALLEL_DIALS {
+                    break;
+                }
+            }
+            if let Some(meta) = dial_peers(
+                candidates,
+                info_hash,
+                peer_id,
+                deadline,
+                &mut consecutive_connect_failures,
+                &mut any_handshake,
+                &mut failure_counts,
+                stats,
+                dead_peers,
+                shared,
+            )
+            .await
+            {
+                return persist_verified(meta, info_hash, crate::discovery::FetchSource::Tracker, stats, tx).await;
+            }
+        }
+    }
+
     let mut peers = {
         let _permit = lookup_permits.acquire().await.context("lookup permit")
             .map_err(|e| FetchError { reason: e, dominant_failure: None })?;
@@ -429,114 +495,21 @@ async fn fetch_one(
             continue;
         }
 
-        let mut dials = JoinSet::new();
-        for peer in candidates {
-            dials.spawn(async move {
-                let result =
-                    tokio::time::timeout(FETCH_TIMEOUT, fetch_from_peer(peer, info_hash, peer_id))
-                        .await;
-                (peer, result)
-            });
-        }
-        while let Some(res) = dials.join_next().await {
-            if tokio::time::Instant::now() >= deadline {
-                *failure_counts.entry(FetchFailureKind::Deadline).or_insert(0) += 1;
-                break;
-            }
-            let (peer, inner) = match res {
-                Ok(v) => v,
-                Err(_) => {
-                    // JoinError (task panicked) — rare, treat as other.
-                    *failure_counts.entry(FetchFailureKind::Other).or_insert(0) += 1;
-                    stats
-                        .peer_errors_other
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    continue;
-                }
-            };
-            let now = unix_secs();
-            let meta = match inner {
-                Ok(Ok(m)) => m,
-                Ok(Err(e)) => {
-                    // The TCP connect + handshake succeeded; this peer is
-                    // reachable even though metadata failed, so the hash is
-                    // not dead. Reset the early-abort counter.
-                    consecutive_connect_failures = 0;
-                    any_handshake = true;
-                    let kind = FetchFailureKind::from_error(&e);
-                    *failure_counts.entry(kind).or_insert(0) += 1;
-                    record_peer_failure(kind, stats);
-                    debug!(%info_hash, error = %e, kind = kind.as_str(), "peer metadata fetch failed");
-                    continue;
-                }
-                Err(_elapsed) => {
-                    *failure_counts.entry(FetchFailureKind::Timeout).or_insert(0) += 1;
-                    stats
-                        .connect_timeout
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    debug!(%info_hash, "peer dial timed out");
-                    let became_dead = dead_peers.lock().unwrap().record_failure(peer.ip(), now);
-                    if became_dead {
-                        // Flag fleet-wide so other instances skip it too.
-                        shared.dead_add(peer.ip(), 600).await;
-                    }
-                    consecutive_connect_failures += 1;
-                    if !any_handshake && consecutive_connect_failures >= EARLY_ABORT_DIALS {
-                        *failure_counts.entry(FetchFailureKind::EarlyAbort).or_insert(0) += 1;
-                        stats
-                            .early_abort
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        break 'outer;
-                    }
-                    continue;
-                }
-            };
-
-            // SHA-1 must match the sampled infohash; never persist partial data.
-            if sha1_info(&meta.info_bytes) != *info_hash.as_bytes() {
-                *failure_counts.entry(FetchFailureKind::Sha1Mismatch).or_insert(0) += 1;
-                stats
-                    .sha1_mismatch
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                debug!(%info_hash, "metadata SHA-1 mismatch, rejected");
-                continue;
-            }
-            stats
-                .metadata_verified
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            record_verified(source, stats);
-
-            let extracted = match extract_metadata(&meta.info_bytes) {
-                Ok(e) => e,
-                Err(e) => {
-                    *failure_counts.entry(FetchFailureKind::ParseError).or_insert(0) += 1;
-                    stats
-                        .parse_error
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    debug!(%info_hash, error = %e, "metadata parse failed");
-                    continue;
-                }
-            };
-
-            let now = unix_secs();
-            let record = TorrentRecord {
-                info_hash: *info_hash.as_bytes(),
-                name: extracted.name.clone(),
-                size_bytes: Some(extracted.total_size),
-                file_count: Some(extracted.file_count),
-                first_seen: now,
-                last_seen: now,
-            };
-
-            tx.send(record).await.context("storage channel closed")
-                .map_err(|e| FetchError { reason: e, dominant_failure: None })?;
-            stats
-                .records_persisted
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return Ok(FetchOutcome::Accepted {
-                info_bytes: meta.info_bytes,
-                raw_name: extracted.name,
-            });
+        if let Some(meta) = dial_peers(
+            candidates,
+            info_hash,
+            peer_id,
+            deadline,
+            &mut consecutive_connect_failures,
+            &mut any_handshake,
+            &mut failure_counts,
+            stats,
+            dead_peers,
+            shared,
+        )
+        .await
+        {
+            return persist_verified(meta, info_hash, source, stats, tx).await;
         }
     }
 
@@ -557,6 +530,137 @@ async fn fetch_one(
     })
 }
 
+/// Dial a batch of candidate peers in parallel and return verified metadata on
+/// the first success. Mirrors the in-loop dial logic so tracker-resolved peers
+/// and DHT-discovered peers use the same path. Returns `Ok(Some(meta))` when a
+/// peer yielded SHA-1-verified metadata (the caller persists it).
+#[allow(clippy::too_many_arguments)]
+async fn dial_peers(
+    batch: Vec<SocketAddr>,
+    info_hash: Id20,
+    peer_id: Id20,
+    deadline: tokio::time::Instant,
+    consecutive_connect_failures: &mut usize,
+    any_handshake: &mut bool,
+    failure_counts: &mut HashMap<FetchFailureKind, u32>,
+    stats: &CrawlStats,
+    dead_peers: &Arc<Mutex<DeadPeerCache>>,
+    shared: &crate::redis::SharedState,
+) -> Option<crate::fetch::wire::FetchedMetadata> {
+    let mut dials = JoinSet::new();
+    for peer in batch {
+        dials.spawn(async move {
+            let result =
+                tokio::time::timeout(FETCH_TIMEOUT, fetch_from_peer(peer, info_hash, peer_id))
+                    .await;
+            (peer, result)
+        });
+    }
+    while let Some(res) = dials.join_next().await {
+        if tokio::time::Instant::now() >= deadline {
+            *failure_counts.entry(FetchFailureKind::Deadline).or_insert(0) += 1;
+            break;
+        }
+        let (peer, inner) = match res {
+            Ok(v) => v,
+            Err(_) => {
+                // JoinError (task panicked) — rare, treat as other.
+                *failure_counts.entry(FetchFailureKind::Other).or_insert(0) += 1;
+                stats
+                    .peer_errors_other
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
+        };
+        let now = unix_secs();
+        let meta = match inner {
+            Ok(Ok(m)) => m,
+            Ok(Err(e)) => {
+                // The TCP connect + handshake succeeded; this peer is
+                // reachable even though metadata failed, so the hash is
+                // not dead. Reset the early-abort counter.
+                *consecutive_connect_failures = 0;
+                *any_handshake = true;
+                let kind = FetchFailureKind::from_error(&e);
+                *failure_counts.entry(kind).or_insert(0) += 1;
+                record_peer_failure(kind, stats);
+                debug!(%info_hash, error = %e, kind = kind.as_str(), "peer metadata fetch failed");
+                continue;
+            }
+            Err(_elapsed) => {
+                *failure_counts.entry(FetchFailureKind::Timeout).or_insert(0) += 1;
+                stats
+                    .connect_timeout
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                debug!(%info_hash, "peer dial timed out");
+                let became_dead = dead_peers.lock().unwrap().record_failure(peer.ip(), now);
+                if became_dead {
+                    // Flag fleet-wide so other instances skip it too.
+                    shared.dead_add(peer.ip(), 600).await;
+                }
+                *consecutive_connect_failures += 1;
+                if !*any_handshake && *consecutive_connect_failures >= EARLY_ABORT_DIALS {
+                    *failure_counts.entry(FetchFailureKind::EarlyAbort).or_insert(0) += 1;
+                    stats
+                        .early_abort
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return None;
+                }
+                continue;
+            }
+        };
+
+        // SHA-1 must match the sampled infohash; never persist partial data.
+        if sha1_info(&meta.info_bytes) != *info_hash.as_bytes() {
+            *failure_counts.entry(FetchFailureKind::Sha1Mismatch).or_insert(0) += 1;
+            stats
+                .sha1_mismatch
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            debug!(%info_hash, "metadata SHA-1 mismatch, rejected");
+            continue;
+        }
+        return Some(meta);
+    }
+    None
+}
+
+/// Persist a verified metadata blob as a torrent record.
+async fn persist_verified(
+    meta: crate::fetch::wire::FetchedMetadata,
+    info_hash: Id20,
+    source: FetchSource,
+    stats: &CrawlStats,
+    tx: mpsc::Sender<TorrentRecord>,
+) -> Result<FetchOutcome, FetchError> {
+    stats
+        .metadata_verified
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    record_verified(source, stats);
+
+    let extracted = extract_metadata(&meta.info_bytes).map_err(|e| FetchError {
+        reason: e,
+        dominant_failure: Some(FetchFailureKind::ParseError.as_str().to_string()),
+    })?;
+    let now = unix_secs();
+    let record = TorrentRecord {
+        info_hash: *info_hash.as_bytes(),
+        name: extracted.name.clone(),
+        size_bytes: Some(extracted.total_size),
+        file_count: Some(extracted.file_count),
+        first_seen: now,
+        last_seen: now,
+    };
+    tx.send(record).await.context("storage channel closed")
+        .map_err(|e| FetchError { reason: e, dominant_failure: None })?;
+    stats
+        .records_persisted
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Ok(FetchOutcome::Accepted {
+        info_bytes: meta.info_bytes,
+        raw_name: extracted.name,
+    })
+}
+
 /// Record a verified torrent into the total + per-source counters.
 fn record_verified(source: FetchSource, stats: &CrawlStats) {
     use crate::discovery::FetchSource as S;
@@ -565,6 +669,7 @@ fn record_verified(source: FetchSource, stats: &CrawlStats) {
         S::Announced => stats.verified_announced.fetch_add(1, rel),
         S::LookedUp => stats.verified_lookedup.fetch_add(1, rel),
         S::Sampled => stats.verified_sampled.fetch_add(1, rel),
+        S::Tracker => stats.verified_tracker.fetch_add(1, rel),
     };
 }
 
