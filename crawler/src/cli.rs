@@ -21,6 +21,10 @@ pub enum Command {
     /// backup; safe while the crawler is running). Output is a standalone DB
     /// with no WAL, ideal for offline benchmark/analysis replays.
     Snapshot(SnapshotArgs),
+    /// Replay a fetch/peer-resolution strategy against a DB snapshot: sample
+    /// hashes by their recorded outcome and measure peers-found / verified
+    /// without a full deploy cycle.
+    BenchFetch(BenchFetchArgs),
 }
 
 #[derive(Debug, Args)]
@@ -32,6 +36,31 @@ pub struct SnapshotArgs {
     /// Destination path for the snapshot.
     #[arg(long)]
     pub out: String,
+}
+
+#[derive(Debug, Args)]
+pub struct BenchFetchArgs {
+    /// SQLite snapshot path to sample from.
+    #[arg(long)]
+    pub db: String,
+
+    /// Number of hashes to sample per outcome class.
+    #[arg(long, default_value_t = 50)]
+    pub sample: usize,
+
+    /// Which outcome class to sample. One of: empty_peers, timeout, other,
+    /// deadline, ok, all. "ok" samples previously-verified hashes (control).
+    #[arg(long, default_value = "empty_peers")]
+    pub class: String,
+
+    /// If set, dial tracker-resolved peers and attempt metadata verification
+    /// (network-bound). If unset, only measures tracker peer resolution.
+    #[arg(long)]
+    pub verify: bool,
+
+    /// Concurrency for the benchmark probes.
+    #[arg(long, default_value_t = 16)]
+    pub concurrency: usize,
 }
 
 #[derive(Debug, Args)]

@@ -1,3 +1,4 @@
+mod bench;
 mod cli;
 mod bloom;
 mod crawler;
@@ -33,6 +34,7 @@ async fn main() -> Result<()> {
         Command::Query(args) => query::query(args),
         Command::Purge(args) => purge::purge(&args),
         Command::Snapshot(args) => snapshot(&args),
+        Command::BenchFetch(args) => bench::run(&args).await,
     }
 }
 
