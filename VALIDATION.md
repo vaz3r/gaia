@@ -78,6 +78,14 @@ WAL-free, consistent while running). Current snapshot ~4M scans.
 - **Conclusion: min-seen MUST stay 1.** Verified comes from single-sighting
   hashes. This is now proven twice (cold + warm), so the gate is not re-tried.
 
+### F10 — Table growth is the discovery lever (in progress)
+- 8 instances, tables re-filling after the min-seen experiment (2,183 and
+  climbing ~384/hr). unique/hr ~390-540k and rising with table size.
+- Hypothesis: unique/hr scales with total table nodes (superlinearly: 2k
+  nodes -> ~90k, 4k -> ~500k). If tables reach 8192, unique -> ~2M and
+  verified should scale toward ~800/hr. Verifying over the next hours.
+- fetch pool never saturates (573-1011/1536, queue ~0) — not the constraint.
+
 ## Strategy status
 
 | Strategy | Peers found (empty_peers) | Verifies | Production impact |
