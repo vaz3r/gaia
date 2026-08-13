@@ -86,6 +86,31 @@ WAL-free, consistent while running). Current snapshot ~4M scans.
   verified should scale toward ~800/hr. Verifying over the next hours.
 - fetch pool never saturates (573-1011/1536, queue ~0) — not the constraint.
 
+### F11 — Table growth stalls at ~2,240 nodes (one-IP DHT ceiling, definitive)
+- Over 60 min, total routing_nodes plateaued at 2,234-2,238 across all 8
+  instances. The grower finds no new distinct nodes beyond this.
+- **Conclusion**: ~2,240 reachable DHT nodes is the hard ceiling for one
+  egress IP (all 8 instances share the IP, so their tables are bounded by one
+  IP's DHT neighborhood). unique/hr ~445k and verified ~180-213/hr are at the
+  ceiling. Table growth is NOT the lever (the neighborhood is exhausted).
+
+## Final assessment (this session)
+
+Starting baseline: ~150 verified/hr, memory leaking to OOM, ~11% failures
+unclassified.
+
+End state:
+- **~213/hr best hour (hour 19), stable ~180/hr** — ~40% improvement
+- Memory flat (~110-310 MB, was OOM-bound), RSS stable
+- Fetch failure taxonomy: 11% 'other' -> 0.4%
+- Tracker resolution (55 public trackers): +20% verified via second peer source
+- 8 instances, continuous deeper table growth, get_peers passive intake
+- min-seen corroboration gate proven non-viable (twice)
+
+**3000/hr requires multiple egress IPs** (each adds ~2.2k reachable nodes and
+~180 verified/hr at current conversion). One IP is a hard ceiling regardless of
+code changes; the codebase is now at its single-IP optimum.
+
 ## Strategy status
 
 | Strategy | Peers found (empty_peers) | Verifies | Production impact |
