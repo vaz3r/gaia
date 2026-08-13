@@ -238,6 +238,12 @@ pub struct DhtStats {
     pub total_responses_received: u64,
     /// Number of BEP 44 items stored (immutable + mutable).
     pub dht_item_count: usize,
+    /// Passive-intake funnel: inbound `announce_peer` queries received.
+    pub announces_received: u64,
+    /// Passive-intake funnel: announces rejected on token validation.
+    pub announces_token_rejected: u64,
+    /// Passive-intake funnel: announces suppressed by read-only mode.
+    pub announces_suppressed_readonly: u64,
 }
 
 /// Result of a `sample_infohashes` query (BEP 51).
@@ -787,6 +793,11 @@ struct DhtActor {
 struct ActorStats {
     total_queries_sent: u64,
     total_responses_received: u64,
+    /// Passive-intake funnel (crawler-conversion Phase 2): inbound announce
+    /// counts at each gate so the app can see where announces are lost.
+    announces_received: u64,
+    announces_token_rejected: u64,
+    announces_suppressed_readonly: u64,
 }
 
 /// A pending KRPC query awaiting a response.
@@ -934,6 +945,9 @@ impl DhtActor {
             stats: ActorStats {
                 total_queries_sent: 0,
                 total_responses_received: 0,
+                announces_received: 0,
+                announces_token_rejected: 0,
+                announces_suppressed_readonly: 0,
             },
             announce_tokens: HashMap::new(),
             announce_token_order: std::collections::VecDeque::new(),
@@ -1425,8 +1439,10 @@ impl DhtActor {
                 implied_port,
                 token,
             } => {
+                self.stats.announces_received += 1;
                 let ip = addr.ip();
                 if !self.peer_store.validate_token(token, &ip) {
+                    self.stats.announces_token_rejected += 1;
                     // Send error response for invalid token
                     let err_msg = KrpcMessage {
                         transaction_id: msg.transaction_id,
@@ -3109,6 +3125,9 @@ impl DhtActor {
             total_queries_sent: self.stats.total_queries_sent,
             total_responses_received: self.stats.total_responses_received,
             dht_item_count: immutable + mutable,
+            announces_received: self.stats.announces_received,
+            announces_token_rejected: self.stats.announces_token_rejected,
+            announces_suppressed_readonly: self.stats.announces_suppressed_readonly,
         }
     }
 }

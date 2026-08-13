@@ -187,10 +187,16 @@ pub async fn run_passive_intake(
                 };
                 // Best-effort fleet dedup; a Redis miss lets the hash through.
                 if shared.seen_contains(info_hash.as_bytes()).await {
+                    stats
+                        .announces_deduped_redis
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     continue;
                 }
                 stats
                     .hashes_announced
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                stats
+                    .announces_emitted
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if emit
                     .send(FetchRequest {

@@ -7,6 +7,9 @@ pub struct CrawlStats {
     pub hashes_unique: AtomicU64,
     /// Fetch requests emitted by the passive announce-intake path.
     pub hashes_announced: AtomicU64,
+    /// Passive-intake funnel (crawler-conversion Phase 2).
+    pub announces_deduped_redis: AtomicU64,
+    pub announces_emitted: AtomicU64,
     /// Shadow-mode liveness gate: hashes that reached the shadow threshold
     /// (would be emitted under `--min-seen-shadow`).
     pub shadow_emitted: AtomicU64,
@@ -44,4 +47,8 @@ pub struct CrawlStats {
     pub fetch_deadline: AtomicU64,
     pub early_abort: AtomicU64,
     pub peer_errors_other: AtomicU64,
+    /// Granular failure taxonomy (crawler-conversion Phase 1).
+    pub connection_reset: AtomicU64,
+    pub connection_closed: AtomicU64,
+    pub parse_error: AtomicU64,
 }

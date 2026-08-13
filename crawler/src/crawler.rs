@@ -395,6 +395,19 @@ async fn stats_loop(
             .await
             .map(|s| (s.active_lookups, s.announce_tokens, s.pending_queries))
             .unwrap_or((0, 0, 0));
+        // Passive-intake funnel: where inbound announces are lost (received →
+        // token-rejected → emitted) so the dry-firehose question is answerable.
+        let (announces_received, announces_token_rejected, announces_suppressed_readonly) = primary
+            .stats()
+            .await
+            .map(|s| {
+                (
+                    s.announces_received,
+                    s.announces_token_rejected,
+                    s.announces_suppressed_readonly,
+                )
+            })
+            .unwrap_or((0, 0, 0));
         let s = &stats;
         let r = std::sync::atomic::Ordering::Relaxed;
         // Unique-hash discovery rate over the last tick (unique/hr) so the
@@ -423,6 +436,11 @@ async fn stats_loop(
             active_lookups = active_lookups,
             announce_tokens = announce_tokens,
             pending_queries = pending_queries,
+            announces_received = announces_received,
+            announces_token_rejected = announces_token_rejected,
+            announces_suppressed_readonly = announces_suppressed_readonly,
+            announces_deduped_redis = s.announces_deduped_redis.load(r),
+            announces_emitted = s.announces_emitted.load(r),
             hashes_sampled = s.hashes_sampled.load(r),
             hashes_unique = unique_now,
             unique_per_hr = format!("{unique_per_hr:.1}"),
@@ -446,9 +464,12 @@ async fn stats_loop(
         info!(
             connect_timeout = s.connect_timeout.load(r),
             connect_refused = s.connect_refused.load(r),
+            connection_reset = s.connection_reset.load(r),
+            connection_closed = s.connection_closed.load(r),
             no_bep10 = s.no_bep10.load(r),
             no_ut_metadata = s.no_ut_metadata.load(r),
             metadata_rejected = s.metadata_rejected.load(r),
+            parse_error = s.parse_error.load(r),
             sha1_mismatch = s.sha1_mismatch.load(r),
             empty_peers = s.empty_peers.load(r),
             fetch_deadline = s.fetch_deadline.load(r),

@@ -1,5 +1,8 @@
+pub mod failure;
 pub mod parse;
 pub mod wire;
+
+pub use failure::FetchFailureKind;
 
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
@@ -313,7 +316,7 @@ async fn fetch_one(
     let mut seen_peers: HashSet<SocketAddr> = HashSet::new();
     let mut dialed_ips: HashSet<IpAddr> = HashSet::new();
     let mut any_peers_seen = false;
-    let mut failure_counts: HashMap<&'static str, u32> = HashMap::new();
+    let mut failure_counts: HashMap<FetchFailureKind, u32> = HashMap::new();
     // Counts dials that failed to connect or handshake. If this reaches
     // EARLY_ABORT_DIALS before any successful handshake, the hash is dead.
     let mut consecutive_connect_failures = 0usize;
@@ -363,7 +366,7 @@ async fn fetch_one(
                         });
                     }
                 } else {
-                    *failure_counts.entry("sha1_mismatch").or_insert(0) += 1;
+                    *failure_counts.entry(FetchFailureKind::Sha1Mismatch).or_insert(0) += 1;
                 }
             }
         }
@@ -385,7 +388,7 @@ async fn fetch_one(
             Err(_elapsed) => break,       // no batch arrived in time → stall
         };
         if tokio::time::Instant::now() >= deadline {
-            *failure_counts.entry("deadline").or_insert(0) += 1;
+            *failure_counts.entry(FetchFailureKind::Deadline).or_insert(0) += 1;
             break;
         }
         if !batch.is_empty() {
@@ -433,13 +436,14 @@ async fn fetch_one(
         }
         while let Some(res) = dials.join_next().await {
             if tokio::time::Instant::now() >= deadline {
-                *failure_counts.entry("deadline").or_insert(0) += 1;
+                *failure_counts.entry(FetchFailureKind::Deadline).or_insert(0) += 1;
                 break;
             }
             let (peer, inner) = match res {
                 Ok(v) => v,
                 Err(_) => {
-                    *failure_counts.entry("other").or_insert(0) += 1;
+                    // JoinError (task panicked) — rare, treat as other.
+                    *failure_counts.entry(FetchFailureKind::Other).or_insert(0) += 1;
                     stats
                         .peer_errors_other
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -455,14 +459,14 @@ async fn fetch_one(
                     // not dead. Reset the early-abort counter.
                     consecutive_connect_failures = 0;
                     any_handshake = true;
-                    let key = classify_error(&e);
-                    *failure_counts.entry(key).or_insert(0) += 1;
-                    classify_peer_error(&e, stats);
-                    debug!(%info_hash, error = %e, "peer metadata fetch failed");
+                    let kind = FetchFailureKind::from_error(&e);
+                    *failure_counts.entry(kind).or_insert(0) += 1;
+                    record_peer_failure(kind, stats);
+                    debug!(%info_hash, error = %e, kind = kind.as_str(), "peer metadata fetch failed");
                     continue;
                 }
                 Err(_elapsed) => {
-                    *failure_counts.entry("timeout").or_insert(0) += 1;
+                    *failure_counts.entry(FetchFailureKind::Timeout).or_insert(0) += 1;
                     stats
                         .connect_timeout
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -474,7 +478,7 @@ async fn fetch_one(
                     }
                     consecutive_connect_failures += 1;
                     if !any_handshake && consecutive_connect_failures >= EARLY_ABORT_DIALS {
-                        *failure_counts.entry("early_abort").or_insert(0) += 1;
+                        *failure_counts.entry(FetchFailureKind::EarlyAbort).or_insert(0) += 1;
                         stats
                             .early_abort
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -486,7 +490,10 @@ async fn fetch_one(
 
             // SHA-1 must match the sampled infohash; never persist partial data.
             if sha1_info(&meta.info_bytes) != *info_hash.as_bytes() {
-                *failure_counts.entry("sha1_mismatch").or_insert(0) += 1;
+                *failure_counts.entry(FetchFailureKind::Sha1Mismatch).or_insert(0) += 1;
+                stats
+                    .sha1_mismatch
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 debug!(%info_hash, "metadata SHA-1 mismatch, rejected");
                 continue;
             }
@@ -497,7 +504,10 @@ async fn fetch_one(
             let extracted = match extract_metadata(&meta.info_bytes) {
                 Ok(e) => e,
                 Err(e) => {
-                    *failure_counts.entry("parse_failed").or_insert(0) += 1;
+                    *failure_counts.entry(FetchFailureKind::ParseError).or_insert(0) += 1;
+                    stats
+                        .parse_error
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     debug!(%info_hash, error = %e, "metadata parse failed");
                     continue;
                 }
@@ -526,7 +536,7 @@ async fn fetch_one(
     }
 
     if !any_peers_seen {
-        *failure_counts.entry("empty_peers").or_insert(0) += 1;
+        *failure_counts.entry(FetchFailureKind::EmptyPeers).or_insert(0) += 1;
         stats
             .empty_peers
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -534,12 +544,33 @@ async fn fetch_one(
 
     let dominant = failure_counts.iter()
         .max_by_key(|(_, count)| **count)
-        .map(|(reason, _)| reason.to_string());
+        .map(|(reason, _)| reason.as_str().to_string());
 
     Err(FetchError {
         reason: anyhow!("no reachable peer yielded verified metadata"),
         dominant_failure: dominant,
     })
+}
+
+/// Record a classified peer failure into the per-kind diagnostic counters.
+fn record_peer_failure(kind: FetchFailureKind, stats: &CrawlStats) {
+    use FetchFailureKind as K;
+    let rel = std::sync::atomic::Ordering::Relaxed;
+    match kind {
+        K::Timeout => stats.connect_timeout.fetch_add(1, rel),
+        K::ConnectRefused => stats.connect_refused.fetch_add(1, rel),
+        K::ConnectionReset => stats.connection_reset.fetch_add(1, rel),
+        K::ConnectionClosed => stats.connection_closed.fetch_add(1, rel),
+        K::HandshakeFailed => stats.no_bep10.fetch_add(1, rel),
+        K::NoUtMetadata => stats.no_ut_metadata.fetch_add(1, rel),
+        K::MetadataRejected => stats.metadata_rejected.fetch_add(1, rel),
+        K::ParseError => stats.parse_error.fetch_add(1, rel),
+        K::Sha1Mismatch => stats.sha1_mismatch.fetch_add(1, rel),
+        K::EarlyAbort => stats.early_abort.fetch_add(1, rel),
+        K::Deadline => stats.fetch_deadline.fetch_add(1, rel),
+        K::EmptyPeers => stats.empty_peers.fetch_add(1, rel),
+        K::Other => stats.peer_errors_other.fetch_add(1, rel),
+    };
 }
 
 fn random_peer_id() -> Id20 {
@@ -553,47 +584,6 @@ fn unix_secs() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
-}
-
-/// Classify a peer fetch error into a static category string for per-hash tracking.
-fn classify_error(e: &anyhow::Error) -> &'static str {
-    let msg = e.to_string();
-    if msg.contains("timed out") || msg.contains("timeout") {
-        "timeout"
-    } else if msg.contains("Connection refused") {
-        "connect_refused"
-    } else if msg.contains("does not support BEP 10") {
-        "no_bep10"
-    } else if msg.contains("does not advertise ut_metadata") {
-        "no_ut_metadata"
-    } else if msg.contains("rejected metadata piece") {
-        "metadata_rejected"
-    } else if msg.contains("SHA-1 mismatch") {
-        "sha1_mismatch"
-    } else {
-        "other"
-    }
-}
-
-/// Classify a peer fetch error into a diagnostic counter.
-fn classify_peer_error(e: &anyhow::Error, stats: &CrawlStats) {
-    let msg = e.to_string();
-    let rel = std::sync::atomic::Ordering::Relaxed;
-    if msg.contains("timed out") || msg.contains("timeout") {
-        stats.connect_timeout.fetch_add(1, rel);
-    } else if msg.contains("Connection refused") {
-        stats.connect_refused.fetch_add(1, rel);
-    } else if msg.contains("does not support BEP 10") {
-        stats.no_bep10.fetch_add(1, rel);
-    } else if msg.contains("does not advertise ut_metadata") {
-        stats.no_ut_metadata.fetch_add(1, rel);
-    } else if msg.contains("rejected metadata piece") {
-        stats.metadata_rejected.fetch_add(1, rel);
-    } else if msg.contains("SHA-1 mismatch") {
-        stats.sha1_mismatch.fetch_add(1, rel);
-    } else {
-        stats.peer_errors_other.fetch_add(1, rel);
-    }
 }
 
 #[cfg(test)]
