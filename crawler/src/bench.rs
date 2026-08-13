@@ -151,7 +151,8 @@ async fn probe_one(hash: [u8; 20], verify: bool, stats: &Arc<BenchStats>) {
     let peer_id = Id20(peer_id_bytes);
     let mut tasks = tokio::task::JoinSet::new();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    for peer in peers.iter().take(8) {
+    let dial_n = std::env::var("BENCH_DIAL").ok().and_then(|s| s.parse().ok()).unwrap_or(8);
+    for peer in peers.iter().take(dial_n) {
         let peer = *peer;
         let tx = tx.clone();
         tasks.spawn(async move {

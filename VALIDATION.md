@@ -52,6 +52,22 @@ WAL-free, consistent while running). Current snapshot ~4M scans.
   anywhere). Peer-resolution strategy cannot recover them; the tracker gain in
   production comes from giving *live* hashes a second peer source.
 
+### F6 — Dial depth doesn't help (bench, ok class)
+- Dialing 4 tracker peers: ~10% verified. Dialing 16: ~3.3% (the extra dials
+  burn the fetch deadline before the good peer is reached). PARALLEL_DIALS=4
+  + short deadline is near-optimal; more dials per hash is not a lever.
+
+### F7 — Discovery is table-bound, not QPS-bound (8 instances)
+- Aggregate sampling ~520-665/s and climbing, well under the 8x800=6400 qps
+  possible. Each instance's ~1k-node table feeds ~80 samples/s. Raising the
+  QPS cap won't help; continuous table growth is the only discovery lever and
+  it's already running.
+
+### F8 — Production trend: ~213/hr best hour (up from ~150)
+- Hour 19 = 213 verified (8 instances + expanded trackers + continuous growth),
+  vs ~150/hr baseline before this session's work. ~40% improvement.
+- Tracker path contributes ~20% of verified now (verified_tracker climbing).
+
 ## Strategy status
 
 | Strategy | Peers found (empty_peers) | Verifies | Production impact |
