@@ -201,11 +201,13 @@ pub async fn run_fetcher(
                 let shared = cfg.shared.clone();
                 let peer_hint = req.peer_hint;
                 let source = req.source;
+                let lookup_seed = req.lookup_seed;
                 tasks.spawn(async move {
                     let outcome = fetch_one(
                         req.hash,
                         peer_hint,
                         source,
+                        lookup_seed,
                         handle,
                         tx,
                         peer_id,
@@ -305,6 +307,7 @@ async fn fetch_one(
     info_hash: Id20,
     peer_hint: Option<SocketAddr>,
     source: FetchSource,
+    lookup_seed: Option<SocketAddr>,
     handle: DhtHandle,
     tx: mpsc::Sender<TorrentRecord>,
     peer_id: Id20,
@@ -376,7 +379,7 @@ async fn fetch_one(
     let mut peers = {
         let _permit = lookup_permits.acquire().await.context("lookup permit")
             .map_err(|e| FetchError { reason: e, dominant_failure: None })?;
-        handle.get_peers(info_hash).await.context("get_peers failed")
+        handle.get_peers_seeded(info_hash, lookup_seed).await.context("get_peers failed")
             .map_err(|e| FetchError { reason: e, dominant_failure: None })?
     };
 
@@ -621,6 +624,7 @@ mod tests {
             occurrences: 10,
             peer_hint: None,
             source: crate::discovery::FetchSource::Sampled,
+            lookup_seed: None,
         });
         // ...and a hinted announce with a single occurrence.
         q.push(FetchRequest {
@@ -628,6 +632,7 @@ mod tests {
             occurrences: 1,
             peer_hint: Some(addr(2)),
             source: crate::discovery::FetchSource::Announced,
+            lookup_seed: None,
         });
         let first = q.pop().expect("a request");
         assert_eq!(first.hash, hash(2), "hinted announce must pop before sampled");
@@ -642,6 +647,7 @@ mod tests {
             occurrences: 5,
             peer_hint: None,
             source: crate::discovery::FetchSource::Sampled,
+            lookup_seed: None,
         });
         // A later announce for the same hash adds the hint.
         q.push(FetchRequest {
@@ -649,6 +655,7 @@ mod tests {
             occurrences: 5,
             peer_hint: Some(addr(1)),
             source: crate::discovery::FetchSource::Announced,
+            lookup_seed: None,
         });
         let got = q.pop().expect("a request");
         assert_eq!(got.hash, hash(1));
@@ -663,6 +670,7 @@ mod tests {
             occurrences: 7,
             peer_hint: None,
             source: crate::discovery::FetchSource::Sampled,
+            lookup_seed: None,
         });
         // A lower occurrence report must be ignored.
         q.push(FetchRequest {
@@ -670,6 +678,7 @@ mod tests {
             occurrences: 3,
             peer_hint: Some(addr(1)),
             source: crate::discovery::FetchSource::Announced,
+            lookup_seed: None,
         });
         let got = q.pop().expect("a request");
         assert_eq!(got.occurrences, 7);

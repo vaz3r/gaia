@@ -411,8 +411,9 @@ impl SamplerLoop {
                     let mut new_count = 0u32;
                     for sample in res.samples {
                         // `target` is the sampled node's own ID — the source of
-                        // this report for the liveness counter.
-                        match self.emit_sample(sample, target).await {
+                        // this report for the liveness counter; `node_addr` is
+                        // the reporting node, used as a fetch lookup seed.
+                        match self.emit_sample(sample, target, node_addr).await {
                             EmitOutcome::Shutdown => return,
                             EmitOutcome::Repeat => {}
                             EmitOutcome::New => new_count += 1,
@@ -457,7 +458,7 @@ impl SamplerLoop {
     /// pre-filter, and shared fleet dedup. `source` is the DHT node ID that
     /// reported `hash`. Reports whether the hash was new to the liveness
     /// counter. `EmitOutcome::Shutdown` means the pipeline is shut down.
-    async fn emit_sample(&mut self, hash: Id20, source: Id20) -> EmitOutcome {
+    async fn emit_sample(&mut self, hash: Id20, source: Id20, report_addr: SocketAddr) -> EmitOutcome {
         self.stats
             .hashes_sampled
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -547,6 +548,7 @@ impl SamplerLoop {
                 occurrences: distinct,
                 peer_hint: None,
                 source: crate::discovery::FetchSource::Sampled,
+                lookup_seed: Some(report_addr),
             })
             .await
             .is_ok();

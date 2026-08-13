@@ -39,6 +39,11 @@ pub struct FetchRequest {
     pub occurrences: u32,
     pub peer_hint: Option<SocketAddr>,
     pub source: FetchSource,
+    /// A DHT node known to hold this hash (the BEP 51 reporting node). The
+    /// fetch seeds its get_peers lookup with this node so the lookup reaches
+    /// the node that proved it has the hash — recovering the ~49% empty_peers
+    /// failures where the keyspace-closest lookup misses the reporting node.
+    pub lookup_seed: Option<SocketAddr>,
 }
 
 /// Load known-live nodes from a persisted routing table (`dht_state.json`)
@@ -145,16 +150,6 @@ pub async fn grow_routing(
     interval: Duration,
     shutdown: CancellationToken,
 ) {
-    /// Routing-table size above which the table is considered warm.
-    const WARM_TABLE_NODES: usize = 1_500;
-    /// Slow interval once warm. 5s (not 60s): the leak fixes (announce_tokens
-    /// cap, 64-node lookups, fast-exit) keep memory bounded even with a
-    /// moderate grower rate, and the table needs steady growth to keep the
-    /// distinct-node sampling pool large (~4,000 nodes is what drives high
-    /// unique discovery). A 60s interval let the table plateau at ~2,250 and
-    /// capped discovery.
-    const WARM_INTERVAL: Duration = Duration::from_secs(5);
-
     loop {
         if shutdown.is_cancelled() {
             return;
@@ -166,8 +161,12 @@ pub async fn grow_routing(
         // table. Drop the receiver immediately (the lookup fast-exits when the
         // channel closes, so it winds down instead of walking the keyspace).
         let _ = handle.get_peers(target).await;
-        let warm = handle.node_count().await.unwrap_or(0) >= WARM_TABLE_NODES;
-        tokio::time::sleep(if warm { WARM_INTERVAL } else { interval }).await;
+        // Grow continuously at `interval` (250ms from crawler.rs): the routing
+        // table is the binding constraint on unique discovery, so we keep the
+        // table climbing toward --max-nodes at all times. The leak fixes
+        // (shared sampler maps, bounded announce_tokens, fast-exit lookups)
+        // keep memory flat even at a sustained grow rate.
+        tokio::time::sleep(interval).await;
     }
 }
 
@@ -218,6 +217,7 @@ pub async fn run_passive_intake(
                                 occurrences: 1,
                                 peer_hint: Some(peer_addr),
                                 source: FetchSource::Announced,
+                                lookup_seed: None,
                             })
                             .await
                             .is_err()
@@ -247,6 +247,7 @@ pub async fn run_passive_intake(
                                 occurrences: 1,
                                 peer_hint: None,
                                 source: FetchSource::LookedUp,
+                                lookup_seed: None,
                             })
                             .await
                             .is_err()

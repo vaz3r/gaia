@@ -308,6 +308,7 @@ enum DhtCommand {
     GetPeers {
         info_hash: Id20,
         reply: mpsc::UnboundedSender<Vec<SocketAddr>>,
+        seed_addr: Option<std::net::SocketAddr>,
     },
     Announce {
         info_hash: Id20,
@@ -457,11 +458,26 @@ impl DhtHandle {
         &self,
         info_hash: Id20,
     ) -> Result<mpsc::UnboundedReceiver<Vec<SocketAddr>>> {
+        self.get_peers_seeded(info_hash, None).await
+    }
+
+    /// Like `get_peers`, but the lookup first queries `seed_addr` (a node
+    /// known to hold the hash), then walks keyspace-closest roots.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Shutdown`] if the actor has stopped.
+    pub async fn get_peers_seeded(
+        &self,
+        info_hash: Id20,
+        seed_addr: Option<std::net::SocketAddr>,
+    ) -> Result<mpsc::UnboundedReceiver<Vec<SocketAddr>>> {
         let (reply_tx, reply_rx) = mpsc::unbounded_channel();
         self.tx
             .send(DhtCommand::GetPeers {
                 info_hash,
                 reply: reply_tx,
+                seed_addr,
             })
             .await
             .map_err(|_| Error::Shutdown)?;
@@ -769,7 +785,7 @@ struct DhtActor {
     bootstrap_complete: bool,
     /// M146: Queued `get_peers` waiting for at least 1 routing table node.
     /// Lowered from M97's threshold=8 to threshold=1 (empty-table only).
-    pending_get_peers: Vec<(Id20, mpsc::UnboundedSender<Vec<SocketAddr>>)>,
+    pending_get_peers: Vec<(Id20, mpsc::UnboundedSender<Vec<SocketAddr>>, Option<std::net::SocketAddr>)>,
     /// Bootstrap timeout timer — forces `bootstrap_complete` after 10s (M97).
     bootstrap_timeout: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
     /// Timestamp of last `ping_questionable_nodes()` call for two-phase gating (M105).
@@ -1033,8 +1049,8 @@ impl DhtActor {
                 // Commands from handle
                 cmd = self.rx.recv() => {
                     match cmd {
-                        Some(DhtCommand::GetPeers { info_hash, reply }) => {
-                            self.start_get_peers(info_hash, reply);
+                        Some(DhtCommand::GetPeers { info_hash, reply, seed_addr }) => {
+                            self.start_get_peers(info_hash, reply, seed_addr);
                         }
                         Some(DhtCommand::Announce { info_hash, port, reply }) => {
                             self.handle_announce(info_hash, port, reply).await;
@@ -2092,7 +2108,12 @@ impl DhtActor {
         }
     }
 
-    fn start_get_peers(&mut self, info_hash: Id20, reply: mpsc::UnboundedSender<Vec<SocketAddr>>) {
+    fn start_get_peers(
+        &mut self,
+        info_hash: Id20,
+        reply: mpsc::UnboundedSender<Vec<SocketAddr>>,
+        seed_addr: Option<std::net::SocketAddr>,
+    ) {
         // M146: Lightweight gate — require at least 1 routing table node
         // before starting get_peers. Without any nodes, the DhtLookup would
         // start with zero roots and stall in adaptive backoff (1-15s) while
@@ -2107,16 +2128,17 @@ impl DhtActor {
                 %info_hash,
                 "get_peers: routing table empty, queuing until first node arrives"
             );
-            self.pending_get_peers.push((info_hash, reply));
+            self.pending_get_peers.push((info_hash, reply, seed_addr));
             return;
         }
-        self.start_get_peers_inner(info_hash, reply);
+        self.start_get_peers_inner(info_hash, reply, seed_addr);
     }
 
     fn start_get_peers_inner(
         &mut self,
         info_hash: Id20,
         reply: mpsc::UnboundedSender<Vec<SocketAddr>>,
+        seed_addr: Option<std::net::SocketAddr>,
     ) {
         debug!(
             %info_hash,
@@ -2167,6 +2189,7 @@ impl DhtActor {
             self.lookup_node_tx.clone(),
             self.config.read_only_mode,
             self.outgoing_want(),
+            seed_addr,
         );
 
         let handle = tokio::spawn(lookup.run());
@@ -2194,8 +2217,8 @@ impl DhtActor {
             table_size = self.routing_table.read().len(),
             "bootstrap complete, processing queued get_peers"
         );
-        for (info_hash, reply) in pending {
-            self.start_get_peers_inner(info_hash, reply);
+        for (info_hash, reply, seed_addr) in pending {
+            self.start_get_peers_inner(info_hash, reply, seed_addr);
         }
     }
 
@@ -2212,8 +2235,8 @@ impl DhtActor {
             table_size = self.routing_table.read().len(),
             "routing table populated, draining queued get_peers"
         );
-        for (info_hash, reply) in pending {
-            self.start_get_peers_inner(info_hash, reply);
+        for (info_hash, reply, seed_addr) in pending {
+            self.start_get_peers_inner(info_hash, reply, seed_addr);
         }
     }
 

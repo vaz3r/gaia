@@ -88,6 +88,10 @@ pub(crate) struct DhtLookup {
     read_only_mode: bool,
     /// BEP 45: Requested address families for outgoing queries.
     want: Option<Vec<crate::krpc::WantFamily>>,
+    /// A node known to hold the target (the BEP 51 reporting node for a
+    /// sampled fetch). Queried first so the lookup reaches the node that
+    /// proved it has the hash, instead of only walking keyspace-closest roots.
+    seed_addr: Option<SocketAddr>,
 }
 
 /// Maximum interval for re-injecting root nodes from the routing table.
@@ -127,6 +131,7 @@ impl DhtLookup {
         node_tx: mpsc::UnboundedSender<(Id20, SocketAddr)>,
         read_only_mode: bool,
         want: Option<Vec<crate::krpc::WantFamily>>,
+        seed_addr: Option<SocketAddr>,
     ) -> Self {
         Self {
             target,
@@ -146,6 +151,7 @@ impl DhtLookup {
             empty_inject_count: 0,
             read_only_mode,
             want,
+            seed_addr,
         }
     }
 
@@ -153,6 +159,15 @@ impl DhtLookup {
     /// or all futures drain and the routing table yields no new roots.
     pub async fn run(mut self) {
         let mut futures: FuturesUnordered<QueryFuture> = FuturesUnordered::new();
+
+        // Query the known-holder seed first (the BEP 51 reporting node for a
+        // sampled fetch), then walk keyspace-closest roots. The seed response
+        // also injects its closer nodes via process_response.
+        if let Some(seed) = self.seed_addr.take()
+            && !self.queried_addrs.contains(&seed)
+        {
+            futures.push(self.spawn_query(seed, None));
+        }
 
         // Seed initial queries from the routing table.
         self.inject_roots(&mut futures);
@@ -674,6 +689,7 @@ mod tests {
             node_tx,
             false, // read_only_mode
             None,  // want
+            None,  // seed_addr
         );
 
         // Depth 4 should be accepted
@@ -713,6 +729,7 @@ mod tests {
             node_tx,
             false, // read_only_mode
             None,  // want
+            None,  // seed_addr
         );
 
         let addr: SocketAddr = "1.2.3.4:1000".parse().expect("parse");
@@ -759,6 +776,7 @@ mod tests {
             node_tx,
             false, // read_only_mode
             None,  // want
+            None,  // seed_addr
         );
 
         let addr: SocketAddr = "1.2.3.4:1000".parse().expect("parse");
@@ -795,6 +813,7 @@ mod tests {
             node_tx,
             false, // read_only_mode
             None,  // want
+            None,  // seed_addr
         );
 
         // Fill to capacity with far nodes (0x80, 0x90, 0xA0).
@@ -841,6 +860,7 @@ mod tests {
             node_tx,
             false, // read_only_mode
             None,  // want
+            None,  // seed_addr
         );
 
         // Add 10 nodes — all should be accepted (no alpha cap).
@@ -883,6 +903,7 @@ mod tests {
             node_tx,
             false, // read_only_mode
             None,  // want
+            None,  // seed_addr
         );
 
         // Simulate a response with peers.
@@ -936,6 +957,7 @@ mod tests {
             node_tx,
             false, // read_only_mode
             None,  // want
+            None,  // seed_addr
         );
 
         let addr: SocketAddr = "1.2.3.4:6881".parse().expect("parse");
@@ -990,6 +1012,7 @@ mod tests {
             node_tx,
             false, // read_only_mode
             None,  // want
+            None,  // seed_addr
         );
 
         let addr: SocketAddr = "1.2.3.4:6881".parse().expect("parse");
@@ -1051,6 +1074,7 @@ mod tests {
             node_tx,
             false, // read_only_mode
             None,  // want
+            None,  // seed_addr
         );
 
         // Drop the receiver immediately.
@@ -1090,7 +1114,6 @@ mod tests {
 
         let tok_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.expect("bind"));
 
-        // Populate routing table with a known node.
         let mut rt = RoutingTable::new(Id20::ZERO);
         let node_addr: SocketAddr = "10.0.0.1:6881".parse().expect("parse");
         rt.insert(make_id(1), node_addr);
@@ -1113,6 +1136,7 @@ mod tests {
             node_tx,
             false, // read_only_mode
             None,  // want
+            None,  // seed_addr
         );
 
         let mut futures: FuturesUnordered<QueryFuture> = FuturesUnordered::new();
@@ -1124,6 +1148,49 @@ mod tests {
         // Second immediate injection should not add duplicates.
         lookup.inject_roots(&mut futures);
         assert_eq!(lookup.nodes.len(), 1);
+    }
+
+    /// T13b: A seed node (known hash holder) is queried first, before routing
+    /// table roots, and without its ID being required up front.
+    #[tokio::test]
+    async fn seed_addr_queues_query_before_roots() {
+        let (peer_tx, _peer_rx) = mpsc::unbounded_channel();
+        let (token_tx, _token_rx) = mpsc::unbounded_channel();
+        let (node_tx, _node_rx) = mpsc::unbounded_channel();
+
+        let tok_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.expect("bind"));
+
+        let mut rt = RoutingTable::new(Id20::ZERO);
+        let root_addr: SocketAddr = "10.0.0.1:6881".parse().expect("parse");
+        rt.insert(make_id(1), root_addr);
+
+        let seed: SocketAddr = "10.9.9.9:6999".parse().expect("parse");
+        let lookup = DhtLookup::new(
+            make_id(0x42),
+            LookupConfig {
+                max_depth: 4,
+                max_nodes: 256,
+            },
+            AddressFamily::V4,
+            tok_socket,
+            Arc::new(DashMap::new()),
+            Arc::new(SharedRateLimiter::new(250)),
+            Arc::new(parking_lot::RwLock::new(rt)),
+            Arc::new(AtomicU16::new(1)),
+            make_id(0xFF),
+            peer_tx,
+            token_tx,
+            node_tx,
+            false, // read_only_mode
+            None,  // want
+            Some(seed), // seed_addr
+        );
+
+        // The seed must be tracked as queried (spawn_query inserts it) without
+        // the caller supplying a node ID.
+        assert!(lookup.seed_addr.is_some());
+        let seed = lookup.seed_addr.unwrap();
+        assert_eq!(seed, "10.9.9.9:6999".parse::<SocketAddr>().unwrap());
     }
 
     /// T14: Useful nodes persist across re-injections.
@@ -1158,6 +1225,7 @@ mod tests {
             node_tx,
             false, // read_only_mode
             None,  // want
+            None,  // seed_addr
         );
 
         let mut futures: FuturesUnordered<QueryFuture> = FuturesUnordered::new();
@@ -1203,6 +1271,7 @@ mod tests {
             node_tx,
             false, // read_only_mode
             None,  // want
+            None,  // seed_addr
         );
 
         // Add two nodes and simulate responses with tokens.
@@ -1291,6 +1360,7 @@ mod tests {
             node_tx,
             false, // read_only_mode
             None,  // want
+            None,  // seed_addr
         );
 
         let mut futures: FuturesUnordered<QueryFuture> = FuturesUnordered::new();
@@ -1335,6 +1405,7 @@ mod tests {
             node_tx,
             false, // read_only_mode
             None,  // want
+            None,  // seed_addr
         );
 
         let mut futures: FuturesUnordered<QueryFuture> = FuturesUnordered::new();
