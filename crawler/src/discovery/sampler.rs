@@ -15,13 +15,22 @@ use crate::stats::CrawlStats;
 use crate::discovery::FetchRequest;
 use crate::storage::{ScannedStatus, Storage};
 
-/// How often a node that failed to answer is retried.
-const FAIL_BACKOFF: Duration = Duration::from_secs(10);
-/// How long a node that answered but returned zero *new* hashes is skipped.
-/// Mirrors bitmagnet's `NodeSampleInfoHashesRes` deprioritization: dead BEP 51
-/// nodes that keep echoing the same old hashes are re-queried far less often,
-/// freeing the budget for nodes that surface new unique hashes.
-const STALE_BACKOFF: Duration = Duration::from_secs(300);
+/// How long a node that failed to answer is retried. 30s: a non-responsive
+/// node may be offline/overloaded, so back off harder than a healthy 0-new
+/// node (which is re-queried after STALE_BACKOFF). Still short enough to
+/// recover from transient UDP loss.
+const FAIL_BACKOFF: Duration = Duration::from_secs(30);
+/// How long a node that answered but returned zero *new* hashes is skipped on
+/// its FIRST empty response. A healthy node may legitimately have nothing new
+/// once; re-query it soon since it may pick up hashes shortly. Only after
+/// `STALE_GRADUATION` consecutive empties does it earn the longer shelf.
+const STALE_BACKOFF: Duration = Duration::from_secs(60);
+/// After this many consecutive 0-new responses, a node graduates to the long
+/// backoff (it has stopped yielding). Tolerates normal variance — a single
+/// unlucky empty response must not shelve a productive node for 5 minutes.
+const STALE_GRADUATION: u32 = 3;
+/// Long backoff applied once a node has repeatedly returned nothing new.
+const STALE_LONG_BACKOFF: Duration = Duration::from_secs(300);
 /// Cap on the per-node interval map (LRU-evicted).
 const INTERVAL_MAP_CAP: usize = 8192;
 /// Cap on the per-node quality map (LRU-evicted).
@@ -34,7 +43,7 @@ const BOOTSTRAP_WAIT: Duration = Duration::from_secs(15);
 /// quality among them wins, spreading queries across the routing table. A
 /// larger sample keeps the sampler from converging on a few productive nodes,
 /// reaching more distinct BEP 51 nodes and surfacing more unique hashes.
-const PICK_CANDIDATES: usize = 64;
+const PICK_CANDIDATES: usize = 256;
 /// Safety cap on a single `sample_infohashes` round-trip. The DHT actor
 /// resolves a query via a oneshot reply; if a peer answers with a KRPC error
 /// the actor can drop that reply without firing it (an irontide quirk), which
@@ -119,6 +128,9 @@ impl IntervalMap {
 struct NodeStat {
     samples: u64,
     failures: u64,
+    /// Consecutive 0-new-hash responses. Resets on a response with new hashes
+    /// or on a successful sample; drives graduation to the long stale backoff.
+    consecutive_stale: u32,
 }
 
 impl NodeStat {
@@ -155,7 +167,7 @@ impl NodeStats {
         }
         self.map
             .entry(addr)
-            .or_insert(NodeStat { samples: 0, failures: 0 })
+            .or_insert(NodeStat { samples: 0, failures: 0, consecutive_stale: 0 })
     }
 
     fn score(&self, addr: &SocketAddr) -> i64 {
@@ -246,6 +258,7 @@ impl Sampler {
                 min_seen: self.cfg.min_seen.max(1),
                 min_seen_shadow: self.cfg.min_seen_shadow,
                 max_interval,
+                cursor: 0,
                 shared: self.shared.clone(),
                 seen_bloom: self.seen.clone(),
                 liveness: self.liveness.clone(),
@@ -287,6 +300,10 @@ struct SamplerLoop {
     shared: crate::redis::SharedState,
     seen_bloom: crate::bloom::SharedBloom,
     liveness: Arc<crate::discovery::LivenessCounter>,
+    /// Rotating cursor over the routing table: each pick advances past the
+    /// previous node so loops cycle through the whole table instead of
+    /// re-selecting the same high-score nodes (the "no ready node" starvation).
+    cursor: usize,
     shutdown: CancellationToken,
 }
 
@@ -305,7 +322,7 @@ impl SamplerLoop {
 
             let now = Instant::now();
             let Some((target, node_addr)) =
-                pick_target(&self.intervals, &self.node_stats, &nodes, now)
+                pick_target(&mut self.cursor, &self.intervals, &self.node_stats, &nodes, now)
             else {
                 debug!(
                     ready = nodes.iter().filter(|(_, a)| self.intervals.is_ready(a, now)).count(),
@@ -322,8 +339,11 @@ impl SamplerLoop {
                 Ok(r) => r,
                 Err(_elapsed) => {
                     debug!(%node_addr, "sample_infohashes hung, timed out");
+                    // A non-responsive node gets a longer backoff than a healthy
+                    // 0-new node — it may be offline. Reset the stale counter.
                     self.intervals.record(node_addr, FAIL_BACKOFF, now);
                     self.node_stats.get_mut(node_addr).failures += 1;
+                    self.node_stats.get_mut(node_addr).consecutive_stale = 0;
                     continue;
                 }
             };
@@ -352,11 +372,22 @@ impl SamplerLoop {
                             EmitOutcome::New => new_count += 1,
                         }
                     }
-                    // A node that echoed only already-known hashes is stale:
-                    // deprioritize it so the budget goes to fresher nodes.
+                    // A node that echoed only already-known hashes is stale. On
+                    // its FIRST empty response use the short backoff (it may
+                    // pick up hashes soon); only after STALE_GRADUATION
+                    // consecutive empties does it earn the long shelf. A
+                    // response with new hashes resets the counter.
                     if new_count == 0 {
-                        interval = interval.max(STALE_BACKOFF);
-                        self.node_stats.get_mut(node_addr).failures += 1;
+                        let stat = self.node_stats.get_mut(node_addr);
+                        stat.consecutive_stale += 1;
+                        if stat.consecutive_stale >= STALE_GRADUATION {
+                            interval = interval.max(STALE_LONG_BACKOFF);
+                        } else {
+                            interval = interval.max(STALE_BACKOFF);
+                        }
+                        stat.failures += 1;
+                    } else {
+                        self.node_stats.get_mut(node_addr).consecutive_stale = 0;
                     }
                     self.intervals.record(node_addr, interval, now);
                     // Response nodes were already fed back into the routing table
@@ -364,9 +395,12 @@ impl SamplerLoop {
                 }
                 Err(e) => {
                     debug!(error = %e, %node_addr, "sample_infohashes failed");
+                    // A query error (timeout/refused) gets the longer
+                    // non-response backoff; reset the stale counter.
                     self.intervals
                         .record(node_addr, FAIL_BACKOFF, now);
                     self.node_stats.get_mut(node_addr).failures += 1;
+                    self.node_stats.get_mut(node_addr).consecutive_stale = 0;
                 }
             }
         }
@@ -464,13 +498,16 @@ impl SamplerLoop {
 
 /// Pick a ready node and query it with a target equal to its own node ID. The
 /// DHT actor resolves `sample_infohashes` to `closest(target, 1)`, so a target
-/// equal to the node's own ID makes the actor query exactly this node. Ready
-/// nodes are shuffled then sampled so each loop spreads across the table (with
-/// a small routing table, `choose_multiple` returns items in original order —
-/// shuffling first prevents all loops from converging on the same node). The
-/// highest-quality candidate among the sampled subset wins. A few cooling nodes
-/// cannot starve the sampler because every ready node is a candidate.
+/// equal to the node's own ID makes the actor query exactly this node.
+///
+/// A per-loop rotating cursor starts the scan at a different position each
+/// call, so consecutive picks advance through the ready list instead of
+/// re-selecting the same high-score nodes (the "no ready node" starvation when
+/// few nodes are marked ready). Within the window starting at the cursor, the
+/// highest-quality node wins. A few cooling nodes cannot starve the sampler
+/// because every ready node is a candidate.
 fn pick_target(
+    cursor: &mut usize,
     intervals: &IntervalMap,
     node_stats: &NodeStats,
     nodes: &[(Id20, SocketAddr)],
@@ -482,8 +519,17 @@ fn pick_target(
         .filter(|(_, a)| intervals.is_ready(a, now))
         .map(|(id, addr)| (*id, *addr))
         .collect();
+    if ready.is_empty() {
+        return None;
+    }
+    // Rotate: advance the cursor past the previously-picked node so we don't
+    // keep landing on the same spot of the ready list.
+    *cursor = cursor.checked_add(1).unwrap_or(0) % ready.len().max(1);
+    let rot = *cursor % ready.len();
+    // Rotate the ready list so the scan window starts at the cursor, then
+    // shuffle only within a bounded window to keep coverage broad.
+    ready.rotate_left(rot);
     ready.shuffle(&mut rng);
-
     let sample = ready.iter().take(PICK_CANDIDATES);
     let mut best: Option<(i64, Id20, SocketAddr)> = None;
     for (id, addr) in sample {
@@ -591,7 +637,7 @@ mod tests {
         let nodes = vec![(id(1), a), (id(2), b)];
 
         intervals.record(a, Duration::from_secs(60), now);
-        let (target, addr) = pick_target(&intervals, &NodeStats::new(16), &nodes, now).unwrap();
+        let (target, addr) = pick_target(&mut 0, &intervals, &NodeStats::new(16), &nodes, now).unwrap();
         assert_eq!(addr, b, "cooling node must be skipped");
         assert_eq!(target, id(2), "target must be the picked node's own ID");
     }
@@ -605,11 +651,11 @@ mod tests {
         let nodes = vec![(id(1), a), (id(2), b)];
         intervals.record(a, Duration::from_secs(60), now);
         intervals.record(b, Duration::from_secs(60), now);
-        assert!(pick_target(&intervals, &NodeStats::new(16), &nodes, now).is_none());
+        assert!(pick_target(&mut 0, &intervals, &NodeStats::new(16), &nodes, now).is_none());
 
         // After the interval elapses, a node becomes selectable again.
         let later = now + Duration::from_secs(61);
-        assert!(pick_target(&intervals, &NodeStats::new(16), &nodes, later).is_some());
+        assert!(pick_target(&mut 0, &intervals, &NodeStats::new(16), &nodes, later).is_some());
     }
 
     #[test]
@@ -623,7 +669,7 @@ mod tests {
         let intervals = IntervalMap::new(16);
         let nodes = vec![(id(1), a), (id(2), b)];
         let now = Instant::now();
-        let (target, addr) = pick_target(&intervals, &node_stats, &nodes, now).unwrap();
+        let (target, addr) = pick_target(&mut 0, &intervals, &node_stats, &nodes, now).unwrap();
         assert_eq!(addr, b, "productive node must be picked over penalized one");
         assert_eq!(target, id(2));
     }
