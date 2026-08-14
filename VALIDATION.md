@@ -101,6 +101,17 @@ WAL-free, consistent while running). Current snapshot ~4M scans.
 - **Operational**: avoid restarts; the 8-instance setup needs hours to reach
   peak. verified_tracker also resets to 0 on restart and climbs back.
 
+### F13 — Deeper grower drain was a ~130 MB/hr leak (FIXED)
+- The deeper grower (holding get_peers reply channels open + draining 8
+  batches/tick to grow tables faster) accumulated DhtLookup state per
+  instance. With 8 instances: allocated 280->390 MB and climbing.
+- Reverting to fast-exit (drop channel, lookup winds down after ~2 responses)
+  **flattens allocated at ~148-160 MB**. Tables still reach the one-IP ceiling
+  (~2.1k nodes); verified_tracker hit its best (27 climbing).
+- Redis dedup sets (seen/announced/lookedup) also grew unbounded (5.7M
+  entries = 236 MB Redis). Now capped at 1M entries with flush-on-cap (dedup
+  is best-effort; in-process bloom + DB are authoritative).
+
 ## Final assessment (this session)
 
 Starting baseline: ~150 verified/hr, memory leaking to OOM, ~11% failures
