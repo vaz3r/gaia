@@ -11,6 +11,7 @@ mod query;
 mod redis;
 mod stats;
 mod storage;
+mod sysmetrics;
 
 use anyhow::{Context, Result};
 use clap::Parser;

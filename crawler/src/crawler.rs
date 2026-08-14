@@ -275,7 +275,12 @@ pub async fn run(args: RunArgs) -> Result<()> {
 
     let writer = tokio::spawn(write_loop(record_rx, storage.clone(), stats.clone()));
 
-    let stats_task = tokio::spawn(stats_loop(handles.clone(), stats.clone(), liveness.clone()));
+    let stats_task = tokio::spawn(stats_loop(
+        handles.clone(),
+        stats.clone(),
+        liveness.clone(),
+        storage.clone(),
+    ));
 
     wait_for_shutdown().await;
 
@@ -352,10 +357,13 @@ async fn stats_loop(
     handles: Vec<DhtHandle>,
     stats: Arc<CrawlStats>,
     liveness: Arc<discovery::LivenessCounter>,
+    storage: Storage,
 ) {
     let mut tick = tokio::time::interval(STATS_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_unique: u64 = 0;
+    // System resource sampling for the monitoring snapshot (tun0 = tunnel iface).
+    let mut sysmetrics = crate::sysmetrics::SysMetricSampler::new("tun0", std::path::Path::new("/data"));
     // Heap profiling: when GAIA_PROF_DUMP_EVERY_TICKS is set, dump a jemalloc
     // heap profile every N ticks (requires MALLOC_CONF=prof:true,prof_prefix).
     let prof_every = std::env::var("GAIA_PROF_DUMP_EVERY_TICKS")
@@ -496,6 +504,86 @@ async fn stats_loop(
             peer_errors_other = s.peer_errors_other.load(r),
             "peer failure breakdown"
         );
+
+        // Persist the full monitoring snapshot to Postgres. Best-effort: a
+        // failed write is logged and the crawl continues.
+        let sys = sysmetrics.sample();
+        let snap = crate::stats::CrawlSnapshot {
+            hashes_sampled: s.hashes_sampled.load(r),
+            hashes_unique: s.hashes_unique.load(r),
+            hashes_announced: s.hashes_announced.load(r),
+            announces_deduped_redis: s.announces_deduped_redis.load(r),
+            announces_emitted: s.announces_emitted.load(r),
+            shadow_emitted: s.shadow_emitted.load(r),
+            shadow_filtered: s.shadow_filtered.load(r),
+            shadow_near_miss_1: s.shadow_near_miss_1.load(r),
+            shadow_near_miss_2: s.shadow_near_miss_2.load(r),
+            shadow_near_miss_1_sparse: s.shadow_near_miss_1_sparse.load(r),
+            shadow_near_miss_1_stalled: s.shadow_near_miss_1_stalled.load(r),
+            liveness_sweeps: s.liveness_sweeps.load(r),
+            fetches_attempted: s.fetches_attempted.load(r),
+            fetches_failed: s.fetches_failed.load(r),
+            metadata_verified: s.metadata_verified.load(r),
+            records_persisted: s.records_persisted.load(r),
+            terminal_dead: s.terminal_dead.load(r),
+            fetch_in_flight: s.fetch_in_flight.load(r),
+            queue_depth: s.queue_depth.load(r),
+            connect_timeout: s.connect_timeout.load(r),
+            connect_refused: s.connect_refused.load(r),
+            connection_reset: s.connection_reset.load(r),
+            connection_closed: s.connection_closed.load(r),
+            no_bep10: s.no_bep10.load(r),
+            no_ut_metadata: s.no_ut_metadata.load(r),
+            metadata_rejected: s.metadata_rejected.load(r),
+            parse_error: s.parse_error.load(r),
+            sha1_mismatch: s.sha1_mismatch.load(r),
+            empty_peers: s.empty_peers.load(r),
+            fetch_deadline: s.fetch_deadline.load(r),
+            early_abort: s.early_abort.load(r),
+            peer_errors_other: s.peer_errors_other.load(r),
+            verified_announced: s.verified_announced.load(r),
+            verified_sampled: s.verified_sampled.load(r),
+            verified_lookedup: s.verified_lookedup.load(r),
+            verified_tracker: s.verified_tracker.load(r),
+            scrape_saw_seeds: s.scrape_saw_seeds.load(r),
+            verified_with_seeds: s.verified_with_seeds.load(r),
+            verified_without_seeds: s.verified_without_seeds.load(r),
+            failed_with_seeds: s.failed_with_seeds.load(r),
+            failed_without_seeds: s.failed_without_seeds.load(r),
+            discriminator_filtered: s.discriminator_filtered.load(r),
+            lookups_emitted: s.lookups_emitted.load(r),
+            lookups_deduped_redis: s.lookups_deduped_redis.load(r),
+            routing_nodes: routing as u64,
+            announced_hashes: announced as u64,
+            active_lookups: active_lookups as u64,
+            announce_tokens: announce_tokens as u64,
+            pending_queries: pending_queries as u64,
+            announces_received,
+            announces_token_rejected,
+            announces_suppressed_readonly,
+            lookups_received,
+            unique_per_hr,
+            jemalloc_allocated: jemalloc_allocated as f64,
+            jemalloc_active: jemalloc_active as f64,
+            jemalloc_mapped: jemalloc_mapped as f64,
+            jemalloc_retained: jemalloc_retained as f64,
+            net_rx_bytes: sys.net_rx_bytes,
+            net_tx_bytes: sys.net_tx_bytes,
+            net_rx_rate_bps: sys.net_rx_rate_bps,
+            net_tx_rate_bps: sys.net_tx_rate_bps,
+            host_mem_total: sys.host_mem_total,
+            host_mem_available: sys.host_mem_available,
+            container_mem_current: sys.container_mem_current,
+            cpu_percent: sys.cpu_percent,
+            disk_total_bytes: sys.disk_total_bytes,
+            disk_free_bytes: sys.disk_free_bytes,
+            loadavg_1: sys.loadavg_1,
+            loadavg_5: sys.loadavg_5,
+            loadavg_15: sys.loadavg_15,
+        };
+        storage
+            .record_crawl_stats(&snap, &serde_json::json!({ "instances": per_instance }))
+            .await;
     }
 }
 

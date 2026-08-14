@@ -381,6 +381,7 @@ dependencies = [
  "jemalloc-ctl",
  "jemalloc-sys",
  "jemallocator",
+ "libc",
  "rand 0.8.7",
  "redis",
  "reqwest",

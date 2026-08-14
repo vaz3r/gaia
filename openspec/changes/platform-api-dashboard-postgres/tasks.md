@@ -24,10 +24,10 @@
 
 ## 4. Monitoring pipeline (M3–M4)
 
-- [ ] 4.1 Add `sysmetrics` module in the crawler reading tun0 net counters, host meminfo, cgroup memory, cpu delta, disk statfs, loadavg; unit tests with fixture inputs
-- [ ] 4.2 Extend `stats_loop` to assemble the full snapshot (all crawl counters + DHT diagnostics + jemalloc + instance_nodes JSONB + system metrics)
-- [ ] 4.3 Persist the snapshot to `crawl_stats_history` every 30s with best-effort error tolerance (crawl continues if insert fails)
-- [ ] 4.4 Verify: rows appear every 30s with all fields populated; bandwidth tracks tunnel traffic; cpu% sane; failure-tolerant behavior confirmed
+- [x] 4.1 Add `sysmetrics` module in the crawler reading tun0 net counters, host meminfo, cgroup memory, cpu delta, disk statfs, loadavg; unit tests with fixture inputs
+- [x] 4.2 Extend `stats_loop` to assemble the full snapshot (all crawl counters + DHT diagnostics + jemalloc + instance_nodes JSONB + system metrics)
+- [x] 4.3 Persist the snapshot to `crawl_stats_history` every 30s with best-effort error tolerance (crawl continues if insert fails)
+- [x] 4.4 Verify: rows appear every 30s with all fields populated; bandwidth tracks tunnel traffic; cpu% sane; failure-tolerant behavior confirmed
 
 ## 5. Admin API (M5)
 

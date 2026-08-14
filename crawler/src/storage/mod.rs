@@ -233,6 +233,122 @@ impl Storage {
             .map(|r| (r.get::<String, _>(0), r.get::<i64, _>(1)))
             .collect())
     }
+
+    /// Best-effort insert of one full monitoring snapshot. Failures are logged
+    /// and swallowed so the crawl loop never breaks on a stats write.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_crawl_stats(
+        &self,
+        s: &crate::stats::CrawlSnapshot,
+        instance_nodes: &serde_json::Value,
+    ) {
+        let result = sqlx::query(
+            "INSERT INTO crawl_stats_history (
+                hashes_sampled, hashes_unique, hashes_announced, announces_deduped_redis,
+                announces_emitted, shadow_emitted, shadow_filtered, shadow_near_miss_1,
+                shadow_near_miss_2, shadow_near_miss_1_sparse, shadow_near_miss_1_stalled,
+                liveness_sweeps, fetches_attempted, fetches_failed, metadata_verified,
+                records_persisted, terminal_dead, fetch_in_flight, queue_depth,
+                connect_timeout, connect_refused, connection_reset, connection_closed,
+                no_bep10, no_ut_metadata, metadata_rejected, parse_error, sha1_mismatch,
+                empty_peers, fetch_deadline, early_abort, peer_errors_other,
+                verified_announced, verified_sampled, verified_lookedup, verified_tracker,
+                scrape_saw_seeds, verified_with_seeds, verified_without_seeds,
+                failed_with_seeds, failed_without_seeds, discriminator_filtered,
+                lookups_emitted, lookups_deduped_redis,
+                routing_nodes, announced_hashes, active_lookups, announce_tokens,
+                pending_queries, announces_received, announces_token_rejected,
+                announces_suppressed_readonly, lookups_received,
+                instance_nodes, unique_per_hr,
+                jemalloc_allocated, jemalloc_active, jemalloc_mapped, jemalloc_retained,
+                net_rx_bytes, net_tx_bytes, net_rx_rate_bps, net_tx_rate_bps,
+                host_mem_total, host_mem_available, container_mem_current, cpu_percent,
+                disk_total_bytes, disk_free_bytes, loadavg_1, loadavg_5, loadavg_15
+            ) VALUES (
+                $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+                $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,
+                $37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,
+                $54,$55,$56,$57,$58,$59,$60,$61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72
+            )",
+        )
+        .bind(s.hashes_sampled as i64)
+        .bind(s.hashes_unique as i64)
+        .bind(s.hashes_announced as i64)
+        .bind(s.announces_deduped_redis as i64)
+        .bind(s.announces_emitted as i64)
+        .bind(s.shadow_emitted as i64)
+        .bind(s.shadow_filtered as i64)
+        .bind(s.shadow_near_miss_1 as i64)
+        .bind(s.shadow_near_miss_2 as i64)
+        .bind(s.shadow_near_miss_1_sparse as i64)
+        .bind(s.shadow_near_miss_1_stalled as i64)
+        .bind(s.liveness_sweeps as i64)
+        .bind(s.fetches_attempted as i64)
+        .bind(s.fetches_failed as i64)
+        .bind(s.metadata_verified as i64)
+        .bind(s.records_persisted as i64)
+        .bind(s.terminal_dead as i64)
+        .bind(s.fetch_in_flight as i64)
+        .bind(s.queue_depth as i64)
+        .bind(s.connect_timeout as i64)
+        .bind(s.connect_refused as i64)
+        .bind(s.connection_reset as i64)
+        .bind(s.connection_closed as i64)
+        .bind(s.no_bep10 as i64)
+        .bind(s.no_ut_metadata as i64)
+        .bind(s.metadata_rejected as i64)
+        .bind(s.parse_error as i64)
+        .bind(s.sha1_mismatch as i64)
+        .bind(s.empty_peers as i64)
+        .bind(s.fetch_deadline as i64)
+        .bind(s.early_abort as i64)
+        .bind(s.peer_errors_other as i64)
+        .bind(s.verified_announced as i64)
+        .bind(s.verified_sampled as i64)
+        .bind(s.verified_lookedup as i64)
+        .bind(s.verified_tracker as i64)
+        .bind(s.scrape_saw_seeds as i64)
+        .bind(s.verified_with_seeds as i64)
+        .bind(s.verified_without_seeds as i64)
+        .bind(s.failed_with_seeds as i64)
+        .bind(s.failed_without_seeds as i64)
+        .bind(s.discriminator_filtered as i64)
+        .bind(s.lookups_emitted as i64)
+        .bind(s.lookups_deduped_redis as i64)
+        .bind(s.routing_nodes as i64)
+        .bind(s.announced_hashes as i64)
+        .bind(s.active_lookups as i64)
+        .bind(s.announce_tokens as i64)
+        .bind(s.pending_queries as i64)
+        .bind(s.announces_received as i64)
+        .bind(s.announces_token_rejected as i64)
+        .bind(s.announces_suppressed_readonly as i64)
+        .bind(s.lookups_received as i64)
+        .bind(instance_nodes)
+        .bind(s.unique_per_hr)
+        .bind(s.jemalloc_allocated)
+        .bind(s.jemalloc_active)
+        .bind(s.jemalloc_mapped)
+        .bind(s.jemalloc_retained)
+        .bind(s.net_rx_bytes as i64)
+        .bind(s.net_tx_bytes as i64)
+        .bind(s.net_rx_rate_bps)
+        .bind(s.net_tx_rate_bps)
+        .bind(s.host_mem_total as i64)
+        .bind(s.host_mem_available as i64)
+        .bind(s.container_mem_current as i64)
+        .bind(s.cpu_percent)
+        .bind(s.disk_total_bytes as i64)
+        .bind(s.disk_free_bytes as i64)
+        .bind(s.loadavg_1)
+        .bind(s.loadavg_5)
+        .bind(s.loadavg_15)
+        .execute(&self.pool)
+        .await;
+        if let Err(e) = result {
+            tracing::warn!(error = %e, "crawl stats persistence failed (continuing)");
+        }
+    }
 }
 
 fn row_to_record(row: &sqlx::postgres::PgRow) -> TorrentRecord {
