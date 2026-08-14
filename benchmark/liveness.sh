@@ -34,6 +34,8 @@ mkdir -p "$TMPDIR"
 # 1. Consistent snapshot. The tar-stream of a live WAL DB races (main file
 #    pages change while the WAL is being read => "malformed"), so use the
 #    crawler's own `snapshot` command (VACUUM INTO, WAL-free, consistent).
+#    VACUUM INTO of a ~900 MB live DB takes 30-60s; the command must be given
+#    that long, and the result must pass an integrity check before reading.
 rm -f "$TMPDIR/crawler_perf.sqlite"*
 docker exec "$CONTAINER" crawler snapshot \
     --db /data/crawler.sqlite --out /data/crawler_perf.sqlite >/dev/null 2>&1 \
@@ -42,6 +44,12 @@ docker cp "$CONTAINER:/data/crawler_perf.sqlite" "$DB_MAIN" >/dev/null 2>&1 \
     || { echo "ERROR: could not fetch snapshot from $CONTAINER" >&2; exit 1; }
 if [[ ! -s "$DB_MAIN" ]]; then
     echo "ERROR: snapshot is empty ($DB_MAIN)" >&2
+    exit 1
+fi
+# Reject a partial/malformed snapshot (a VACUUM INTO killed mid-write lands
+# here) instead of rendering garbage.
+if ! python3 -c "import sqlite3,sys; sqlite3.connect(sys.argv[1]).execute('SELECT 1')" "$DB_MAIN" 2>/dev/null; then
+    echo "ERROR: snapshot $DB_MAIN failed integrity open — VACUUM INTO may have been interrupted" >&2
     exit 1
 fi
 
