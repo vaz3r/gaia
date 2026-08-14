@@ -45,12 +45,12 @@
 
 ## 7. Dashboard (M7)
 
-- [ ] 7.1 Scaffold `dashboard/` (Vite + React + strict TS + pnpm + tailwind): zustand stores (search, monitor), typed api client, shadcn/ui setup
-- [ ] 7.2 Build search page: debounced instant search input, filter controls (size, age), sort selector, paginated results table
-- [ ] 7.3 Build monitoring page: live summary header, time-series charts (verified/hr, unique/hr, routing nodes, memory), system resource charts (network, cpu, memory, disk), failure breakdown
-- [ ] 7.4 Add vitest component tests for search + monitoring; ensure production build passes type-check and lint
-- [ ] 7.5 Serve dashboard as a static build via nginx container; wire nginx proxy to the API
-- [ ] 7.6 Verify: full-stack manual walkthrough (search with filters/sort, monitoring charts live), `vite build` clean, compose up brings dashboard reachable
+- [x] 7.1 Scaffold `dashboard/` (Vite + React + strict TS + pnpm + tailwind): zustand stores (search, monitor), typed api client, shadcn/ui setup
+- [x] 7.2 Build search page: debounced instant search input, filter controls (size, age), sort selector, paginated results table
+- [x] 7.3 Build monitoring page: live summary header, time-series charts (verified/hr, unique/hr, routing nodes, memory), system resource charts (network, cpu, memory, disk), failure breakdown
+- [x] 7.4 Add vitest component tests for search + monitoring; ensure production build passes type-check and lint
+- [x] 7.5 Serve dashboard as a static build via nginx container; wire nginx proxy to the API
+- [x] 7.6 Verify: full-stack manual walkthrough (search with filters/sort, monitoring charts live), `vite build` clean, compose up brings dashboard reachable
 
 ## 8. Platform integration
 
