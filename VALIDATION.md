@@ -112,6 +112,13 @@ WAL-free, consistent while running). Current snapshot ~4M scans.
   entries = 236 MB Redis). Now capped at 1M entries with flush-on-cap (dedup
   is best-effort; in-process bloom + DB are authoritative).
 
+### F14 — Steady state after leak fix (08-14 04:00-05:00Z)
+- **~184 verified/hr (hour 04)**, memory flat (allocated ~195-215 MB).
+- Tracker path: tracker_resolved ~75k/hr (22% of fetches), verified_tracker
+  ~27% of verified (86 of 319). empty_peers share dropped to ~40% of failures
+  (trackers convert empty_peers into dial-then-fail).
+- unique ~160k/hr, tables at one-IP ceiling (~2.3k). No leak.
+
 ## Final assessment (this session)
 
 Starting baseline: ~150 verified/hr, memory leaking to OOM, ~11% failures
