@@ -10,3 +10,7 @@ crawler/gluetun/
 session-ses_*.md
 **/.cargo-ok
 **/.cargo_vcs_info.json
+node_modules/
+dist/
+.env.local
+*.log

@@ -31,17 +31,17 @@
 
 ## 5. Admin API (M5)
 
-- [ ] 5.1 Scaffold `api/` (Express + TS strict, pnpm, zod, pg): config/env validation, pg pool singleton, error middleware, request logger
-- [ ] 5.2 Implement repositories (pure SQL): stats (latest/history/windowed rates via LAG), failures, system, config (app_config upsert/list/read)
-- [ ] 5.3 Implement services + controllers: `/api/admin/monitor/latest`, `/api/admin/monitor/history?metric=&range=`, `/api/admin/monitor/failures`, `/api/admin/monitor/system`, `/api/admin/config` (GET/PUT)
-- [ ] 5.4 Implement `/health` returning per-service status (postgres, redis, crawler, api)
-- [ ] 5.5 Verify: supertest unit tests (validation, error shapes, config CRUD); curl against live Postgres; invalid inputs return 400
+- [x] 5.1 Scaffold `api/` (Express + TS strict, pnpm, zod, pg): config/env validation, pg pool singleton, error middleware, request logger
+- [x] 5.2 Implement repositories (pure SQL): stats (latest/history/windowed rates via LAG), failures, system, config (app_config upsert/list/read)
+- [x] 5.3 Implement services + controllers: `/api/admin/monitor/latest`, `/api/admin/monitor/history?metric=&range=`, `/api/admin/monitor/failures`, `/api/admin/monitor/system`, `/api/admin/config` (GET/PUT)
+- [x] 5.4 Implement `/health` returning per-service status (postgres, redis, crawler, api)
+- [x] 5.5 Verify: supertest unit tests (validation, error shapes, config CRUD); curl against live Postgres; invalid inputs return 400
 
 ## 6. Search API (M6)
 
-- [ ] 6.1 Implement search repository: pg_trgm similarity/word_similarity ranking, filters (size min/max, min file count, min first_seen), sorting (relevance/newest/largest/name), keyset pagination
-- [ ] 6.2 Implement `GET /api/search` controller with zod validation of all query params; unsupported sort/filters → 400
-- [ ] 6.3 Verify: unit tests for ranking/filters/sorting/pagination; curl checks; index-backed plan (EXPLAIN) confirmed; <50ms response on current dataset
+- [x] 6.1 Implement search repository: pg_trgm similarity/word_similarity ranking, filters (size min/max, min file count, min first_seen), sorting (relevance/newest/largest/name), keyset pagination
+- [x] 6.2 Implement `GET /api/search` controller with zod validation of all query params; unsupported sort/filters → 400
+- [x] 6.3 Verify: unit tests for ranking/filters/sorting/pagination; curl checks; index-backed plan (EXPLAIN) confirmed; <50ms response on current dataset
 
 ## 7. Dashboard (M7)
 

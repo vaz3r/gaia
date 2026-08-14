@@ -22,6 +22,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260814190001_pgvector.sql",
         include_str!("../../db/migrations/20260814190001_pgvector.sql"),
     ),
+    (
+        "20260814223000_failure_time_index.sql",
+        include_str!("../../db/migrations/20260814223000_failure_time_index.sql"),
+    ),
 ];
 
 /// Apply all pending migrations. Idempotent: applied migrations are skipped.

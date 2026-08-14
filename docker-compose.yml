@@ -196,6 +196,35 @@ services:
         max-size: 20m
         max-file: "3"
 
+  api:
+    build:
+      context: api
+      dockerfile: Dockerfile
+    container_name: gaia-api
+    restart: unless-stopped
+    networks:
+      - gaia
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      - DATABASE_URL=postgres://crawler:${POSTGRES_PASSWORD}@postgres:5432/crawler
+      - REDIS_URL=redis://redis:6379
+      - PORT=3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+
 volumes:
   dht-data:
     name: dht-crawler-data
