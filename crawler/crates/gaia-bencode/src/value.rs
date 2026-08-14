@@ -9,7 +9,7 @@ use std::fmt;
 /// A dynamically-typed bencode value.
 ///
 /// Useful for inspecting bencode data without a schema, and for
-/// `find_dict_key_span` operations.
+/// tracker/peer-wire payloads that mix types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BencodeValue {
     /// Integer: `i42e`

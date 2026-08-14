@@ -36,13 +36,11 @@
 mod de;
 mod error;
 mod ser;
-mod span;
 mod value;
 
 pub use de::Deserializer;
 pub use error::{Error, Result};
 pub use ser::Serializer;
-pub use span::find_dict_key_span;
 pub use value::BencodeValue;
 
 /// Serialize a value to bencode bytes.

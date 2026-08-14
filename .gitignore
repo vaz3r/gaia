@@ -10,4 +10,6 @@ pm2-error.log
 crawler/.env
 crawler/data/
 crawler/gluetun/
-session-ses_0143.md
+session-ses_*.md
+**/.cargo-ok
+**/.cargo_vcs_info.json

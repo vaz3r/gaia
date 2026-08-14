@@ -51,44 +51,12 @@ path = "../gaia-bencode"
 [dependencies.gaia-core]
 path = "../gaia-core"
 
-[dependencies.num-bigint]
-version = "0.4"
-
-[dependencies.num-integer]
-version = "0.1"
-
-[dependencies.num-traits]
-version = "0.2"
-
-[dependencies.rcgen]
-version = "0.13"
-
-[dependencies.ring]
-version = "0.17"
-
-[dependencies.rustls]
-version = "0.23"
-features = ["ring"]
-
-[dependencies.rustls-pemfile]
-version = "2"
-
 [dependencies.serde]
 version = "1"
 features = ["derive"]
 
 [dependencies.thiserror]
 version = "2"
-
-[dependencies.tokio]
-version = "1"
-features = [
-    "io-util",
-    "parking_lot",
-]
-
-[dependencies.tokio-rustls]
-version = "0.26"
 
 [dependencies.tokio-util]
 version = "0.7"

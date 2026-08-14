@@ -1,0 +1,56 @@
+# Single-instance A/B test: concentrate DHT budget into one table.
+#
+# Archived with benchmark/experiments/instances-ab.sh (see VALIDATION.md
+# "Closing decision — single-IP ceiling accepted"). Not part of the live
+# deployment; the base file is ../docker-compose.yml.
+#
+# Usage (from the crawler/ dir):
+#   docker compose -f docker-compose.yml -f ../benchmark/experiments/docker-compose.1inst.yml up -d
+#
+# Differences from baseline (8 instances):
+#   --instances 1       (one DHT node, one routing table)
+#   --qps 16000         (match baseline total: 8 × 2000)
+#   --scale 16          (saturate sampler caps at 800 qps / 64 loops)
+#   --max-nodes 8192    (unchanged — same per-table cap)
+#
+# Known confounds:
+#   - Grower cadence: 1 instance = 4 grower lookups/s (vs 32/s at 8 instances).
+#     This is fixed at 250ms per instance in crawler.rs:115-122; no CLI flag
+#     multiplies growers. Table growth effort is 1/8th of baseline.
+#   - Sampler qps/loops are code-capped at 800/64 (cli.rs:237-248), so
+#     even --scale 16 can't concentrate above 800 sampler qps in one instance.
+#
+# To run the experiment:
+#   1. Capture baseline (current 8-instance config) for 3-4h with instances-ab.sh
+#   2. Deploy: docker compose -f docker-compose.yml -f ../benchmark/experiments/docker-compose.1inst.yml up -d
+#   3. Wait 1h for tables to warm (F12 re-warm penalty)
+#   4. Capture test window for 3-4h with instances-ab.sh
+#   5. Compare routing_nodes ceiling, unique/hr, verified/hr
+
+services:
+  crawler:
+    command:
+      - run
+      - --db
+      - /data/crawler.sqlite
+      - --state-dir
+      - /data/state
+      - --port
+      - "6881"
+      - --instances
+      - "1"
+      - --min-seen
+      - "1"
+      - --min-seen-shadow
+      - "3"
+      - --scale
+      - "16"
+      - --max-nodes
+      - "8192"
+      - --qps
+      - "16000"
+      - --no-restrict-ips
+      - --redis-url
+      - redis://redis:6379
+      - --log
+      - crawler=info

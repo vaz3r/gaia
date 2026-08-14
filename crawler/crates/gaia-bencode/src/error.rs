@@ -60,20 +60,6 @@ pub enum Error {
         count: usize,
     },
 
-    /// The key in `find_dict_key_span` was not found.
-    #[error("key {key:?} not found in dictionary")]
-    KeyNotFound {
-        /// The key that was not found.
-        key: String,
-    },
-
-    /// Input is not a dictionary (for `find_dict_key_span`).
-    #[error("expected dictionary at position {position}")]
-    NotADictionary {
-        /// Byte offset where the non-dictionary value was found.
-        position: usize,
-    },
-
     /// Custom error from serde.
     #[error("{0}")]
     Custom(String),

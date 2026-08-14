@@ -42,15 +42,6 @@ async fn main() -> Result<()> {
 /// database, safe to run while the crawler writes. Used to produce a clean DB
 /// copy for offline benchmark replays (the direct tar/cp snapshot of a live
 /// WAL-mode DB is not consistent).
-///
-/// Notes on correctness vs the live crawler:
-/// - `VACUUM INTO` opens a read transaction; with an active WAL it yields the
-///   database as of the transaction start, checkpointing the WAL into the
-///   output. To avoid `SQLITE_BUSY` when the crawler holds a write lock, set a
-///   generous `busy_timeout` — otherwise a 900 MB live DB fails or produces a
-///   partial file (this is what made earlier snapshots "malformed").
-/// - The output file is standalone (no WAL); `docker cp` of it is race-free
-///   only if the copy happens after this returns (it does).
 fn snapshot(args: &cli::SnapshotArgs) -> Result<()> {
     if std::path::Path::new(&args.out).exists() {
         std::fs::remove_file(&args.out)
@@ -58,10 +49,6 @@ fn snapshot(args: &cli::SnapshotArgs) -> Result<()> {
     }
     let conn = rusqlite::Connection::open(&args.db)
         .with_context(|| format!("open db {}", args.db))?;
-    // The live crawler writes in WAL mode; this reader must tolerate brief
-    // write-lock holds. 30s is well beyond any single write transaction.
-    conn.busy_timeout(std::time::Duration::from_secs(30))
-        .with_context(|| "set busy timeout")?;
     conn.execute_batch(&format!(
         "VACUUM INTO '{}';",
         args.out.replace('\'', "''")

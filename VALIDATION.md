@@ -149,6 +149,52 @@ End state:
 ~180 verified/hr at current conversion). One IP is a hard ceiling regardless of
 code changes; the codebase is now at its single-IP optimum.
 
+## Closing decision — single-IP ceiling accepted (2026-08-14)
+
+The single-IP ceiling was probed one final time with a 1-instance A/B
+(`--instances 1 --qps 16000 --scale 16 --max-nodes 8192`, 2h17m, vs the
+8-instance baseline) and the conclusion is closed. Reasoning preserved here so
+it is not re-opened.
+
+**1. The 1-instance A/B result** (`benchmark/experiments/docker-compose.1inst.yml`,
+`benchmark/experiments/instances-ab.sh`):
+- A single table reached **2,385 nodes** — the same ceiling, marginally *higher*
+  than instance 0's 2,261 in the 8-instance fleet. One table does not reach
+  further into the keyspace.
+- Verified collapsed to **~25/hr** (vs ~180-213/hr) because sampler loops dropped
+  8x (64 vs 512). Verified/hr tracks **sampler-loop throughput against the
+  neighborhood, not table size** — both configs held ~2,400 nodes; 8x loops gave
+  ~8x verified.
+- ⚠️ Confound acknowledged: instance count and total budget moved together
+  (per-instance caps `cli.rs:237-248`), so this is not a clean fragmentation
+  A/B. But the fragmentation upside is bounded to a ~5% table-size delta either
+  way, which cannot close a ~200 → 3000 gap. Closed by diminishing returns, not
+  by proof.
+
+**2. Why a shared routing table via IPC would not help** (proposed 2026-08-14):
+- The routing table is a *cache of what lookups discover*; the ceiling is the
+  discovery feed — the ~2,400 distinct DHT nodes that respond to this one egress
+  IP (F11). A shared table is a different container for the same feed; it cannot
+  manufacture nodes the feed never returns.
+- The 1-instance test already ran "one table everything reads from" and hit the
+  same ceiling while verifying 8x *less* (fewer loops).
+- Kademlia bucket shape is keyed to the node's own ID, so a shared table either
+  forces a shared node ID (destroying the multi-node diversity that drives
+  throughput) or merely extends the one-shot bootstrap already done via
+  `seed_nodes_from_state` (`crawler.rs:96-103`).
+- The only honest benefit is egress-bandwidth dedup (instances 2-7 burned
+  ~70-100k queries each to re-discover the same neighborhood), which is not a
+  verified/hr lever. Not worth the IPC layer.
+
+**3. Projected yield at the accepted ceiling** (~184-213/hr steady state):
+~4,400-5,100/day → **~140-150k verified torrents/month** on one egress IP.
+(bitmagnet's ~11M/month is a cumulative lifetime index across multiple egresses
+and long uptime, not a steady single-IP rate; still ~75x the structural gap.)
+
+**Decision:** 3000/hr on a single egress IP is closed. The codebase is at its
+single-IP optimum; the only remaining multiplier is additional egress IPs
+(~2 IPs ≈ 300-400k/month, scaling ~linearly).
+
 ## Strategy status
 
 | Strategy | Peers found (empty_peers) | Verifies | Production impact |
@@ -160,6 +206,11 @@ code changes; the codebase is now at its single-IP optimum.
 | lookup-seeded fetch | unchanged | unchanged | neutral |
 
 ## Next iterations to try
+
+> Incremental only — none of these break the single-IP ceiling (see Closing
+> decision above); each would add a bounded % on top of ~180-213/hr, not order
+> of magnitude.
+
 - [ ] Tracker resolution for `timeout`/`other`/`deadline` classes (are any
       recoverable?)
 - [ ] Verify tracker-resolved peers via the SAME dial path as prod (currently

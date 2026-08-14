@@ -31,3 +31,7 @@ The DHT SHALL return at most `RESPONSE_K` (16) nodes in inbound-query responses,
 
 ### Requirement: Routing-table tests unchanged
 The gaia-dht suite SHALL still pass with table K=80 and RESPONSE_K=16.
+
+#### Scenario: Full suite passes at K=80
+- **WHEN** the gaia-dht test suite runs with `K=80` and `RESPONSE_K=16`
+- **THEN** all routing-table and query-response tests pass unchanged

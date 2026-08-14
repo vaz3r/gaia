@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
 
-use gaia_bencode::{BencodeValue, find_dict_key_span, from_bytes, to_bytes};
+use gaia_bencode::{BencodeValue, from_bytes, to_bytes};
 use pretty_assertions::assert_eq;
-use ring::digest;
 use serde::{Deserialize, Serialize};
 
 // ============================================================
@@ -374,77 +373,6 @@ fn unknown_fields_ignored() {
 }
 
 // ============================================================
-// find_dict_key_span tests
-// ============================================================
-
-#[test]
-fn span_simple_integer_value() {
-    let data = b"d3:keyi42ee";
-    let span = find_dict_key_span(data, "key").unwrap();
-    assert_eq!(&data[span], b"i42e");
-}
-
-#[test]
-fn span_nested_dict_value() {
-    let data = b"d4:infod4:name4:testee";
-    let span = find_dict_key_span(data, "info").unwrap();
-    assert_eq!(&data[span], b"d4:name4:teste");
-}
-
-#[test]
-fn span_list_value() {
-    let data = b"d4:listli1ei2ei3eee";
-    let span = find_dict_key_span(data, "list").unwrap();
-    assert_eq!(&data[span], b"li1ei2ei3ee");
-}
-
-#[test]
-fn span_preserves_original_bytes() {
-    // This is the critical property: the span returns the ORIGINAL bytes,
-    // not re-serialized bytes. For info-hash computation, this matters.
-    let data = b"d4:infod6:lengthi1024e4:name8:test.txtee";
-    let span = find_dict_key_span(data, "info").unwrap();
-    let info_bytes = &data[span];
-    assert_eq!(info_bytes, b"d6:lengthi1024e4:name8:test.txte");
-}
-
-#[test]
-fn span_torrent_like_structure() {
-    // Build a realistic torrent-like structure
-    let mut torrent = Vec::new();
-    torrent.extend_from_slice(b"d");
-    torrent.extend_from_slice(b"8:announce35:http://tracker.example.com/announce");
-    torrent.extend_from_slice(b"4:info");
-
-    let info_start = torrent.len();
-    torrent.extend_from_slice(b"d");
-    torrent.extend_from_slice(b"6:lengthi1048576e");
-    torrent.extend_from_slice(b"4:name11:example.txt");
-    torrent.extend_from_slice(b"12:piece lengthi262144e");
-    torrent.extend_from_slice(b"6:pieces20:");
-    torrent.extend_from_slice(&[0xAA; 20]);
-    torrent.extend_from_slice(b"e");
-    let info_end = torrent.len();
-
-    torrent.extend_from_slice(b"e");
-
-    let span = find_dict_key_span(&torrent, "info").unwrap();
-    assert_eq!(span, info_start..info_end);
-}
-
-#[test]
-fn span_key_not_found() {
-    let data = b"d3:keyi42ee";
-    assert!(find_dict_key_span(data, "missing").is_err());
-}
-
-#[test]
-fn span_not_a_dict() {
-    assert!(find_dict_key_span(b"i42e", "key").is_err());
-    assert!(find_dict_key_span(b"l4:teste", "key").is_err());
-}
-
-// ============================================================
 // BencodeValue display
 // ============================================================
 
@@ -562,9 +490,7 @@ fn reject_integer_overflow_21_digits() {
 fn info_hash_from_raw_bytes() {
     // Info hash MUST be computed from the original raw bytes of the info
     // dict, not from re-serialized bytes. Build a .torrent-like structure,
-    // extract the raw info span, compute SHA-1, then re-serialize the parsed
-    // info dict and verify the SHA-1 matches (for canonical bencode they
-    // should agree, confirming the raw-bytes path is usable).
+    // parse the info dict and re-serialize it, verifying the SHA-1 matches.
     let mut torrent = Vec::new();
     torrent.extend_from_slice(b"d");
     torrent.extend_from_slice(b"8:announce35:http://tracker.example.com/announce");
@@ -582,13 +508,7 @@ fn info_hash_from_raw_bytes() {
 
     torrent.extend_from_slice(b"e");
 
-    // Extract raw info bytes via find_dict_key_span
-    let span = find_dict_key_span(&torrent, "info").unwrap();
-    let raw_info = &torrent[span];
-    assert_eq!(raw_info, &torrent[info_bytes_start..info_bytes_end]);
-
-    // Compute SHA-1 of the raw info bytes (this is the real info hash)
-    let raw_hash = digest::digest(&digest::SHA1_FOR_LEGACY_USE_ONLY, raw_info);
+    let raw_info = &torrent[info_bytes_start..info_bytes_end];
 
     // Parse the info dict and re-serialize it
     let parsed: BencodeValue = from_bytes(raw_info).unwrap();
@@ -599,13 +519,5 @@ fn info_hash_from_raw_bytes() {
         raw_info,
         &reserialized[..],
         "re-serialized info dict must match original raw bytes"
-    );
-
-    // And SHA-1 of re-serialized bytes must equal SHA-1 of raw bytes
-    let reserialized_hash = digest::digest(&digest::SHA1_FOR_LEGACY_USE_ONLY, &reserialized);
-    assert_eq!(
-        raw_hash.as_ref(),
-        reserialized_hash.as_ref(),
-        "info hash from raw bytes must match info hash from re-serialized bytes"
     );
 }

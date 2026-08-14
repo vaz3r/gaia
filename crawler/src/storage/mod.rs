@@ -99,15 +99,11 @@ impl Storage {
     /// already filtered out, or a recent failure still inside its backoff
     /// window. `now` is a unix timestamp in seconds.
     ///
-    /// Retained as the scalar primitive used by tests; production admission
-    /// uses the batched `scan_blocked_batch`.
-    #[allow(dead_code)]
+    /// Batched production admission uses `scan_blocked_batch`; this helper
+    /// keeps the single-hash check available to tests.
+    #[cfg(test)]
     pub fn scan_blocked(&self, info_hash: &[u8; 20], now: i64) -> Result<bool> {
-        Ok(match self.scan_status(info_hash)? {
-            None => false,
-            Some(ScannedStatus::Ok) | Some(ScannedStatus::Skipped) => true,
-            Some(ScannedStatus::Failed { next_attempt, .. }) => next_attempt > now,
-        })
+        Ok(self.scan_blocked_batch(&[*info_hash], now)?.contains(info_hash))
     }
 
     /// Batched `scan_blocked`: returns the subset of `info_hashes` that should

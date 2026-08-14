@@ -64,9 +64,6 @@ features = ["html_reports"]
 [dev-dependencies.pretty_assertions]
 version = "1"
 
-[dev-dependencies.ring]
-version = "0.17"
-
 [dev-dependencies.serde]
 version = "1"
 features = [

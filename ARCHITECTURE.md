@@ -446,64 +446,40 @@ All "crawl stats" fields are logged in `crawler.rs:431-496`. Sources:
 
 ## 6. Known open issues
 
-### Confidence tiers (applied to every finding)
-
-- **Tier A — confirmed via clean, multi-hour measurement** (independently re-verified).
-- **Tier B — supported by cumulative/stable data, not a clean-window A/B**.
-- **Tier C — single short-window read or weak evidence; ungraded pending a clean re-measure**.
-
-1. **Residual RSS drift — Tier B.** The big 130 MB/hr leak was caused by the deeper-grower
-   change and is **fixed** (`e0c7fdb`; before/after allocated measured: 280→390 MB climbing vs
-   148-160 MB flat). The revert's before/after numbers are in the commit message and were
-   observed live. However, post-revert `allocated` has been seen oscillating 148-215 MB and
-   drifting +~50 MB over a 25-min window at 8 instances in one measurement; a slow per-instance
-   drift was never fully isolated because the revert masked it. **Not confirmed zero-leak over
-   multi-day; needs a clean multi-hour `allocated` trace.**
-2. **`routing_nodes`/actor diagnostics are instance-0-only — Tier A** (confirmed in source,
-   §5c; `crawler.rs:372-373` → `actor.rs:530-531`).
-3. **min_seen corroboration gate (F9) — Tier B.** Basis:
-   - **Cumulative shadow ratio, audited at 3 time-separated points** on a long-running process:
-     `shadow_near_miss_2 / shadow_filtered` = 14,799/739,051 (2.002%), 14,929/744,446
-     (2.005%), 15,101/751,650 (2.009%). Both counters are cumulative-since-start
-     (`crawler.rs:192`, `crawler.rs:197`, `AtomicU64.fetch_add`, no reset) and increment in the
-     same sweep loop, so the ratio is a stable cumulative fraction, **not** an instantaneous rate
-     (unlike `unique_per_hr`). Stable to 0.01% across ~4 minutes.
-   - Bench: failed hashes do not verify via any peer source (tracker/DHT), so the ~2% 2-source
-     tail is mostly dead.
-   - The 15-minute cold-start `--min-seen 2` run (verified collapsed to ~9/hr) is **Tier C** on
-     its own — but the cumulative ratio + bench lift the combined case to Tier B. It is **not**
-     "proven"; it is "strongly supported by stable cumulative data + bench, no clean-window A/B."
-   - `--min-sightings` discriminator is inert (default 1) and was over-aggressive at 2 (BEP 51
-     returns a random sample, so same-source re-reporting rarely happens).
-4. **BEP 33 scrape is a dead end (F15) — Tier B** (one run, large sample: `scrape_saw_seeds` =
-   8 / 257k fetches = 0.003%; `verified_with_seeds` = 0). Gating not wired.
-5. **Tracker path contributes ~27% of verified — Tier B** (cumulative counters over hours);
-   resolves peers for ~22% of fetches; bench shows 0% verify on failed classes.
-   `TRACKERS_PER_QUERY` default 16 is env-tunable.
-6. **`dht:seen` Redis set growth — Tier A** (measured 5.7M entries / 236 MB before the cap;
-   cap `redis.rs:11` added). **Re-measured post-cap (2026-08-14): `dht:seen` = 150,801,
-   `dht:lookedup` = 425,125, Redis `used_memory` = 25 MB (peak was 236 MB). ~90% reduction;
-   bounded.**
-7. **Single-IP table ceiling (F11) — Tier B.** `routing_nodes`/`instance_nodes` show tables
-   stalling ~2,240-2,400 total nodes from one egress IP (long-running log trend; instance 0
-   dominates at ~2,400).
-8. **Verified/hr (F14) — Tier C / ungraded.** The earlier "~184-213/hr" was **not a clean
-   multi-hour measurement** and is being walked back. After the snapshot tooling fix, the first
-   clean snapshot shows the last full pre-restart hour at **141/hr** (06Z), with later hours
-   depressed by a recent restart (07Z=74, 08Z=61, 09Z=50, 10Z=51, 11Z=30). **A clean multi-hour
-   count is required before this number — or any downstream conclusion ("3000/hr unreachable on
-   one IP") — is treated as settled.** See below.
-   **Consequence if re-measured verified/hr differs materially:** this is not just a doc
-   correction. The grower revert (`e0c7fdb`) traded discovery/throughput for memory flatness;
-   if the real steady-state verified/hr is materially higher or lower than the number that revert
-   was weighed against, the RSS-vs-throughput tradeoff must be re-examined. No downstream
-   decision (tuning, deploy, "3000/hr unreachable") is treated as settled until a clean multi-hour
-   F14 measurement exists.
-9. **The `bench-fetch` harness and `snapshot` command** are the offline iteration tools. The
-   `snapshot` command (`main.rs:45-66`) now sets `busy_timeout` 30s; liveness.sh verifies the
-   copied snapshot opens before reading (this was the source of the recurring "malformed"
-   snapshots — `VACUUM INTO` of the ~900 MB live DB takes 30-60s and was being killed
-   mid-write).
+1. **Residual RSS drift (~tens of MB/hr) not root-caused.** The big 130 MB/hr leak was caused by
+   the deeper-grower change and is **fixed** (`e0c7fdb`; verified flat `allocated` ~148-215 MB
+   across 08-14 03:00-07:00Z). However, the earlier jemalloc profiler diff (F-series docs) still
+   showed `run_fetcher`/`::new` allocation churn as the largest cumulative frames before the
+   revert; since the revert, `allocated` oscillates 148-215 MB but has been observed drifting
+   +~50 MB over a 25-min window at 8 instances (~70-130 MB/hr, worse at 8 than 4 instances) in
+   the pre-revert measurement. **Post-revert steady-state**: flat 148-215 MB (F14). It is not
+   confirmed zero-leak over multi-day; the sampler per-loop-map leak (original) is fixed, but a
+   slower per-instance drift was never fully isolated because the deep-grower revert masked it.
+   Needs a multi-hour clean `allocated` trace to confirm.
+2. **`routing_nodes`/actor diagnostics are instance-0-only** — a metric correctness gap (§5c).
+3. **min_seen corroboration gate is proven non-viable** (F9): genuine torrents are single-sighting
+   within the 120s window; `--min-seen 2` collapses verified to ~9/hr. `--min-sightings`
+   discriminator is inert (default 1) and was found over-aggressive when set to 2 (BEP 51
+   returns a random sample, so same-source re-reporting rarely happens).
+4. **BEP 33 scrape is a dead end** (F15): `scrape_saw_seeds` = 8 / 257k fetches (0.003%);
+   `verified_with_seeds` = 0. The scrape:1 request and shadow counters are kept but gating is not
+   wired.
+5. **Tracker path converts ~27% of verified** but resolves peers for ~22% of fetches; tracker
+   peer quality is low for dead hashes (bench: 0% verify on failed classes). `TRACKERS_PER_QUERY`
+   default 16 is an env-tunable knob (`GAIA_TRACKERS_PER_QUERY`).
+6. **`dht:seen` Redis set grew to 5.7M entries / 236 MB** before the cap was added
+   (`redis.rs:11`, `e0c7fdb`). Cap = 1M with flush-on-cap; a flush causes a brief re-attempt of a
+   few hashes (absorbed by DB/bloom authoritative checks). Not yet re-measured post-cap.
+7. **`instance_nodes` query totals (`q`) are per-instance cumulative** and instance 0's table
+   dominates (`routing_nodes` ~2,414 at last live read; instances 1-7 smaller). Table growth
+   stalls ~2,240-2,400 total nodes from one egress IP (F11) — the single-IP DHT neighborhood
+   ceiling.
+8. **Verified/hr ceiling ~184-213** (F14, hour 04 = 184; hour 19 = 213). 3000/hr is unreachable
+   on a single egress IP; every lever tested (trackers, scrape, min-seen gate, deeper growth,
+   get_peers intake) either adds bounded volume or is a confirmed dead end.
+9. **The `bench-fetch` harness and `snapshot` command** are the only offline iteration tools;
+   the snapshot command (`main.rs:45-59`) requires the DB not be mid-`VACUUM` (it deletes the
+   output first, so a concurrent run would fail).
 10. **`wait_for_shutdown` drains up to `SHUTDOWN_DRAIN` (10s) + 5s** (`crawler.rs:290`), then
     aborts the fetcher. The `write_loop` is awaited; `stats_task` is aborted (no final stats).
     On graceful stop the DHT tables are persisted (`crawler.rs:298-302`).

@@ -1,5 +1,5 @@
 //! A small, dependency-free bloom filter used to short-circuit per-hash
-//! database `scan_blocked` reads on the sampler hot path.
+//! database `scan_blocked_batch` reads on the sampler hot path.
 //!
 //! The bloom caches *known-blocked* verdicts: when a hash's authoritative DB
 //! check says "skip this hash" (already accepted, filtered, or inside a

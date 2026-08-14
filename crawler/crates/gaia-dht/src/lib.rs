@@ -22,8 +22,6 @@ pub mod compact;
 pub(crate) mod dht_lookup;
 /// DHT error types.
 pub mod error;
-/// Broadcast surface for runtime DhtHandle replacement (M173 Lane B B5).
-pub mod handle;
 /// KRPC message encoding and decoding (BEP 5).
 pub mod krpc;
 /// Generic iterative Kademlia lookup (shared by bootstrap find_node).
@@ -47,7 +45,6 @@ pub use compact::{
     encode_compact_nodes6, parse_compact_nodes, parse_compact_nodes6,
 };
 pub use error::{Error, Result};
-pub use handle::{DhtBroadcast, DhtReceiver};
 pub use krpc::{
     GetPeersResponse, KrpcBody, KrpcMessage, KrpcQuery, KrpcResponse, SampleInfohashesResponse,
     TransactionId,

@@ -34,25 +34,9 @@ pub enum Error {
     #[error("invalid extended message: {0}")]
     InvalidExtended(String),
 
-    /// MSE/PE encryption handshake failure.
-    #[error("encryption handshake failed: {0}")]
-    EncryptionHandshakeFailed(String),
-
-    /// Peer proposed an unsupported crypto method.
-    #[error("unsupported crypto method")]
-    UnsupportedCryptoMethod,
-
-    /// Encryption required but peer does not support it.
-    #[error("encryption required but peer does not support it")]
-    EncryptionRequired,
-
     /// Bencode parsing error.
     #[error("bencode: {0}")]
     Bencode(#[from] gaia_bencode::Error),
-
-    /// TLS/SSL error.
-    #[error("SSL/TLS: {0}")]
-    Ssl(String),
 
     /// I/O error.
     #[error("I/O: {0}")]
