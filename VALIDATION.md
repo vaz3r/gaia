@@ -94,6 +94,13 @@ WAL-free, consistent while running). Current snapshot ~4M scans.
   IP's DHT neighborhood). unique/hr ~445k and verified ~180-213/hr are at the
   ceiling. Table growth is NOT the lever (the neighborhood is exhausted).
 
+### F12 — Restart re-warm penalty (8 instances)
+- Each deploy/restart drops verified/hr to ~60-110 for 1-2h while tables
+  re-warm (persisted dht_state.json helps but the DHT neighborhood must be
+  re-established). Steady state ~180-213/hr requires long-stable uptime.
+- **Operational**: avoid restarts; the 8-instance setup needs hours to reach
+  peak. verified_tracker also resets to 0 on restart and climbs back.
+
 ## Final assessment (this session)
 
 Starting baseline: ~150 verified/hr, memory leaking to OOM, ~11% failures
