@@ -4,12 +4,12 @@ use crate::cli::QueryArgs;
 use crate::storage::Storage;
 
 /// Search the database and print matching torrent metadata.
-pub fn query(args: QueryArgs) -> Result<()> {
-    let storage = Storage::open(&args.db)?;
+pub async fn query(args: QueryArgs) -> Result<()> {
+    let storage = Storage::connect(&args.pg).await?;
     if args.failures {
-        return query_failures(&storage);
+        return query_failures(&storage).await;
     }
-    let rows = storage.search(&args.name)?;
+    let rows = storage.search(&args.name).await?;
     if rows.is_empty() {
         println!("no matches for {:?}", args.name);
         return Ok(());
@@ -30,8 +30,8 @@ pub fn query(args: QueryArgs) -> Result<()> {
     Ok(())
 }
 
-fn query_failures(storage: &Storage) -> Result<()> {
-    let rows = storage.failure_breakdown()?;
+async fn query_failures(storage: &Storage) -> Result<()> {
+    let rows = storage.failure_breakdown().await?;
     if rows.is_empty() {
         println!("no failed fetches recorded yet");
         return Ok(());

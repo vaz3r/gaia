@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crawler",
+    "tools/sqlite-to-pg",
     "crawler/crates/gaia-bencode",
     "crawler/crates/gaia-core",
     "crawler/crates/gaia-wire",

@@ -38,13 +38,18 @@ impl SharedState {
                 return SharedState { conn: None, prefix: "dht".into() };
             }
         };
-        match ConnectionManager::new(client).await {
-            Ok(cm) => {
+        let connect_fut = ConnectionManager::new(client.clone());
+        match tokio::time::timeout(std::time::Duration::from_secs(5), connect_fut).await {
+            Ok(Ok(cm)) => {
                 info_connected();
                 SharedState { conn: Some(Arc::new(cm)), prefix: "dht".into() }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 warn!(error = %e, "could not connect to redis; running without shared state");
+                SharedState { conn: None, prefix: "dht".into() }
+            }
+            Err(_) => {
+                warn!("redis connect timed out after 5s; running without shared state");
                 SharedState { conn: None, prefix: "dht".into() }
             }
         }

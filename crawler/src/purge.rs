@@ -1,26 +1,15 @@
 use std::io::Write;
 
 use anyhow::{Context, Result};
+use sqlx::PgPool;
 
 use crate::cli::PurgeArgs;
 
-/// Delete the database (and its WAL/SHM sidecars) and the routing state
+/// Delete the crawl data (TRUNCATE Postgres tables) and the routing state
 /// directory so a subsequent `run` starts from scratch.
-pub fn purge(args: &PurgeArgs) -> Result<()> {
-    let targets = [
-        args.db.clone(),
-        format!("{}-wal", args.db),
-        format!("{}-shm", args.db),
-    ];
-
+pub async fn purge(args: &PurgeArgs) -> Result<()> {
     println!("Purging crawl data:");
     let mut removed = Vec::new();
-    for t in &targets {
-        let p = std::path::Path::new(t);
-        if p.exists() {
-            removed.push(t.clone());
-        }
-    }
     if args.state_dir.exists() {
         removed.push(args.state_dir.display().to_string());
     }
@@ -34,7 +23,7 @@ pub fn purge(args: &PurgeArgs) -> Result<()> {
     }
 
     if !args.yes {
-        eprint!("Delete these files and the routing state? [y/N] ");
+        eprint!("Delete the crawl tables and the routing state? [y/N] ");
         std::io::stdout().flush()?;
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
@@ -44,16 +33,14 @@ pub fn purge(args: &PurgeArgs) -> Result<()> {
         }
     }
 
-    for t in &targets {
-        let p = std::path::Path::new(t);
-        match p.metadata() {
-            Ok(_) => {
-                std::fs::remove_file(p).with_context(|| format!("remove {}", p.display()))?;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e).with_context(|| format!("remove {}", p.display())),
-        }
-    }
+    let pool = PgPool::connect(&args.pg)
+        .await
+        .with_context(|| format!("connect postgres {}", args.pg))?;
+    sqlx::query("TRUNCATE TABLE torrents, scanned, crawl_stats_history")
+        .execute(&pool)
+        .await
+        .context("truncate crawl tables")?;
+
     if args.state_dir.exists() {
         std::fs::remove_dir_all(&args.state_dir)
             .with_context(|| format!("remove {}", args.state_dir.display()))?;

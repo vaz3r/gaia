@@ -64,7 +64,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
     let state_dir = args.state_dir.clone();
     std::fs::create_dir_all(&state_dir)?;
 
-    let storage = Storage::open(&args.db)?;
+    let storage = Storage::connect(&args.pg).await?;
     let stats = Arc::new(CrawlStats::default());
     let blocklist = Arc::new(Blocklist::load(args.blocklist.as_deref())?);
     let shared = crate::redis::init_shared(args.redis_url.clone()).await;
@@ -74,7 +74,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
         port = args.port,
         instances = instances,
         ipv6 = args.ipv6,
-        db = %args.db,
+        pg = %args.pg,
         state_dir = %state_dir.display(),
         concurrency = args.effective_concurrency(),
         aggressive = args.aggressive,
@@ -323,7 +323,7 @@ async fn write_loop(
                     Some(record) => {
                         batch.push(record);
                         if batch.len() >= BATCH {
-                            if let Err(e) = storage.insert_batch(&batch) {
+                            if let Err(e) = storage.insert_batch(&batch).await {
                                 error!(error = %e, "storage batch failed");
                             }
                             batch.clear();
@@ -333,7 +333,7 @@ async fn write_loop(
                 }
             }
             _ = tokio::time::sleep(FLUSH_INTERVAL), if !batch.is_empty() => {
-                if let Err(e) = storage.insert_batch(&batch) {
+                if let Err(e) = storage.insert_batch(&batch).await {
                     error!(error = %e, "storage batch failed");
                 }
                 batch.clear();
@@ -341,7 +341,7 @@ async fn write_loop(
         }
     }
     if !batch.is_empty() {
-        if let Err(e) = storage.insert_batch(&batch) {
+        if let Err(e) = storage.insert_batch(&batch).await {
             error!(error = %e, "storage final batch failed");
         }
     }

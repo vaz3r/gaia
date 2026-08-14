@@ -16,6 +16,7 @@ COPY crawler/crates/gaia-bencode/Cargo.toml crawler/crates/gaia-bencode/
 COPY crawler/crates/gaia-core/Cargo.toml crawler/crates/gaia-core/
 COPY crawler/crates/gaia-wire/Cargo.toml crawler/crates/gaia-wire/
 COPY crawler/crates/gaia-dht/Cargo.toml crawler/crates/gaia-dht/
+COPY tools/sqlite-to-pg/Cargo.toml tools/sqlite-to-pg/
 RUN mkdir -p crawler/src && \
     echo 'fn main() {}' > crawler/src/main.rs && \
     cargo build --release -p crawler 2>/dev/null || true
@@ -26,6 +27,7 @@ COPY crawler/crates/gaia-bencode/src crawler/crates/gaia-bencode/src/
 COPY crawler/crates/gaia-core/src crawler/crates/gaia-core/src/
 COPY crawler/crates/gaia-wire/src crawler/crates/gaia-wire/src/
 COPY crawler/crates/gaia-dht/src crawler/crates/gaia-dht/src/
+COPY db/migrations db/migrations
 RUN touch crawler/src/main.rs && \
     cargo build --release -p crawler
 
@@ -34,7 +36,7 @@ RUN touch crawler/src/main.rs && \
 # which the compiled binary links against.
 FROM debian:trixie-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl gosu \
+    && apt-get install -y --no-install-recommends ca-certificates curl postgresql-client gosu \
     && useradd --create-home --uid 1000 crawler \
     && rm -rf /var/lib/apt/lists/*
 

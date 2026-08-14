@@ -5,13 +5,13 @@
 # Usage:
 #   benchmark/instances-ab.sh [seconds] [compose-dir]
 #
-# Defaults: 3600s (1h), ./crawler compose dir.
+# Defaults: 3600s (1h), repo-root compose dir.
 # Samples every 30s (matching crawler's stats interval).
 # Outputs a CSV time-series and a summary to stdout.
 set -euo pipefail
 
 WINDOW="${1:-3600}"
-COMPOSE_DIR="${2:-$(cd "$(dirname "$0")/.." && pwd)/crawler}"
+COMPOSE_DIR="${2:-$(cd "$(dirname "$0")/.." && pwd)}"
 SAMPLE_INTERVAL=30
 
 cd "$COMPOSE_DIR"

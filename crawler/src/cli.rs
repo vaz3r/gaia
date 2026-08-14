@@ -29,20 +29,20 @@ pub enum Command {
 
 #[derive(Debug, Args)]
 pub struct SnapshotArgs {
-    /// SQLite database file path to read from.
-    #[arg(long, default_value = "crawler.sqlite")]
-    pub db: String,
+    /// PostgreSQL connection URL.
+    #[arg(long)]
+    pub pg: String,
 
-    /// Destination path for the snapshot.
+    /// Destination path for the snapshot (pg_dump custom format).
     #[arg(long)]
     pub out: String,
 }
 
 #[derive(Debug, Args)]
 pub struct BenchFetchArgs {
-    /// SQLite snapshot path to sample from.
+    /// PostgreSQL connection URL to sample from.
     #[arg(long)]
-    pub db: String,
+    pub pg: String,
 
     /// Number of hashes to sample per outcome class.
     #[arg(long, default_value_t = 50)]
@@ -69,9 +69,9 @@ pub struct RunArgs {
     #[arg(long, default_value_t = 6881)]
     pub port: u16,
 
-    /// SQLite database file path.
-    #[arg(long, default_value = "crawler.sqlite")]
-    pub db: String,
+    /// PostgreSQL connection URL (the single store).
+    #[arg(long, default_value = "postgres://crawler:crawler@localhost:5432/crawler")]
+    pub pg: String,
 
     /// Maximum concurrent in-flight metadata fetches.
     #[arg(long, default_value_t = 512)]
@@ -204,9 +204,9 @@ pub struct QueryArgs {
     /// Substring to search for in torrent names.
     pub name: String,
 
-    /// SQLite database file path.
-    #[arg(long, default_value = "crawler.sqlite")]
-    pub db: String,
+    /// PostgreSQL connection URL.
+    #[arg(long, default_value = "postgres://crawler:crawler@localhost:5432/crawler")]
+    pub pg: String,
 
     /// Instead of searching names, print a breakdown of metadata fetch
     /// failures by `failure_reason` from the `scanned` table.
@@ -216,9 +216,9 @@ pub struct QueryArgs {
 
 #[derive(Debug, Args)]
 pub struct PurgeArgs {
-    /// SQLite database file path.
-    #[arg(long, default_value = "crawler.sqlite")]
-    pub db: String,
+    /// PostgreSQL connection URL.
+    #[arg(long, default_value = "postgres://crawler:crawler@localhost:5432/crawler")]
+    pub pg: String,
 
     /// Directory holding the persisted DHT routing table.
     #[arg(long, default_value = "state")]

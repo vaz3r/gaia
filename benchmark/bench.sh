@@ -5,13 +5,13 @@
 # Usage:
 #   benchmark/bench.sh [seconds] [docker-compose-dir]
 #
-# Defaults: 600s window, ./crawler compose dir. Requires the stack to be
+# Defaults: 600s window, repo-root compose dir. Requires the stack to be
 # up (gluetun + crawler + redis). Prints a report suitable for comparing
 # crawler configs against the original baseline (~27.8k torrents/GB).
 set -euo pipefail
 
 WINDOW="${1:-600}"
-COMPOSE_DIR="${2:-$(cd "$(dirname "$0")/.." && pwd)/crawler}"
+COMPOSE_DIR="${2:-$(cd "$(dirname "$0")/.." && pwd)}"
 BENCH_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 cd "$COMPOSE_DIR"

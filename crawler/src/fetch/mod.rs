@@ -183,6 +183,7 @@ pub async fn run_fetcher(
             let chunk_bytes: Vec<[u8; 20]> = chunk.iter().map(|r| *r.hash.as_bytes()).collect();
             let blocked = storage
                 .scan_blocked_batch(&chunk_bytes, now)
+                .await
                 .unwrap_or_default();
             let blocked: std::collections::HashSet<[u8; 20]> = blocked.into_iter().collect();
             for req in chunk {
@@ -224,13 +225,15 @@ pub async fn run_fetcher(
                     .await;
                     match outcome {
                         Ok(FetchOutcome::Accepted { info_bytes, raw_name }) => {
-                        let _ = storage.record_scanned(&ScannedRecord {
+                        let _ = storage
+                .record_scanned(&ScannedRecord {
                             info_hash: *req.hash.as_bytes(),
                             status: ScannedStatus::Ok,
                             info_bytes: Some(info_bytes),
                             raw_name: Some(raw_name),
                             last_attempt: unix_secs(),
-                        });
+                        })
+                .await;
                     }
                     Err(fe) => {
                         stats
@@ -239,6 +242,7 @@ pub async fn run_fetcher(
                         debug!(error = %fe.reason, %req.hash, dominant = ?fe.dominant_failure, "metadata fetch failed");
                         let attempts = storage
                             .scan_status(req.hash.as_bytes())
+                            .await
                             .ok()
                             .flatten()
                             .map_or(1, |s| match s {
@@ -251,7 +255,8 @@ pub async fn run_fetcher(
                         } else {
                             backoff_secs(attempts)
                         };
-                        let _ = storage.record_scanned(&ScannedRecord {
+                        let _ = storage
+                .record_scanned(&ScannedRecord {
                             info_hash: *req.hash.as_bytes(),
                             status: ScannedStatus::Failed {
                                 attempts,
@@ -261,7 +266,8 @@ pub async fn run_fetcher(
                             info_bytes: None,
                             raw_name: None,
                             last_attempt: now,
-                        });
+                        })
+                .await;
                     }
                 }
                 in_flight.lock().unwrap().remove(&req.hash);

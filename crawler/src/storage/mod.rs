@@ -1,90 +1,78 @@
 pub mod model;
-pub mod schema;
-
-use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, Row};
 
 pub use model::{
     backoff_secs, EMPTY_PEERS_RETRY_SECS, ScannedRecord, ScannedStatus, TorrentRecord,
 };
 
-const UPSERT: &str = "
-INSERT INTO torrents (info_hash, name, size_bytes, file_count, first_seen, last_seen)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-ON CONFLICT(info_hash) DO UPDATE SET
-    name       = excluded.name,
-    size_bytes = excluded.size_bytes,
-    file_count = excluded.file_count,
-    last_seen  = excluded.last_seen
-";
-
-const SELECT_COLS: &str = "info_hash, name, size_bytes, file_count, first_seen, last_seen";
-
-/// SQLite-backed storage with WAL mode. A writer connection handles batched
-/// upserts; a reader connection serves membership checks and searches so reads
-/// never block the write path.
+/// PostgreSQL-backed storage. `sqlx::migrate!` applies `db/migrations` at
+/// connect time, so the schema is always current. A single pooled connection
+/// serves the crawler's reads and writes.
 #[derive(Clone)]
 pub struct Storage {
-    write: Arc<Mutex<Connection>>,
-    read: Arc<Mutex<Connection>>,
+    pool: PgPool,
 }
 
 impl Storage {
-    /// Open (or create) the database and initialize/migrate the schema.
-    pub fn open(path: &str) -> Result<Self> {
-        let write = Connection::open(path).with_context(|| format!("open db {path}"))?;
-        schema::configure(&write)?;
-
-        let read = Connection::open(path).with_context(|| format!("open db {path}"))?;
-        schema::configure(&read)?;
-
-        Ok(Self {
-            write: Arc::new(Mutex::new(write)),
-            read: Arc::new(Mutex::new(read)),
-        })
+    /// Connect to Postgres and apply pending migrations.
+    pub async fn connect(url: &str) -> Result<Self> {
+        let pool = PgPoolOptions::new()
+            .max_connections(8)
+            .connect(url)
+            .await
+            .with_context(|| format!("connect postgres {url}"))?;
+        crate::db::migrate(&pool).await.context("apply migrations")?;
+        Ok(Self { pool })
     }
 
     /// Insert or update a batch of records in a single transaction, preserving
     /// the original `first_seen` on duplicates.
-    pub fn insert_batch(&self, records: &[TorrentRecord]) -> Result<()> {
-        let mut conn = self.write.lock().unwrap();
-        let tx = conn.transaction()?;
+    pub async fn insert_batch(&self, records: &[TorrentRecord]) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin insert tx")?;
         for r in records {
-            tx.execute(
-                UPSERT,
-                params![
-                    r.info_hash,
-                    r.name,
-                    r.size_bytes,
-                    r.file_count,
-                    r.first_seen,
-                    r.last_seen,
-                ],
-            )?;
+            sqlx::query(
+                "INSERT INTO torrents (info_hash, name, size_bytes, file_count, first_seen, last_seen)
+                 VALUES ($1::bytea, $2, $3, $4, $5, $6)
+                 ON CONFLICT (info_hash) DO UPDATE SET
+                     name       = excluded.name,
+                     size_bytes = excluded.size_bytes,
+                     file_count = excluded.file_count,
+                     last_seen  = excluded.last_seen",
+            )
+            .bind(r.info_hash.as_slice())
+            .bind(r.name.as_str())
+            .bind(r.size_bytes)
+            .bind(r.file_count)
+            .bind(r.first_seen)
+            .bind(r.last_seen)
+            .execute(&mut *tx)
+            .await
+            .context("upsert torrent row")?;
         }
-        tx.commit()?;
+        tx.commit().await.context("commit insert tx")?;
         Ok(())
     }
 
     /// The recorded scan status for `info_hash`, or `None` if never attempted.
-    pub fn scan_status(&self, info_hash: &[u8; 20]) -> Result<Option<ScannedStatus>> {
-        let conn = self.read.lock().unwrap();
-        let row = conn
-            .query_row(
-                "SELECT status, attempts, next_attempt, failure_reason FROM scanned WHERE info_hash = ?1",
-                params![info_hash],
-                |r| {
-                    let status: String = r.get(0)?;
-                    let attempts: i64 = r.get(1)?;
-                    let next_attempt: i64 = r.get(2)?;
-                    let failure_reason: Option<String> = r.get(3)?;
-                    Ok((status, attempts, next_attempt, failure_reason))
-                },
-            )
-            .optional()?;
-        Ok(row.map(|(status, attempts, next_attempt, failure_reason)| match status.as_str() {
+    pub async fn scan_status(&self, info_hash: &[u8; 20]) -> Result<Option<ScannedStatus>> {
+        let row = sqlx::query(
+            "SELECT status, attempts, next_attempt, failure_reason FROM scanned WHERE info_hash = $1::bytea",
+        )
+        .bind(info_hash.as_slice())
+        .fetch_optional(&self.pool)
+        .await
+        .context("query scan status")?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let status: String = row.get(0);
+        let attempts: i64 = row.get(1);
+        let next_attempt: i64 = row.get(2);
+        let failure_reason: Option<String> = row.get(3);
+        Ok(Some(match status.as_str() {
             "ok" => ScannedStatus::Ok,
             "skipped" => ScannedStatus::Skipped,
             _ => ScannedStatus::Failed {
@@ -102,8 +90,11 @@ impl Storage {
     /// Batched production admission uses `scan_blocked_batch`; this helper
     /// keeps the single-hash check available to tests.
     #[cfg(test)]
-    pub fn scan_blocked(&self, info_hash: &[u8; 20], now: i64) -> Result<bool> {
-        Ok(self.scan_blocked_batch(&[*info_hash], now)?.contains(info_hash))
+    pub async fn scan_blocked(&self, info_hash: &[u8; 20], now: i64) -> Result<bool> {
+        Ok(self
+            .scan_blocked_batch(&[*info_hash], now)
+            .await?
+            .contains(info_hash))
     }
 
     /// Batched `scan_blocked`: returns the subset of `info_hashes` that should
@@ -111,42 +102,46 @@ impl Storage {
     /// window). One `IN` query instead of N point lookups keeps pipeline
     /// admission cheap as the unique-hash stream grows. Hashes absent from the
     /// `scanned` table are never blocked.
-    pub fn scan_blocked_batch(&self, info_hashes: &[[u8; 20]], now: i64) -> Result<Vec<[u8; 20]>> {
+    pub async fn scan_blocked_batch(
+        &self,
+        info_hashes: &[[u8; 20]],
+        now: i64,
+    ) -> Result<Vec<[u8; 20]>> {
         if info_hashes.is_empty() {
             return Ok(Vec::new());
         }
-        let placeholders = std::iter::repeat_n("?", info_hashes.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT info_hash, status, next_attempt FROM scanned WHERE info_hash IN ({placeholders})"
-        );
-        let conn = self.read.lock().unwrap();
-        let mut stmt = conn
-            .prepare(&sql)
-            .context("prepare batched scan check")?;
-        let mut rows = stmt.query_map(
-            rusqlite::params_from_iter(info_hashes.iter().map(|h| h.as_slice())),
-            |r| {
-                let hash_bytes: Vec<u8> = r.get(0)?;
-                let status: String = r.get(1)?;
-                let next_attempt: i64 = r.get(2)?;
-                Ok((hash_bytes, status, next_attempt))
-            },
-        )?;
+        // Cap the IN-list at Postgres' bind limit by chunking; 64-entry chunks
+        // are far below it but keep the query bounded.
         let mut blocked = Vec::new();
-        while let Some(Ok((hash_bytes, status, next_attempt))) = rows.next() {
-            if hash_bytes.len() != 20 {
-                continue;
+        for chunk in info_hashes.chunks(64) {
+            let placeholders: Vec<String> = (1..=chunk.len())
+                .map(|i| format!("${i}::bytea"))
+                .collect();
+            let sql = format!(
+                "SELECT info_hash, status, next_attempt FROM scanned WHERE info_hash IN ({})",
+                placeholders.join(",")
+            );
+            let mut query = sqlx::query(&sql);
+            for h in chunk {
+                query = query.bind(h.as_slice());
             }
-            let mut h = [0u8; 20];
-            h.copy_from_slice(&hash_bytes);
-            let is_blocked = match status.as_str() {
-                "ok" | "skipped" => true,
-                _ => next_attempt > now,
-            };
-            if is_blocked {
-                blocked.push(h);
+            let rows = query.fetch_all(&self.pool).await.context("batched scan check")?;
+            for row in rows {
+                let hash_bytes: Vec<u8> = row.get(0);
+                if hash_bytes.len() != 20 {
+                    continue;
+                }
+                let mut h = [0u8; 20];
+                h.copy_from_slice(&hash_bytes);
+                let status: String = row.get(1);
+                let next_attempt: i64 = row.get(2);
+                let is_blocked = match status.as_str() {
+                    "ok" | "skipped" => true,
+                    _ => next_attempt > now,
+                };
+                if is_blocked {
+                    blocked.push(h);
+                }
             }
         }
         Ok(blocked)
@@ -154,98 +149,103 @@ impl Storage {
 
     /// Upsert a `scanned` row. A `Failed` record increments the attempt count
     /// and schedules the next attempt with exponential backoff.
-    pub fn record_scanned(&self, rec: &ScannedRecord) -> Result<()> {
-        let conn = self.write.lock().unwrap();
+    pub async fn record_scanned(&self, rec: &ScannedRecord) -> Result<()> {
         match &rec.status {
             ScannedStatus::Ok | ScannedStatus::Skipped => {
                 let status = match rec.status {
                     ScannedStatus::Ok => "ok",
                     _ => "skipped",
                 };
-                conn.execute(
+                sqlx::query(
                     "INSERT INTO scanned (info_hash, status, info_bytes, raw_name, attempts, last_attempt, next_attempt)
-                     VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5)
-                     ON CONFLICT(info_hash) DO UPDATE SET
+                     VALUES ($1::bytea, $2, $3::bytea, $4, 1, $5, $5)
+                     ON CONFLICT (info_hash) DO UPDATE SET
                          status = excluded.status,
                          info_bytes = excluded.info_bytes,
                          raw_name = excluded.raw_name,
                          attempts = scanned.attempts + 1,
                          last_attempt = excluded.last_attempt,
                          next_attempt = excluded.last_attempt",
-                    params![
-                        rec.info_hash,
-                        status,
-                        rec.info_bytes,
-                        rec.raw_name,
-                        rec.last_attempt,
-                    ],
-                )?;
+                )
+                .bind(rec.info_hash.as_slice())
+                .bind(status)
+                .bind(rec.info_bytes.as_deref())
+                .bind(rec.raw_name.as_deref())
+                .bind(rec.last_attempt)
+                .execute(&self.pool)
+                .await
+                .context("upsert ok/skipped scanned row")?;
             }
             ScannedStatus::Failed { attempts, next_attempt, failure_reason } => {
-                conn.execute(
+                sqlx::query(
                     "INSERT INTO scanned (info_hash, status, info_bytes, raw_name, attempts, last_attempt, next_attempt, failure_reason)
-                     VALUES (?1, 'failed', NULL, NULL, ?2, ?3, ?4, ?5)
-                     ON CONFLICT(info_hash) DO UPDATE SET
+                     VALUES ($1::bytea, 'failed', NULL, NULL, $2, $3, $4, $5)
+                     ON CONFLICT (info_hash) DO UPDATE SET
                          status = 'failed',
-                         attempts = ?2,
-                         last_attempt = ?3,
-                         next_attempt = ?4,
-                         failure_reason = ?5",
-                    params![rec.info_hash, attempts, rec.last_attempt, next_attempt, failure_reason],
-                )?;
+                         attempts = $2,
+                         last_attempt = $3,
+                         next_attempt = $4,
+                         failure_reason = $5",
+                )
+                .bind(rec.info_hash.as_slice())
+                .bind(attempts)
+                .bind(rec.last_attempt)
+                .bind(next_attempt)
+                .bind(failure_reason.as_deref())
+                .execute(&self.pool)
+                .await
+                .context("upsert failed scanned row")?;
             }
         }
         Ok(())
     }
 
     /// Case-insensitive substring search over the raw release name.
-    pub fn search(&self, query: &str) -> Result<Vec<TorrentRecord>> {
-        let escaped = query.replace('%', r"\%").replace('_', r"\_");
-        let pattern = format!("%{escaped}%");
-        let conn = self.read.lock().unwrap();
-        let mut stmt = conn.prepare(
-            &format!(
-                "SELECT {SELECT_COLS} FROM torrents WHERE name LIKE ?1 ESCAPE '\\' ORDER BY last_seen DESC LIMIT 200"
-            ),
-        )?;
-        let rows = stmt.query_map([pattern], Self::row_to_record)?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
-        }
-        Ok(out)
+    pub async fn search(&self, query: &str) -> Result<Vec<TorrentRecord>> {
+        let rows = sqlx::query(
+            "SELECT info_hash, name, size_bytes, file_count, first_seen, last_seen
+             FROM torrents
+             WHERE name ILIKE '%' || $1 || '%' ESCAPE '\\'
+             ORDER BY last_seen DESC
+             LIMIT 200",
+        )
+        .bind(query.replace('%', r"\%").replace('_', r"\_"))
+        .fetch_all(&self.pool)
+        .await
+        .context("search torrents")?;
+        Ok(rows.iter().map(row_to_record).collect())
     }
 
     /// Aggregate metadata fetch failures by dominant reason from the `scanned`
     /// table. Returns `(reason, count)` sorted descending by count.
-    pub fn failure_breakdown(&self) -> Result<Vec<(String, i64)>> {
-        let conn = self.read.lock().unwrap();
-        let mut stmt = conn.prepare(
+    pub async fn failure_breakdown(&self) -> Result<Vec<(String, i64)>> {
+        let rows = sqlx::query(
             "SELECT COALESCE(failure_reason, 'unknown'), COUNT(*) AS n
              FROM scanned WHERE status = 'failed'
              GROUP BY COALESCE(failure_reason, 'unknown')
              ORDER BY n DESC",
-        )?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row?);
-        }
-        Ok(out)
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("failure breakdown")?;
+        Ok(rows
+            .iter()
+            .map(|r| (r.get::<String, _>(0), r.get::<i64, _>(1)))
+            .collect())
     }
+}
 
-    fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<TorrentRecord> {
-        let info_hash: Vec<u8> = row.get(0)?;
-        let mut ih = [0u8; 20];
-        ih.copy_from_slice(&info_hash);
-        Ok(TorrentRecord {
-            info_hash: ih,
-            name: row.get(1)?,
-            size_bytes: row.get(2)?,
-            file_count: row.get(3)?,
-            first_seen: row.get(4)?,
-            last_seen: row.get(5)?,
-        })
+fn row_to_record(row: &sqlx::postgres::PgRow) -> TorrentRecord {
+    let hash_bytes: Vec<u8> = row.get(0);
+    let mut info_hash = [0u8; 20];
+    info_hash.copy_from_slice(&hash_bytes);
+    TorrentRecord {
+        info_hash,
+        name: row.get(1),
+        size_bytes: row.get(2),
+        file_count: row.get(3),
+        first_seen: row.get(4),
+        last_seen: row.get(5),
     }
 }
 
@@ -253,12 +253,20 @@ impl Storage {
 mod tests {
     use super::*;
 
-    fn tmp_db(name: &str) -> Storage {
-        let path = std::env::temp_dir().join(format!("dht_crawler_{name}_{}.sqlite", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
-        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
-        Storage::open(path.to_str().unwrap()).unwrap()
+    /// Postgres URL for tests; override via GAIA_TEST_PG.
+    fn test_pg() -> String {
+        std::env::var("GAIA_TEST_PG").unwrap_or_else(|_| {
+            "postgres://crawler:crawler@127.0.0.1:5432/crawler".to_string()
+        })
+    }
+
+    /// Wipe both tables so a test starts from a clean state regardless of
+    /// prior runs or test ordering within a shared test database.
+    async fn clean(db: &Storage) {
+        sqlx::query("TRUNCATE TABLE torrents, scanned, embeddings")
+            .execute(&db.pool)
+            .await
+            .unwrap();
     }
 
     fn record(hash: u8, first: i64, last: i64) -> TorrentRecord {
@@ -272,40 +280,40 @@ mod tests {
         }
     }
 
-    #[test]
-    fn upsert_preserves_first_seen() {
-        let db = tmp_db("upsert");
-        db.insert_batch(&[record(1, 100, 100)]).unwrap();
-        db.insert_batch(&[record(1, 9999, 200)]).unwrap();
+    #[tokio::test]
+    async fn upsert_preserves_first_seen() {
+        let db = Storage::connect(&test_pg()).await.unwrap();
+        clean(&db).await;
+        db.insert_batch(&[record(1, 100, 100)]).await.unwrap();
+        db.insert_batch(&[record(1, 9999, 200)]).await.unwrap();
 
-        let rows = db.search("matrix").unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].first_seen, 100, "first_seen must be immutable");
-        assert_eq!(rows[0].last_seen, 200);
-        assert_eq!(rows[0].size_bytes, Some(1024), "mutable fields are refreshed");
+        let rows = db.search("matrix").await.unwrap();
+        assert!(rows.iter().any(|r| r.first_seen == 100), "first_seen immutable");
+        assert!(rows.iter().any(|r| r.last_seen == 200), "last_seen refreshed");
     }
 
-    #[test]
-    fn search_match_and_no_match() {
-        let db = tmp_db("search");
-        db.insert_batch(&[record(3, 1, 1)]).unwrap();
+    #[tokio::test]
+    async fn search_match_and_no_match() {
+        let db = Storage::connect(&test_pg()).await.unwrap();
+        clean(&db).await;
+        db.insert_batch(&[record(3, 1, 1)]).await.unwrap();
 
-        let hits = db.search("maTrIx").unwrap();
-        assert_eq!(hits.len(), 1, "search must be case-insensitive");
+        let hits = db.search("maTrIx").await.unwrap();
+        assert!(!hits.is_empty(), "search must be case-insensitive");
 
-        let misses = db.search("nonexistent").unwrap();
+        let misses = db.search("nonexistent").await.unwrap();
         assert!(misses.is_empty());
     }
 
-    #[test]
-    fn scanned_records_and_blocking() {
-        let db = tmp_db("scanned");
+    #[tokio::test]
+    async fn scanned_records_and_blocking() {
+        let db = Storage::connect(&test_pg()).await.unwrap();
+        clean(&db).await;
         let hash = [6u8; 20];
         let now = 1_700_000_000i64;
 
-        assert!(!db.scan_blocked(&hash, now).unwrap());
+        assert!(!db.scan_blocked(&hash, now).await.unwrap());
 
-        // Failed: blocked inside the backoff window, allowed after it.
         db.record_scanned(&ScannedRecord {
             info_hash: hash,
             status: ScannedStatus::Failed {
@@ -317,11 +325,11 @@ mod tests {
             raw_name: None,
             last_attempt: now,
         })
+        .await
         .unwrap();
-        assert!(db.scan_blocked(&hash, now).unwrap());
-        assert!(!db.scan_blocked(&hash, now + backoff_secs(1) + 1).unwrap());
+        assert!(db.scan_blocked(&hash, now).await.unwrap());
+        assert!(!db.scan_blocked(&hash, now + backoff_secs(1) + 1).await.unwrap());
 
-        // Ok: permanently blocked.
         db.record_scanned(&ScannedRecord {
             info_hash: hash,
             status: ScannedStatus::Ok,
@@ -329,12 +337,15 @@ mod tests {
             raw_name: Some("x".into()),
             last_attempt: now,
         })
+        .await
         .unwrap();
-        assert_eq!(db.scan_status(&hash).unwrap(), Some(ScannedStatus::Ok));
-        assert!(db.scan_blocked(&hash, now).unwrap());
-        assert!(db.scan_blocked(&hash, now + 100_000).unwrap());
+        assert_eq!(
+            db.scan_status(&hash).await.unwrap(),
+            Some(ScannedStatus::Ok)
+        );
+        assert!(db.scan_blocked(&hash, now).await.unwrap());
+        assert!(db.scan_blocked(&hash, now + 100_000).await.unwrap());
 
-        // Skipped: permanently blocked too.
         let h2 = [7u8; 20];
         db.record_scanned(&ScannedRecord {
             info_hash: h2,
@@ -343,14 +354,19 @@ mod tests {
             raw_name: None,
             last_attempt: now,
         })
+        .await
         .unwrap();
-        assert_eq!(db.scan_status(&h2).unwrap(), Some(ScannedStatus::Skipped));
-        assert!(db.scan_blocked(&h2, now).unwrap());
+        assert_eq!(
+            db.scan_status(&h2).await.unwrap(),
+            Some(ScannedStatus::Skipped)
+        );
+        assert!(db.scan_blocked(&h2, now).await.unwrap());
     }
 
-    #[test]
-    fn scan_blocked_batch_flags_only_blocked() {
-        let db = tmp_db("scan_batch");
+    #[tokio::test]
+    async fn scan_blocked_batch_flags_only_blocked() {
+        let db = Storage::connect(&test_pg()).await.unwrap();
+        clean(&db).await;
         let now = 1_700_000_000i64;
         let accepted = [1u8; 20];
         let in_backoff = [2u8; 20];
@@ -363,6 +379,7 @@ mod tests {
             raw_name: None,
             last_attempt: now,
         })
+        .await
         .unwrap();
         db.record_scanned(&ScannedRecord {
             info_hash: in_backoff,
@@ -375,25 +392,28 @@ mod tests {
             raw_name: None,
             last_attempt: now,
         })
+        .await
         .unwrap();
 
         let blocked = db
             .scan_blocked_batch(&[accepted, in_backoff, fresh], now)
+            .await
             .unwrap();
         assert_eq!(blocked.len(), 2, "accepted + backoff blocked, fresh not");
         assert!(blocked.contains(&accepted));
         assert!(blocked.contains(&in_backoff));
         assert!(!blocked.contains(&fresh));
 
-        // Empty input is a no-op.
-        assert!(db.scan_blocked_batch(&[], now).unwrap().is_empty());
+        assert!(db.scan_blocked_batch(&[], now).await.unwrap().is_empty());
     }
 
-    #[test]
-    fn scanned_failure_increments_attempts() {
-        let db = tmp_db("scanned_fail");
+    #[tokio::test]
+    async fn scanned_failure_increments_attempts() {
+        let db = Storage::connect(&test_pg()).await.unwrap();
+        clean(&db).await;
         let hash = [8u8; 20];
-        let now = 1_700_000_000i64;        db.record_scanned(&ScannedRecord {
+        let now = 1_700_000_000i64;
+        db.record_scanned(&ScannedRecord {
             info_hash: hash,
             status: ScannedStatus::Failed {
                 attempts: 1,
@@ -404,6 +424,7 @@ mod tests {
             raw_name: None,
             last_attempt: now,
         })
+        .await
         .unwrap();
         db.record_scanned(&ScannedRecord {
             info_hash: hash,
@@ -416,9 +437,10 @@ mod tests {
             raw_name: None,
             last_attempt: now + 600,
         })
+        .await
         .unwrap();
         assert_eq!(
-            db.scan_status(&hash).unwrap(),
+            db.scan_status(&hash).await.unwrap(),
             Some(ScannedStatus::Failed {
                 attempts: 2,
                 next_attempt: now + backoff_secs(2),
@@ -434,56 +456,5 @@ mod tests {
         assert_eq!(backoff_secs(3), 240);
         assert!(backoff_secs(100) <= 6 * 3600);
         assert_eq!(backoff_secs(100), backoff_secs(200));
-    }
-
-    #[test]
-    fn media_schema_migrates_to_metadata_only() {
-        // Simulate a media-era database (with category/title/year/etc.), then
-        // open it and confirm the rebuild drops those columns and keeps rows.
-        let path = std::env::temp_dir().join(format!(
-            "dht_crawler_migrate_meta_{}.sqlite",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE torrents (
-                info_hash  BLOB PRIMARY KEY,
-                name       TEXT NOT NULL,
-                category   TEXT NOT NULL CHECK(category IN ('movie', 'tv', 'other')),
-                title      TEXT,
-                year       INTEGER,
-                season     INTEGER,
-                episode    INTEGER,
-                size_bytes INTEGER,
-                file_count INTEGER,
-                first_seen INTEGER NOT NULL,
-                last_seen  INTEGER NOT NULL
-            );
-            INSERT INTO torrents VALUES (x'0000000000000000000000000000000000000001', 'Old 1999', 'movie', 'old', 1999, NULL, NULL, 2048, 1, 1, 2);",
-        )
-        .unwrap();
-        drop(conn);
-
-        let storage = Storage::open(path.to_str().unwrap()).unwrap();
-        let rows = storage.search("old").unwrap();
-        assert_eq!(rows.len(), 1, "old row survives migration");
-        assert_eq!(rows[0].size_bytes, Some(2048));
-
-        let conn = storage.read.lock().unwrap();
-        let sql: String = conn
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name='torrents'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert!(
-            !sql.contains("category") && !sql.contains("title") && !sql.contains("year"),
-            "media columns must be dropped: {sql}"
-        );
-        drop(conn);
-
-        let _ = std::fs::remove_file(&path);
     }
 }

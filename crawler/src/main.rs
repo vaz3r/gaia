@@ -2,6 +2,7 @@ mod bench;
 mod cli;
 mod bloom;
 mod crawler;
+mod db;
 mod discovery;
 mod fetch;
 mod net;
@@ -31,29 +32,33 @@ async fn main() -> Result<()> {
             init_tracing(&args.log);
             crawler::run(*args).await
         }
-        Command::Query(args) => query::query(args),
-        Command::Purge(args) => purge::purge(&args),
-        Command::Snapshot(args) => snapshot(&args),
+        Command::Query(args) => query::query(args).await,
+        Command::Purge(args) => purge::purge(&args).await,
+        Command::Snapshot(args) => snapshot(&args).await,
         Command::BenchFetch(args) => bench::run(&args).await,
     }
 }
 
-/// `VACUUM INTO` online backup: a consistent, WAL-free snapshot of the live
-/// database, safe to run while the crawler writes. Used to produce a clean DB
-/// copy for offline benchmark replays (the direct tar/cp snapshot of a live
-/// WAL-mode DB is not consistent).
-fn snapshot(args: &cli::SnapshotArgs) -> Result<()> {
+/// Consistent Postgres snapshot via `pg_dump` (custom format), safe to run
+/// while the crawler writes. Produces a standalone dump for offline
+/// benchmark/analysis replays.
+async fn snapshot(args: &cli::SnapshotArgs) -> Result<()> {
     if std::path::Path::new(&args.out).exists() {
         std::fs::remove_file(&args.out)
             .with_context(|| format!("remove existing snapshot {}", args.out))?;
     }
-    let conn = rusqlite::Connection::open(&args.db)
-        .with_context(|| format!("open db {}", args.db))?;
-    conn.execute_batch(&format!(
-        "VACUUM INTO '{}';",
-        args.out.replace('\'', "''")
-    ))
-    .with_context(|| format!("vacuum into {}", args.out))?;
+    let status = tokio::process::Command::new("pg_dump")
+        .arg(args.pg.clone())
+        .arg("--format=custom")
+        .arg("--no-owner")
+        .arg("--file")
+        .arg(&args.out)
+        .status()
+        .await
+        .with_context(|| "run pg_dump (is postgresql-client installed?)")?;
+    if !status.success() {
+        anyhow::bail!("pg_dump failed with status {status}");
+    }
     tracing::info!(out = %args.out, "snapshot written");
     Ok(())
 }

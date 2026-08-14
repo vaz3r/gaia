@@ -3,6 +3,7 @@
 *.sqlite-wal
 *.sqlite-shm
 state/
+.env
 crawler/.env
 crawler/data/
 crawler/gluetun/

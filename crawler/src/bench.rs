@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use gaia_core::Id20;
-use rusqlite::Connection;
+use sqlx::{PgPool, Row};
 
 use crate::cli::BenchFetchArgs;
 use crate::fetch::tracker;
@@ -22,18 +22,23 @@ use crate::fetch::wire::{self, sha1_info};
 /// Run the bench: sample `sample` hashes per outcome class, resolve peers via
 /// trackers, optionally verify by dialing, and print per-class stats.
 pub async fn run(args: &BenchFetchArgs) -> Result<()> {
-    let conn = Connection::open(&args.db).with_context(|| format!("open {}", args.db))?;
+    let pool = PgPool::connect(&args.pg)
+        .await
+        .with_context(|| format!("connect postgres {}", args.pg))?;
 
     let (where_clause, label) = class_filter(&args.class);
     // Sample distinct hashes (a hash can appear with multiple outcomes).
     let sql = format!(
-        "SELECT DISTINCT info_hash FROM scanned WHERE {where_clause} LIMIT ?1"
+        "SELECT DISTINCT info_hash FROM scanned WHERE {where_clause} LIMIT $1"
     );
-    let mut stmt = conn.prepare(&sql)?;
+    let rows = sqlx::query(&sql)
+        .bind(args.sample as i64)
+        .fetch_all(&pool)
+        .await
+        .context("sample hashes from scanned")?;
     let mut hashes: Vec<[u8; 20]> = Vec::new();
-    let rows = stmt.query_map([args.sample as i64], |r| r.get::<_, Vec<u8>>(0))?;
-    for bytes in rows {
-        let Ok(bytes) = bytes else { continue };
+    for row in rows {
+        let bytes: Vec<u8> = row.get(0);
         if bytes.len() == 20 {
             let mut h = [0u8; 20];
             h.copy_from_slice(&bytes);
@@ -41,9 +46,9 @@ pub async fn run(args: &BenchFetchArgs) -> Result<()> {
         }
     }
     println!(
-        "bench: class={label} sampled={} (db={}) concurrency={} verify={}",
+        "bench: class={label} sampled={} (pg={}) concurrency={} verify={}",
         hashes.len(),
-        args.db,
+        args.pg,
         args.concurrency,
         args.verify
     );

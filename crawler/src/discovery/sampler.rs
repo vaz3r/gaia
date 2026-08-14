@@ -503,7 +503,7 @@ impl SamplerLoop {
         if self.seen_bloom.contains(hash.as_bytes()) {
             return if new { EmitOutcome::New } else { EmitOutcome::Repeat };
         }
-        match self.storage.scan_status(hash.as_bytes()) {
+        match self.storage.scan_status(hash.as_bytes()).await {
             Ok(Some(ScannedStatus::Ok | ScannedStatus::Skipped)) => {
                 self.seen_bloom.insert(hash.as_bytes());
                 return if new { EmitOutcome::New } else { EmitOutcome::Repeat };

@@ -1,0 +1,19 @@
+[package]
+name = "sqlite-to-pg"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "One-shot SQLite → PostgreSQL migration for the crawler (pre-Postgres data)"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[bin]]
+name = "sqlite-to-pg"
+path = "src/main.rs"

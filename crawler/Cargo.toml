@@ -21,13 +21,16 @@ jemallocator = { version = "0.5", features = ["profiling", "stats"] }
 rand = "0.8"
 redis = { version = "1.5", features = ["tokio-comp", "connection-manager"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
-rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = "1"
 sha1 = "0.10"
 smallvec = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
+# `migrate` is safe now that rusqlite is gone (its sqlite backend no longer
+# conflicts on the sqlite3 link). Migrations live in db/migrations and are
+# embedded via sqlx::migrate! at startup.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal", "process"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
