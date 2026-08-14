@@ -100,7 +100,12 @@ const EVENT_NONE: i32 = 0;
 /// Number of trackers queried per hash. Kept well below the full list so a
 /// single fetch's tracker budget stays tight; every tracker is still rotated
 /// through over time via a round-robin start offset.
-const TRACKERS_PER_QUERY: usize = 10;
+fn trackers_per_query() -> usize {
+    std::env::var("GAIA_TRACKERS_PER_QUERY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16)
+}
 
 static TRACKER_START: OnceLock<usize> = OnceLock::new();
 
@@ -275,10 +280,11 @@ pub async fn resolve_peers_from_trackers(info_hash: &[u8; 20]) -> Vec<SocketAddr
     // Rotate the start offset each call so different trackers are sampled.
     let offset = start % (udp_n + http_n);
 
+    let per_query = trackers_per_query();
     let mut spawned = 0usize;
     // UDP first (offset within the UDP block), then HTTP.
     for i in 0..udp_n {
-        if spawned >= TRACKERS_PER_QUERY {
+        if spawned >= per_query {
             break;
         }
         let idx = (offset + i) % udp_n;
@@ -290,9 +296,9 @@ pub async fn resolve_peers_from_trackers(info_hash: &[u8; 20]) -> Vec<SocketAddr
         });
         spawned += 1;
     }
-    if spawned < TRACKERS_PER_QUERY {
+    if spawned < per_query {
         for i in 0..http_n {
-            if spawned >= TRACKERS_PER_QUERY {
+            if spawned >= per_query {
                 break;
             }
             let idx = (offset + i) % http_n;
