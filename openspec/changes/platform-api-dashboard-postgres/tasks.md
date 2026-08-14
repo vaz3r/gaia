@@ -54,6 +54,6 @@
 
 ## 8. Platform integration
 
-- [ ] 8.1 Wire root compose: crawler `depends_on` postgres/redis healthy; api `depends_on` postgres; dashboard `depends_on` api
-- [ ] 8.2 Add `deploy` docs to README (stack layout, ports, healthcheck URLs, API endpoints)
-- [ ] 8.3 Verify: clean `docker compose up --build` on a fresh checkout starts all services; crawler reaches postgres; dashboard + both API surfaces respond
+- [x] 8.1 Wire root compose: crawler `depends_on` postgres/redis healthy; api `depends_on` postgres; dashboard `depends_on` api
+- [x] 8.2 Add `deploy` docs to README (stack layout, ports, healthcheck URLs, API endpoints)
+- [x] 8.3 Verify: clean `docker compose up --build` on a fresh checkout starts all services; crawler reaches postgres; dashboard + both API surfaces respond
