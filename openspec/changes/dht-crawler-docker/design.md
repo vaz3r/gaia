@@ -34,6 +34,9 @@ Gluetun's firewall blocks inbound to the tunnel except ports in `FIREWALL_VPN_IN
 WireGuard keys are injected via `docker compose --env-file .env` (or compose's implicit `.env`), which is gitignored. The crawler mounts `./data:/data` so `crawler.sqlite` + `state/` persist across container restarts and are shared with the fallback pm2 config.
 - *Rationale:* never commit private keys; keep warm routing state and crawl history.
 
+### D27a — PM2/host-mode fallback removed (2026-08-14 cleanup)
+`run.sh` and `ecosystem.config.cjs` were deleted. The Docker stack is the only deployment; native/PM2 launch is no longer supported. Data lives exclusively in the `dht-crawler-data` named volume (`--state-dir /data/state`).
+
 ## Risks / Trade-offs
 
 - **Full-tunnel routing** routes all crawler traffic via Oracle → adds latency but improves peer reachability; expected net positive for verify rate.

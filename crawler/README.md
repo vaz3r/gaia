@@ -21,26 +21,6 @@ cargo build --release
 ./target/release/crawler query "matrix 1080p"
 ```
 
-### Running under PM2 (recommended for 24/7)
-
-An `ecosystem.config.cjs` is included for [PM2](https://pm2.keymetrics.io/). It
-runs the release binary directly (PM2 captures the logs) and raises
-`kill_timeout` so SIGTERM graceful shutdown (~15s drain) completes cleanly.
-
-```sh
-pm2 start ecosystem.config.cjs     # start / auto-restart on crash
-pm2 logs crawler               # tail crawl stats
-pm2 restart crawler            # graceful restart (drains + persists)
-pm2 stop crawler               # graceful stop
-pm2 save && pm2 startup            # auto-start on boot
-```
-
-The included `ecosystem.config.cjs` runs **4 instances** by default (ports
-`6881..6884`), multiplying discovery breadth; each instance has its own
-routing table and sampler, all feeding one database. Keep `instances: 1` in
-the PM2 app config (the crawler spawns its own DHT instances internally). To
-change the count, edit `--instances N` in the ecosystem `args`.
-
 ### Docker + Gluetun (recommended for public egress)
 
 A `docker-compose.yml` runs the crawler behind a **Gluetun WireGuard client**,
@@ -74,7 +54,7 @@ docker rm -f dht-seed
 ```
 
 Notes:
-- The stack runs **4 instances** (ports 6881-6884) plus a **redis** service for a
+- The stack runs **8 instances** (ports 6881-6888) plus a **redis** service for a
   shared seen-set and dead-peer cache; the crawler is configured for
   low-bandwidth/high-discovery (lower QPS budgets, tight fetch budgets).
 - The WireGuard server must be reachable on a non-default port (Oracle Cloud
@@ -82,8 +62,7 @@ Notes:
   with TCP 443 HTTPS — WireGuard is UDP, web is TCP).
 - If the tunnel's private DNS is unreachable, set
   `DNS_UPSTREAM_PLAIN_ADDRESSES` to public resolvers (default `1.1.1.1:53,8.8.8.8:53`).
-- Data lives in the `dht-crawler-data` named volume on the daemon host;
-  `run.sh`/pm2 remain as fallback and share the same DB path.
+- Data lives in the `dht-crawler-data` named volume on the daemon host.
 
 ## Prerequisites
 
@@ -174,7 +153,6 @@ from the `scanned` table instead.
 
 ```
 crawler purge [--db <DB>] [--state-dir <DIR>] [--yes]
-./run.sh --purge
 ```
 
 Deletes the SQLite database (plus its WAL/SHM sidecars) and the persisted

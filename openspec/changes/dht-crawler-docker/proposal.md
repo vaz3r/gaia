@@ -11,7 +11,7 @@ The user operates a WireGuard server on an Oracle Cloud instance (public IP `132
 - **Inbound DHT ports opened**: `FIREWALL_VPN_INPUT_PORTS=6881,6882,6883,6884` so Gluetun's tunnel firewall admits inbound DHT queries.
 - **Secrets management**: WireGuard keys live in a gitignored `dht-crawler/.env` referenced by compose.
 - **Data migration**: existing `crawler.sqlite` + `state/` are moved into a mounted `data/` dir so history and warm routing tables carry over.
-- **pm2 retired for the crawler**: the Docker stack replaces the pm2 deployment; `ecosystem.config.cjs`/`run.sh` remain as fallback.
+- **pm2 retired for the crawler**: the Docker stack replaces the pm2 deployment. `ecosystem.config.cjs`/`run.sh` were removed entirely in the 2026-08-14 cleanup — Docker is the only deployment path.
 
 ## Capabilities
 
@@ -28,5 +28,5 @@ The user operates a WireGuard server on an Oracle Cloud instance (public IP `132
 
 - **Code**: new `dht-crawler/Dockerfile`, `dht-crawler/docker-compose.yml`, `dht-crawler/.env` (gitignored), `.gitignore` entries for `data/`.
 - **Dependencies**: Docker + Docker Compose on the host (present); Gluetun image pulled; no Rust dependency changes.
-- **Operations**: crawler egresses from `132.145.189.201`; 4 UDP ports bound inside the Gluetun network namespace; pm2 stopped.
+- **Operations**: crawler egresses from `132.145.189.201`; 8 UDP ports bound inside the Gluetun network namespace; pm2 removed.
 - **Performance (expected)**: verify rate should rise several-fold from NAT-bound (~0.5%), pushing torrents/hr well above the ~100 ceiling.
