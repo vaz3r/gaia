@@ -481,7 +481,9 @@ All "crawl stats" fields are logged in `crawler.rs:431-496`. Sources:
    resolves peers for ~22% of fetches; bench shows 0% verify on failed classes.
    `TRACKERS_PER_QUERY` default 16 is env-tunable.
 6. **`dht:seen` Redis set growth — Tier A** (measured 5.7M entries / 236 MB before the cap;
-   cap `redis.rs:11` added). Re-measurement post-cap pending.
+   cap `redis.rs:11` added). **Re-measured post-cap (2026-08-14): `dht:seen` = 150,801,
+   `dht:lookedup` = 425,125, Redis `used_memory` = 25 MB (peak was 236 MB). ~90% reduction;
+   bounded.**
 7. **Single-IP table ceiling (F11) — Tier B.** `routing_nodes`/`instance_nodes` show tables
    stalling ~2,240-2,400 total nodes from one egress IP (long-running log trend; instance 0
    dominates at ~2,400).
