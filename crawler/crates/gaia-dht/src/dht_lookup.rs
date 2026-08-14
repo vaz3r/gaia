@@ -34,7 +34,7 @@ use gaia_core::{AddressFamily, Id20};
 #[cfg(test)]
 use crate::compact::CompactNodeInfo;
 use crate::krpc::{
-    GetPeersResponse, KrpcBody, KrpcMessage, KrpcQuery, KrpcResponse, TransactionId,
+    GetPeersResponse, KrpcBody, KrpcMessage, KrpcQuery, KrpcResponse, PeerBatch, TransactionId,
 };
 use crate::routing_table::RoutingTable;
 
@@ -79,7 +79,7 @@ pub(crate) struct DhtLookup {
     next_txn_id: Arc<AtomicU16>,
     own_id: Id20,
     // Output channels
-    peer_tx: mpsc::UnboundedSender<Vec<SocketAddr>>,
+    peer_tx: mpsc::UnboundedSender<PeerBatch>,
     token_tx: mpsc::UnboundedSender<(Id20, Id20, SocketAddr, Vec<u8>)>,
     node_tx: mpsc::UnboundedSender<(Id20, SocketAddr)>,
     /// Consecutive `inject_roots()` calls that returned 0 new nodes (for backoff).
@@ -126,7 +126,7 @@ impl DhtLookup {
         routing_table: Arc<parking_lot::RwLock<RoutingTable>>,
         next_txn_id: Arc<AtomicU16>,
         own_id: Id20,
-        peer_tx: mpsc::UnboundedSender<Vec<SocketAddr>>,
+        peer_tx: mpsc::UnboundedSender<PeerBatch>,
         token_tx: mpsc::UnboundedSender<(Id20, Id20, SocketAddr, Vec<u8>)>,
         node_tx: mpsc::UnboundedSender<(Id20, SocketAddr)>,
         read_only_mode: bool,
@@ -390,7 +390,9 @@ impl DhtLookup {
                     id: own_id,
                     info_hash: target,
                     noseed: None,
-                    scrape: None,
+                    // BEP 33: request seed/peer bloom filters so the fetch can
+                    // skip dialing hashes with no live seeders.
+                    scrape: Some(1),
                     want: want.clone(),
                 }),
                 sender_ip: None,
@@ -445,9 +447,15 @@ impl DhtLookup {
             node.returned_peers = !gp.peers.is_empty();
         }
 
-        // Send peers to the torrent session.
+        // Send peers to the torrent session, flagging whether the response
+        // carried a non-empty seed bloom (BEP 33 `bfsd`) — a live-seeder
+        // signal the fetch can use to skip dialing dead hashes.
         if !gp.peers.is_empty() {
-            let _ = self.peer_tx.send(gp.peers.clone());
+            let has_seeds = gp.bfsd.as_ref().is_some_and(|b| b.iter().any(|&x| x != 0));
+            let _ = self.peer_tx.send(PeerBatch {
+                peers: gp.peers.clone(),
+                has_seeds,
+            });
         }
 
         // Send token to actor for announce.
@@ -925,7 +933,8 @@ mod tests {
         lookup.process_response(addr, make_id(1), &gp, &mut futures);
 
         let received = peer_rx.try_recv().expect("should have received peers");
-        assert_eq!(received, vec![peer_addr]);
+        assert_eq!(received.peers, vec![peer_addr]);
+        assert!(!received.has_seeds, "response had no bfsd bloom");
     }
 
     /// T8: Tokens are sent to the actor channel.
@@ -1049,7 +1058,7 @@ mod tests {
     /// T10: Lookup exits when peer channel is closed.
     #[tokio::test]
     async fn lookup_response_channel_closed() {
-        let (peer_tx, peer_rx) = mpsc::unbounded_channel::<Vec<SocketAddr>>();
+        let (peer_tx, peer_rx) = mpsc::unbounded_channel::<crate::krpc::PeerBatch>();
         let (token_tx, _token_rx) = mpsc::unbounded_channel();
         let (node_tx, _node_rx) = mpsc::unbounded_channel();
 

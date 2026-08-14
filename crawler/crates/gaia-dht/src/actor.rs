@@ -307,7 +307,7 @@ impl DhtHandle {
 enum DhtCommand {
     GetPeers {
         info_hash: Id20,
-        reply: mpsc::UnboundedSender<Vec<SocketAddr>>,
+        reply: mpsc::UnboundedSender<crate::krpc::PeerBatch>,
         seed_addr: Option<std::net::SocketAddr>,
     },
     Announce {
@@ -457,7 +457,7 @@ impl DhtHandle {
     pub async fn get_peers(
         &self,
         info_hash: Id20,
-    ) -> Result<mpsc::UnboundedReceiver<Vec<SocketAddr>>> {
+    ) -> Result<mpsc::UnboundedReceiver<crate::krpc::PeerBatch>> {
         self.get_peers_seeded(info_hash, None).await
     }
 
@@ -471,7 +471,7 @@ impl DhtHandle {
         &self,
         info_hash: Id20,
         seed_addr: Option<std::net::SocketAddr>,
-    ) -> Result<mpsc::UnboundedReceiver<Vec<SocketAddr>>> {
+    ) -> Result<mpsc::UnboundedReceiver<crate::krpc::PeerBatch>> {
         let (reply_tx, reply_rx) = mpsc::unbounded_channel();
         self.tx
             .send(DhtCommand::GetPeers {
@@ -785,7 +785,7 @@ struct DhtActor {
     bootstrap_complete: bool,
     /// M146: Queued `get_peers` waiting for at least 1 routing table node.
     /// Lowered from M97's threshold=8 to threshold=1 (empty-table only).
-    pending_get_peers: Vec<(Id20, mpsc::UnboundedSender<Vec<SocketAddr>>, Option<std::net::SocketAddr>)>,
+    pending_get_peers: Vec<(Id20, mpsc::UnboundedSender<crate::krpc::PeerBatch>, Option<std::net::SocketAddr>)>,
     /// Bootstrap timeout timer — forces `bootstrap_complete` after 10s (M97).
     bootstrap_timeout: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
     /// Timestamp of last `ping_questionable_nodes()` call for two-phase gating (M105).
@@ -2111,7 +2111,7 @@ impl DhtActor {
     fn start_get_peers(
         &mut self,
         info_hash: Id20,
-        reply: mpsc::UnboundedSender<Vec<SocketAddr>>,
+        reply: mpsc::UnboundedSender<crate::krpc::PeerBatch>,
         seed_addr: Option<std::net::SocketAddr>,
     ) {
         // M146: Lightweight gate — require at least 1 routing table node
@@ -2137,7 +2137,7 @@ impl DhtActor {
     fn start_get_peers_inner(
         &mut self,
         info_hash: Id20,
-        reply: mpsc::UnboundedSender<Vec<SocketAddr>>,
+        reply: mpsc::UnboundedSender<crate::krpc::PeerBatch>,
         seed_addr: Option<std::net::SocketAddr>,
     ) {
         debug!(

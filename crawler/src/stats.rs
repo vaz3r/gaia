@@ -67,4 +67,11 @@ pub struct CrawlStats {
     /// peers from trackers, and how many verified via a tracker-resolved peer.
     pub tracker_resolved: AtomicU64,
     pub verified_tracker: AtomicU64,
+    /// BEP 33 scrape shadow: correlation between seed-bloom presence and
+    /// verification (scrape experiment).
+    pub scrape_saw_seeds: AtomicU64,
+    pub verified_with_seeds: AtomicU64,
+    pub verified_without_seeds: AtomicU64,
+    pub failed_with_seeds: AtomicU64,
+    pub failed_without_seeds: AtomicU64,
 }

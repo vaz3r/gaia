@@ -331,6 +331,9 @@ async fn fetch_one(
     // EARLY_ABORT_DIALS before any successful handshake, the hash is dead.
     let mut consecutive_connect_failures = 0usize;
     let mut any_handshake = false;
+    // BEP 33 scrape signal (shadow): did any get_peers response indicate live
+    // seeders? Recorded per fetch to correlate seed-presence with verification.
+    let mut scrape_saw_seeds = false;
 
     // Passive-intake fast path: the hash came from an inbound announce_peer,
     // so we already know a peer that announced it. Dial that peer directly
@@ -437,7 +440,7 @@ async fn fetch_one(
             )
             .await
             {
-                return persist_verified(meta, info_hash, crate::discovery::FetchSource::Tracker, stats, tx).await;
+                return persist_verified(meta, info_hash, crate::discovery::FetchSource::Tracker, stats, tx, scrape_saw_seeds).await;
             }
         }
     }
@@ -461,14 +464,20 @@ async fn fetch_one(
             *failure_counts.entry(FetchFailureKind::Deadline).or_insert(0) += 1;
             break;
         }
-        if !batch.is_empty() {
+        // BEP 33 scrape signal: record whether any response indicated live
+        // seeders (for the scrape-gate experiment; not yet gating).
+        if batch.has_seeds {
+            scrape_saw_seeds = true;
+            stats.scrape_saw_seeds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        if !batch.peers.is_empty() {
             any_peers_seen = true;
         }
 
         let mut candidates: Vec<SocketAddr> = Vec::with_capacity(PARALLEL_DIALS);
         let now = unix_secs();
         dead_peers.lock().unwrap().prune(now);
-        for peer in batch {
+        for peer in batch.peers {
             if tried >= MAX_PEERS_PER_HASH {
                 break 'outer;
             }
@@ -509,7 +518,7 @@ async fn fetch_one(
         )
         .await
         {
-            return persist_verified(meta, info_hash, source, stats, tx).await;
+            return persist_verified(meta, info_hash, source, stats, tx, scrape_saw_seeds).await;
         }
     }
 
@@ -518,6 +527,13 @@ async fn fetch_one(
         stats
             .empty_peers
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    // BEP 33 scrape shadow: record failure with/without a seed signal.
+    if scrape_saw_seeds {
+        stats.failed_with_seeds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    } else {
+        stats.failed_without_seeds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     let dominant = failure_counts.iter()
@@ -624,17 +640,24 @@ async fn dial_peers(
     None
 }
 
-/// Persist a verified metadata blob as a torrent record.
+/// Persist a verified metadata blob as a torrent record. `scrape_seen` is the
+/// BEP 33 seed-bloom signal for the scrape shadow experiment.
 async fn persist_verified(
     meta: crate::fetch::wire::FetchedMetadata,
     info_hash: Id20,
     source: FetchSource,
     stats: &CrawlStats,
     tx: mpsc::Sender<TorrentRecord>,
+    scrape_seen: bool,
 ) -> Result<FetchOutcome, FetchError> {
     stats
         .metadata_verified
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if scrape_seen {
+        stats.verified_with_seeds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    } else {
+        stats.verified_without_seeds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     record_verified(source, stats);
 
     let extracted = extract_metadata(&meta.info_bytes).map_err(|e| FetchError {

@@ -261,6 +261,20 @@ pub struct GetPeersResponse {
     pub bfsd: Option<Vec<u8>>,
 }
 
+/// A batch of peers streamed from a `get_peers` [`DhtLookup`], with the BEP 33
+/// seed-bloom signal from the response (whether any responding node indicated
+/// live seeders via `bfsd`). The fetch can use this to skip dialing hashes
+/// with no seeds (dead) — the crawler-conversion scrape experiment.
+#[derive(Debug, Clone, Default)]
+pub struct PeerBatch {
+    /// Peer addresses to dial.
+    pub peers: Vec<std::net::SocketAddr>,
+    /// True if a response carried a non-empty seed bloom filter (live seeders
+    /// likely present).
+    pub has_seeds: bool,
+}
+
+
 /// Response to `sample_infohashes` (BEP 51).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SampleInfohashesResponse {
