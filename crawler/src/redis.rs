@@ -4,6 +4,12 @@ use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use tracing::warn;
 
+/// Max entries in a Redis dedup set before it is flushed and rebuilt. Dedup is
+/// best-effort (the in-process bloom + DB are authoritative), so a flush only
+/// re-attempts a handful of hashes once. Bounds Redis memory (~40 B/entry →
+/// ~40 MB at 1M entries).
+const MAX_SEEN_ENTRIES: usize = 1_000_000;
+
 /// Shared cross-instance coordination via Redis. Used for a fleet-wide
 /// seen-set (dedup emitted infohashes across instances) and a fleet-wide
 /// dead-peer cache (skip IPs that failed to connect anywhere).
@@ -60,13 +66,31 @@ impl SharedState {
     }
 
     /// Mark `hash` as emitted by this crawler (add to the shared seen set).
-    /// Best-effort.
+    /// Best-effort. The set is capped: past `MAX_SEEN_ENTRIES` it is flushed
+    /// and rebuilt, because dedup is best-effort (the in-process bloom + DB
+    /// are the authoritative "already fetched" check) and an unbounded Redis
+    /// set grows without limit (5.7M entries -> 236 MB and climbing).
     pub async fn seen_add(&self, hash: &[u8; 20]) {
         let Some(conn) = &self.conn else { return };
         let key = format!("{}:seen", self.prefix);
         let mut c = conn.as_ref().clone();
-        if let Err(e) = c.sadd::<_, _, i64>(key, hash).await {
+        if let Err(e) = c.sadd::<_, _, i64>(&key, hash).await {
             warn!(error = %e, "redis seen_add failed");
+            return;
+        }
+        self.maybe_cap_set(&key).await;
+    }
+
+    /// Flush a dedup set once it exceeds a cardinality cap. Dedup is
+    /// best-effort, so a flush only causes a brief re-attempt of a few hashes
+    /// (absorbed by the DB/bloom authoritative checks). Keeps Redis bounded.
+    async fn maybe_cap_set(&self, key: &str) {
+        let Some(conn) = &self.conn else { return };
+        let mut c = conn.as_ref().clone();
+        let Ok(size): redis::RedisResult<i64> = c.scard(key).await else { return };
+        if size > MAX_SEEN_ENTRIES as i64 {
+            warn!(key, size, cap = MAX_SEEN_ENTRIES, "redis dedup set capped, flushing");
+            let _: redis::RedisResult<i64> = c.del(key).await;
         }
     }
 
@@ -87,9 +111,11 @@ impl SharedState {
         let Some(conn) = &self.conn else { return };
         let key = format!("{}:announced", self.prefix);
         let mut c = conn.as_ref().clone();
-        if let Err(e) = c.sadd::<_, _, i64>(key, hash).await {
+        if let Err(e) = c.sadd::<_, _, i64>(&key, hash).await {
             warn!(error = %e, "redis announced_add failed");
+            return;
         }
+        self.maybe_cap_set(&key).await;
     }
 
     /// True if this hash was already emitted via the get_peers (looked-up)
@@ -107,9 +133,11 @@ impl SharedState {
         let Some(conn) = &self.conn else { return };
         let key = format!("{}:lookedup", self.prefix);
         let mut c = conn.as_ref().clone();
-        if let Err(e) = c.sadd::<_, _, i64>(key, hash).await {
+        if let Err(e) = c.sadd::<_, _, i64>(&key, hash).await {
             warn!(error = %e, "redis looked_up_add failed");
+            return;
         }
+        self.maybe_cap_set(&key).await;
     }
 
     /// Whether `ip` is currently flagged dead fleet-wide. Best-effort; returns
