@@ -119,6 +119,19 @@ WAL-free, consistent while running). Current snapshot ~4M scans.
   (trackers convert empty_peers into dial-then-fail).
 - unique ~160k/hr, tables at one-IP ceiling (~2.3k). No leak.
 
+### F15 — BEP 33 scrape is a dead end in this DHT (shadow experiment, decisive)
+- Enabled scrape:1 on get_peers; recorded seed-bloom (bfsd) presence per fetch
+  and correlated with verification. Over ~257k fetches / 56 verified:
+  - scrape_saw_seeds = 8 (0.003%) — the reachable DHT nodes essentially never
+    return a non-empty seed bloom (BEP 33 unsupported / dead hashes).
+  - verified_with_seeds = 0, verified_without_seeds = 56 (100% of verified had
+    NO seed signal). failed_with_seeds = 8.
+- **Conclusion**: a scrape gate (skip seedless hashes) is useless here — it
+  would gate on nothing. This rules out Bitmagnet's BEP 33 advantage as a lever
+  on this DHT neighborhood. The fetch would gate nothing; dead hashes have
+  empty seed blooms AND no live peers.
+- scrape:1 request retained (harmless); shadow counters kept for reference.
+
 ## Final assessment (this session)
 
 Starting baseline: ~150 verified/hr, memory leaking to OOM, ~11% failures
