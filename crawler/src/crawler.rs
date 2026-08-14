@@ -133,6 +133,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
         min_sightings: args.min_sightings,
         min_seen_shadow: (args.min_seen_shadow > 0).then_some(args.min_seen_shadow),
         max_interval_secs: args.sampler_max_interval,
+        max_attempts: args.max_attempts,
     };
 
     // All instances share the hash channel; the fetcher consumes from it once.
@@ -475,6 +476,7 @@ async fn stats_loop(
             lookups_emitted = s.lookups_emitted.load(r),
             lookups_deduped_redis = s.lookups_deduped_redis.load(r),
             discriminator_filtered = s.discriminator_filtered.load(r),
+            terminal_dead = s.terminal_dead.load(r),
             records_persisted = s.records_persisted.load(r),
             "crawl stats"
         );

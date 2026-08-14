@@ -8,7 +8,7 @@
 
 services:
   gluetun:
-    image: qmcgaw/gluetun:latest
+    image: qmcgaw/gluetun:v3.40.0
     container_name: gluetun
     restart: unless-stopped
     cap_add:
@@ -40,9 +40,14 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     container_name: dht-redis
     restart: unless-stopped
     # Local coordination only (seen-set + dead-peer cache); stays on the
@@ -52,6 +57,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
 
   crawler:
     build:
@@ -59,9 +69,10 @@ services:
       dockerfile: crawler/Dockerfile
     container_name: crawler
     restart: unless-stopped
-    # Bound the crawler so a runaway can't OOM/swap the 16 GiB host. The DHT
-    # node + fetch pool at --scale 3 stays well under this in practice.
-    mem_limit: 6g
+    # Bound the crawler so a runaway can't OOM/swap the host. The DHT node +
+    # fetch pool at --scale 1 stays well under 512 MiB in practice (~308 MB
+    # measured at scale 3); 1 GiB leaves headroom for jemalloc spikes.
+    mem_limit: 1g
     pids_limit: 8192
     # Share Gluetun's network namespace: all crawler traffic egresses via the
     # WireGuard tunnel from the Oracle public IP. Redis is reached on the local
@@ -76,11 +87,19 @@ services:
       - dht-data:/data
     environment:
       - REDIS_URL=redis://redis:6379
-      # jemalloc conf: dump allocator stats on process exit. NOTE: this
-      # jemalloc is built with the `_rjem_` prefix, so the conf env var is
-      # _RJEM_MALLOC_CONF, not MALLOC_CONF (which jemalloc ignores).
-      - _RJEM_MALLOC_CONF=stats_print:true
+      # jemalloc profiler off in production: stats_print dumps ~30k lines to
+      # logs on EVERY subcommand exit. Set GAIA_PROF_DUMP_EVERY_TICKS>0 + the
+      # _RJEM_MALLOC_CONF when debugging memory.
       - GAIA_PROF_DUMP_EVERY_TICKS=0
+    healthcheck:
+      # The crawler is a UDP daemon with no HTTP surface; the DB WAL file is
+      # touched by the write loop on every flush, so a fresh mtime means the
+      # process is alive and writing.
+      test: ["CMD", "sh", "-c", "test -n \"$(pgrep -f 'crawler run')\" && find /data -name 'crawler.sqlite*' -mmin -5 | grep -q ."]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     command:
       - run
       - --db
@@ -96,14 +115,21 @@ services:
       - --min-seen-shadow
       - "3"
       - --scale
-      - "3"
+      - "1"
       - --max-nodes
       - "8192"
+      - --max-attempts
+      - "2"
       - --no-restrict-ips
       - --redis-url
       - redis://redis:6379
       - --log
       - crawler=info
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
 
 volumes:
   dht-data:

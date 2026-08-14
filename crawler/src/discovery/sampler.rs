@@ -73,9 +73,15 @@ pub struct SamplerConfig {
     /// keeping the live threshold. Entry lifetime = max(min_seen, shadow).
     pub min_seen_shadow: Option<u32>,
     /// Upper bound (seconds) on the per-node re-query interval advertised by
-    /// BEP 51 nodes. Nodes that report longer intervals are still re-queried
+    /// BEP 51 nodes. Nodes that report longer intervals are still re-queryed
     /// after this period so the routing table keeps growing.
     pub max_interval_secs: u64,
+    /// A failed fetch is retried until this many attempts, then treated as a
+    /// terminal dead hash: the in-process bloom caches the skip verdict so the
+    /// sampler never re-emits it. Bounds wasted fetch work on dead hashes
+    /// (the F-series finding: a hash verifies once or never; retries never
+    /// convert a failure). The row itself is still retained in `scanned`.
+    pub max_attempts: u32,
 }
 
 /// Result of routing one sampled hash through `emit_sample`.
@@ -301,6 +307,7 @@ impl Sampler {
                 min_sightings: self.cfg.min_sightings.max(1),
                 min_seen_shadow: self.cfg.min_seen_shadow,
                 max_interval,
+                max_attempts: self.cfg.max_attempts.max(1),
                 cursor: 0,
                 shared: self.shared.clone(),
                 seen_bloom: self.seen.clone(),
@@ -342,6 +349,7 @@ struct SamplerLoop {
     min_sightings: u32,
     min_seen_shadow: Option<u32>,
     max_interval: Duration,
+    max_attempts: u32,
     shared: crate::redis::SharedState,
     seen_bloom: crate::bloom::SharedBloom,
     liveness: Arc<crate::discovery::LivenessCounter>,
@@ -500,8 +508,20 @@ impl SamplerLoop {
                 self.seen_bloom.insert(hash.as_bytes());
                 return if new { EmitOutcome::New } else { EmitOutcome::Repeat };
             }
-            Ok(Some(ScannedStatus::Failed { next_attempt, .. })) if next_attempt > unix_secs() => {
-                return if new { EmitOutcome::New } else { EmitOutcome::Repeat };
+            Ok(Some(ScannedStatus::Failed { attempts, next_attempt, .. })) => {
+                // Terminal dead hash: exhausted its retry budget. Cache the
+                // skip verdict so it is never re-emitted (bounded waste on
+                // hashes that never recover). The `scanned` row is retained.
+                if attempts >= self.max_attempts as i64 {
+                    self.stats
+                        .terminal_dead
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.seen_bloom.insert(hash.as_bytes());
+                    return if new { EmitOutcome::New } else { EmitOutcome::Repeat };
+                }
+                if next_attempt > unix_secs() {
+                    return if new { EmitOutcome::New } else { EmitOutcome::Repeat };
+                }
             }
             _ => {}
         }

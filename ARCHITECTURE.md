@@ -24,8 +24,8 @@ The binary entrypoint (`main.rs:26-39`) dispatches on subcommand: `run`, `query`
 ## 1. Component inventory (long-running tasks/loops)
 
 All tasks below are spawned inside `crawler::run` (`crawler.rs:63`) unless noted. "Live count"
-is at the **deployed config**: `--instances 8 --scale 3 --min-seen 1 --min-seen-shadow 3
---max-nodes 8192 --no-restrict-ips` (`docker-compose.yml:92-102`), not `--aggressive`.
+is at the **deployed config**: `--instances 8 --scale 1 --min-seen 1 --min-seen-shadow 3
+--max-nodes 8192 --max-attempts 2 --no-restrict-ips` (`docker-compose.yml:92-102`), not `--aggressive`.
 
 | # | Loop / task | Spawned at | Count live (8 instances, scale 3) | Owns / mutates |
 |---|---|---|---|---|
@@ -217,8 +217,10 @@ sequenceDiagram
         ES->>ST: storage.scan_status(hash) (sampler.rs:498)
         alt status == Ok or Skipped
             ES->>BF: bloom.insert(hash); return (sampler.rs:499-502)
+        else status == Failed && attempts >= max_attempts
+            ES->>BF: bloom.insert(hash); terminal_dead++; return (sampler.rs:509-516)
         else status == Failed && next_attempt > now
-            ES-->>ES: return (backoff, not cached) (sampler.rs:503-505)
+            ES-->>ES: return (backoff, not cached) (sampler.rs:517-519)
         end
         ES->>LV: live_count(hash, now); live_sightings(hash, now) (sampler.rs:517-525)
         alt not corroborated (distinct < min_seen) and not refreshed (discriminator off)
@@ -315,15 +317,16 @@ compose doesn't override. Effective values computed by `cli.rs:237-284`.
 | Constant / flag | Code default | **Live value** | Where effective value is computed |
 |---|---|---|---|
 | `--instances` | 1 (`cli.rs:91`) | **8** (`compose:93`) | `crawler.rs:72` |
-| `--scale` | 10 (`cli.rs:115`) | **3** (`compose:99`) | `cli.rs:229` |
+| `--scale` | 10 (`cli.rs:115`) | **1** (`compose:99`) | `cli.rs:229` |
 | `--min-seen` | 1 (`cli.rs:121`) | **1** (`compose:95`) | `cli.rs:283` (non-aggressive → unchanged) |
 | `--min-seen-shadow` | 0 (`cli.rs:134`) | **3** (`compose:97`) | — |
 | `--min-sightings` | 1 (`cli.rs:128`) | **1** (not in compose) | `sampler.rs:301` |
 | `--max-nodes` | 4096 (`cli.rs:161`) | **8192** (`compose:101`) | `cli.rs:273` |
+| `--max-attempts` | 2 (`cli.rs:160`) | **2** (`compose:101`) | `sampler.rs` (terminal dead-hash bloom cache) |
 | `--sampler-qps` | 400 (`cli.rs:104`) | → **800** (effective) | `cli.rs:238-240` (`min(400×3, 800)`) |
 | `--sampler-loops` | 32 (`cli.rs:108`) | → **64** (effective) | `cli.rs:246-248` (`min(32×3, 64)`) |
-| `--concurrency` | 512 (`cli.rs:78`) | → **1536** (effective) | `cli.rs:252-254` (no cap) |
-| `--lookup-concurrency` | 256 (`cli.rs:157`) | → **384** (effective) | `cli.rs:262-264` (`min(256×3, 384)`) |
+| `--concurrency` | 512 (`cli.rs:78`) | → **512** (effective) | `cli.rs:252-254` (no cap) |
+| `--lookup-concurrency` | 256 (`cli.rs:157`) | → **256** (effective) | `cli.rs:262-264` (`min(256×3, 384)`) |
 | `--qps` (DHT rate limiter) | 2000 (`cli.rs:100`) | **2000** | `cli.rs:267-269` |
 | `--query-timeout` | 3 (`cli.rs:173`) | **3** | `cli.rs:278` |
 | `--max-interval` (`sampler_max_interval`) | 60 (`cli.rs:153`) | **60** | `sampler.rs:281` |

@@ -31,6 +31,9 @@ pub struct CrawlStats {
     pub fetches_failed: AtomicU64,
     pub metadata_verified: AtomicU64,
     pub records_persisted: AtomicU64,
+    /// Hashes whose failed attempts reached `--max-attempts` and were cached
+    /// in the bloom as terminal dead (never re-emitted).
+    pub terminal_dead: AtomicU64,
 
     // Pipeline depth (snapshots, not cumulative).
     pub fetch_in_flight: AtomicU64,

@@ -152,6 +152,12 @@ pub struct RunArgs {
     #[arg(long, default_value_t = 60)]
     pub sampler_max_interval: u64,
 
+    /// A failed fetch is retried until this many attempts, then treated as a
+    /// terminal dead hash (cached in the in-process bloom, never re-emitted).
+    /// Dead hashes never recover (F-series), so retries are wasted fetch work.
+    #[arg(long, default_value_t = 2)]
+    pub max_attempts: u32,
+
     /// Maximum concurrent DHT `get_peers` lookups (bounds query-budget use).
     #[arg(long, default_value_t = 256)]
     pub lookup_concurrency: usize,

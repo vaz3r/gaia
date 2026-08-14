@@ -195,6 +195,29 @@ and long uptime, not a steady single-IP rate; still ~75x the structural gap.)
 single-IP optimum; the only remaining multiplier is additional egress IPs
 (~2 IPs ≈ 300-400k/month, scaling ~linearly).
 
+## Production-readiness pass (2026-08-14)
+
+Applied without changing the verified/hr ceiling — resource minimization +
+hardening only:
+
+- **`--max-attempts 2`**: a failed fetch is retried up to 2×, then cached in
+  the in-process bloom as terminal dead (never re-emitted). F2/F5 proved dead
+  hashes never recover, so retries were pure waste: the DB had ~7.6M `scanned`
+  rows (99.9% failures) and ~2.1M re-fetch events. `terminal_dead` counter
+  added to crawl stats.
+- **`--scale 3 → 1`**: fetch pool 1536 → 512 (avg in-flight was ~280, queue ~0),
+  lookup concurrency 384 → 256. Verified/hr is discovery-bound, not
+  fetch-bound, so no throughput loss expected; A/B-verified after deploy.
+- **`mem_limit` 6g → 1g** (actual RSS ~308 MB at scale 3).
+- **Non-root container user** (uid 1000 via gosu entrypoint).
+- **Log rotation** (json-file 20m × 3), pinned gluetun/redis image tags,
+  crawler healthcheck.
+- **Removed `_RJEM_MALLOC_CONF=stats_print:true`** from production — it dumped
+  ~30k lines of jemalloc stats on every subcommand exit (e.g. `snapshot`),
+  polluting logs. Profiler stays available via `GAIA_PROF_DUMP_EVERY_TICKS`.
+- **Volume junk removed**: ~4.7 GB of stale snapshots/heaps
+  (`f14.sqlite`, `fresh.sqlite`, `jheap.*`, etc.) → /data now ~1 GB.
+
 ## Strategy status
 
 | Strategy | Peers found (empty_peers) | Verifies | Production impact |

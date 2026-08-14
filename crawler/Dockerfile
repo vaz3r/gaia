@@ -34,12 +34,17 @@ RUN touch crawler/src/main.rs && \
 # which the compiled binary links against.
 FROM debian:trixie-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl gosu \
+    && useradd --create-home --uid 1000 crawler \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/crawler /usr/local/bin/crawler
+COPY crawler/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Data + state are mounted here.
 VOLUME ["/data"]
 
-ENTRYPOINT ["crawler"]
+# Entrypoint runs as root, fixes volume ownership, then drops to the
+# non-root `crawler` user via gosu before exec'ing the crawler.
+ENTRYPOINT ["docker-entrypoint.sh"]

@@ -123,6 +123,7 @@ SQLite (WAL, batched upserts)
 | `--scale <N>` | `10` | Concurrency scale factor (bitmagnet `scaling_factor`): multiplies sampler QPS/loops, fetch/lookup concurrency, and buffers |
 | `--lookup-concurrency <N>` | `256` | Max concurrent DHT `get_peers` lookups |
 | `--max-nodes <N>` | `4096` | Maximum number of nodes in the DHT routing table |
+| `--max-attempts <N>` | `2` | A failed fetch is retried up to this many times, then cached in the in-process bloom as a terminal dead hash (never re-emitted). Dead hashes never recover, so retries beyond this are wasted fetch work. The `scanned` row is retained |
 | `--no-restrict-ips` | off | Disable one-node-per-IP routing restriction (opt-in for NAT) |
 | `--redis-url <URL>` | none | Shared seen-set + dead-peer cache across instances (e.g. `redis://redis:6379`); falls back to per-instance state if unreachable |
 | `--query-timeout <SECS>` | `5` | Timeout for individual DHT queries (seconds) |
