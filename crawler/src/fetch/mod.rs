@@ -45,7 +45,10 @@ const RECV_TIMEOUT: Duration = Duration::from_secs(4);
 /// Dials to attempt before concluding a hash is dead (all connect failures).
 /// If this many consecutive dials fail with no successful handshake, the fetch
 /// aborts early instead of waiting out `FETCH_DEADLINE`.
-const EARLY_ABORT_DIALS: usize = 24;
+/// Consecutive connect failures (with no handshake) before the hash is treated
+/// as dead. With MAX_PEERS_PER_HASH=16 the old value of 24 was unreachable —
+/// this must be within the per-hash dial budget.
+const EARLY_ABORT_DIALS: usize = 6;
 /// Per-peer connect/fetch timeout. 3s churns dead peers fast (most fetch
 /// attempts hit dead peers — only ~1% verify), and a live peer handshake +
 /// ut_metadata exchange completes well within it.
@@ -420,7 +423,10 @@ async fn fetch_one(
             any_peers_seen = true;
             let now = unix_secs();
             dead_peers.lock().unwrap().prune(now);
-            let mut candidates: Vec<SocketAddr> = Vec::with_capacity(PARALLEL_DIALS);
+            // Dial ALL tracker-resolved peers in batches, not just the first
+            // PARALLEL_DIALS: if the first batch fails, keep trying the rest
+            // until success, exhaustion of the tracker peers or the deadline.
+            let mut candidate_pool: Vec<SocketAddr> = Vec::new();
             for peer in tracker_peers {
                 if tried >= MAX_PEERS_PER_HASH {
                     break;
@@ -437,37 +443,64 @@ async fn fetch_one(
                 if !seen_peers.insert(peer) || !dialed_ips.insert(peer.ip()) {
                     continue;
                 }
-                candidates.push(peer);
+                candidate_pool.push(peer);
                 tried += 1;
-                if candidates.len() >= PARALLEL_DIALS {
+            }
+            for candidates in candidate_pool.chunks(PARALLEL_DIALS) {
+                if tokio::time::Instant::now() >= deadline {
                     break;
                 }
-            }
-            if let Some(meta) = dial_peers(
-                candidates,
-                info_hash,
-                peer_id,
-                deadline,
-                &mut consecutive_connect_failures,
-                &mut any_handshake,
-                &mut failure_counts,
-                stats,
-                dead_peers,
-                shared,
-            )
-            .await
-            {
-                return persist_verified(meta, info_hash, crate::discovery::FetchSource::Tracker, stats, tx, scrape_saw_seeds).await;
+                if let Some(meta) = dial_peers(
+                    candidates.to_vec(),
+                    info_hash,
+                    peer_id,
+                    deadline,
+                    &mut consecutive_connect_failures,
+                    &mut any_handshake,
+                    &mut failure_counts,
+                    stats,
+                    dead_peers,
+                    shared,
+                )
+                .await
+                {
+                    return persist_verified(
+                        meta,
+                        info_hash,
+                        crate::discovery::FetchSource::Tracker,
+                        stats,
+                        tx,
+                        scrape_saw_seeds,
+                    )
+                    .await;
+                }
             }
         }
     }
 
-    let mut peers = {
-        let _permit = lookup_permits.acquire().await.context("lookup permit")
-            .map_err(|e| FetchError { reason: e, dominant_failure: Some(FetchFailureKind::LookupPoolExhausted.as_str().to_string()) })?;
-        handle.get_peers_seeded(info_hash, lookup_seed).await.context("get_peers failed")
-            .map_err(|e| FetchError { reason: e, dominant_failure: Some(FetchFailureKind::DhtLookupFailed.as_str().to_string()) })?
-    };
+    // Acquire the lookup permit BEFORE starting the lookup and hold it across
+    // the streaming loop: get_peers_seeded only enqueues a command; the DHT
+    // lookup runs asynchronously and streams batches. Releasing at the end of
+    // a block here would let all fetch workers run lookups concurrently,
+    // defeating lookup_concurrency. The permit is dropped when this function
+    // returns (after the stream ends, the deadline expires, or an early
+    // return) — RECV_TIMEOUT bounds the hold.
+    let _lookup_permit = lookup_permits
+        .acquire()
+        .await
+        .context("lookup permit")
+        .map_err(|e| FetchError {
+            reason: e,
+            dominant_failure: Some(FetchFailureKind::LookupPoolExhausted.as_str().to_string()),
+        })?;
+    let mut peers = handle
+        .get_peers_seeded(info_hash, lookup_seed)
+        .await
+        .context("get_peers failed")
+        .map_err(|e| FetchError {
+            reason: e,
+            dominant_failure: Some(FetchFailureKind::DhtLookupFailed.as_str().to_string()),
+        })?;
 
     'outer: loop {
         // Bound the wait for the next peer batch so a slow/empty get_peers
@@ -568,6 +601,21 @@ async fn fetch_one(
     })
 }
 
+/// Whether a failure kind indicates the peer got past TCP connect + handshake
+/// (i.e. the peer is reachable and only the metadata exchange failed). Only
+/// these reset the consecutive-connect-failure early-abort counter; every
+/// other kind means the peer is unreachable.
+fn is_post_handshake_kind(kind: FetchFailureKind) -> bool {
+    matches!(
+        kind,
+        FetchFailureKind::HandshakeFailed
+            | FetchFailureKind::NoUtMetadata
+            | FetchFailureKind::MetadataRejected
+            | FetchFailureKind::ParseError
+            | FetchFailureKind::Sha1Mismatch
+    )
+}
+
 /// Dial a batch of candidate peers in parallel and return verified metadata on
 /// the first success. Mirrors the in-loop dial logic so tracker-resolved peers
 /// and DHT-discovered peers use the same path. Returns `Ok(Some(meta))` when a
@@ -614,15 +662,29 @@ async fn dial_peers(
         let meta = match inner {
             Ok(Ok(m)) => m,
             Ok(Err(e)) => {
-                // The TCP connect + handshake succeeded; this peer is
-                // reachable even though metadata failed, so the hash is
-                // not dead. Reset the early-abort counter.
-                *consecutive_connect_failures = 0;
-                *any_handshake = true;
+                // Classify the failure: only failures that got past TCP connect
+                // + handshake mean the peer is reachable. Connection-level
+                // errors (refused/reset/closed/timeout) mean the peer is
+                // unreachable and count toward the early-abort.
                 let kind = FetchFailureKind::from_error(&e);
+                let is_post_handshake = is_post_handshake_kind(kind);
+                if is_post_handshake {
+                    // Peer reachable; metadata failed. Not dead.
+                    *consecutive_connect_failures = 0;
+                    *any_handshake = true;
+                } else {
+                    // Connect-level failure: peer unreachable. Mark dead so it
+                    // is skipped fleet-wide, and count toward early-abort.
+                    *consecutive_connect_failures += 1;
+                    let became_dead =
+                        dead_peers.lock().unwrap().record_failure(peer.ip(), now);
+                    if became_dead {
+                        shared.dead_add(peer.ip(), 600).await;
+                    }
+                }
                 *failure_counts.entry(kind).or_insert(0) += 1;
                 record_peer_failure(kind, stats);
-                debug!(%info_hash, error = %e, kind = kind.as_str(), "peer metadata fetch failed");
+                debug!(%info_hash, error = %e, kind = kind.as_str(), "peer fetch failed");
                 continue;
             }
             Err(_elapsed) => {
@@ -835,5 +897,45 @@ mod tests {
         });
         let got = q.pop().expect("a request");
         assert_eq!(got.occurrences, 7);
+    }
+
+    #[test]
+    fn post_handshake_kinds_are_only_metadata_failures() {
+        use FetchFailureKind as K;
+        // These got past connect + handshake: peer is reachable.
+        for k in [
+            K::HandshakeFailed,
+            K::NoUtMetadata,
+            K::MetadataRejected,
+            K::ParseError,
+            K::Sha1Mismatch,
+        ] {
+            assert!(is_post_handshake_kind(k), "{} should be post-handshake", k.as_str());
+        }
+        // Connect-level failures: peer unreachable.
+        for k in [
+            K::Timeout,
+            K::ConnectRefused,
+            K::ConnectionReset,
+            K::ConnectionClosed,
+            K::EarlyAbort,
+            K::Deadline,
+            K::EmptyPeers,
+            K::DhtLookupFailed,
+            K::LookupPoolExhausted,
+            K::Other,
+        ] {
+            assert!(!is_post_handshake_kind(k), "{} should be connect-level", k.as_str());
+        }
+    }
+
+    #[test]
+    fn early_abort_is_reachable_within_peer_budget() {
+        // EARLY_ABORT_DIALS must be <= MAX_PEERS_PER_HASH so the counter can
+        // actually reach it (previously 24 > 16, dead code).
+        assert!(
+            EARLY_ABORT_DIALS <= MAX_PEERS_PER_HASH,
+            "EARLY_ABORT_DIALS ({EARLY_ABORT_DIALS}) must fit within MAX_PEERS_PER_HASH ({MAX_PEERS_PER_HASH})"
+        );
     }
 }

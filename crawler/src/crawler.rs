@@ -392,48 +392,36 @@ async fn stats_loop(
                 jemalloc_prof_dump();
             }
         }
-        let primary = &handles[0];
-        let routing = primary.node_count().await.unwrap_or(0);
-        // Per-instance routing node counts so a redundant instance (one that
-        // burns tunnel bandwidth without contributing nodes) is identifiable.
+        // Per-instance + fleet-wide aggregate routing/actor stats. The
+        // per-instance breakdown identifies redundant instances; the aggregate
+        // is what operators want to watch.
+        let mut routing = 0usize;
+        let mut announced = 0usize;
+        let mut active_lookups = 0usize;
+        let mut announce_tokens = 0usize;
+        let mut pending_queries = 0usize;
+        let mut announces_received = 0u64;
+        let mut announces_token_rejected = 0u64;
+        let mut announces_suppressed_readonly = 0u64;
+        let mut lookups_received = 0u64;
         let mut per_instance = Vec::with_capacity(handles.len());
         for h in &handles {
             let n = h.node_count().await.unwrap_or(0);
-            let total = h.stats().await.map(|s| s.total_queries_sent).unwrap_or(0);
+            routing += n;
+            let st = h.stats().await;
+            let total = st.as_ref().map(|s| s.total_queries_sent).unwrap_or(0);
             per_instance.push(format!("{n}/{}q", total));
+            if let Ok(s) = st {
+                announced += s.peer_store_info_hashes;
+                active_lookups += s.active_lookups;
+                announce_tokens += s.announce_tokens;
+                pending_queries += s.pending_queries;
+                announces_received += s.announces_received;
+                announces_token_rejected += s.announces_token_rejected;
+                announces_suppressed_readonly += s.announces_suppressed_readonly;
+                lookups_received += s.lookups_received;
+            }
         }
-        // Passive announcement intake: hashes other nodes announced to us that
-        // are sitting in the actor's internal peer_store. Measured in the
-        // node-diversity phase: a peer_store drain would require patching
-        // irontide, and the announced-hash yield (~1.9% of unique) didn't
-        // justify it — so this stays a diagnostic counter only.
-        let announced = primary
-            .stats()
-            .await
-            .map(|s| s.peer_store_info_hashes)
-            .unwrap_or(0);
-        // DHT actor diagnostics: active lookups / announce tokens / pending
-        // queries from the primary instance (leak tracking).
-        let (active_lookups, announce_tokens, pending_queries) = primary
-            .stats()
-            .await
-            .map(|s| (s.active_lookups, s.announce_tokens, s.pending_queries))
-            .unwrap_or((0, 0, 0));
-        // Passive-intake funnel: where inbound announces are lost (received →
-        // token-rejected → emitted) so the dry-firehose question is answerable.
-        let (announces_received, announces_token_rejected, announces_suppressed_readonly) = primary
-            .stats()
-            .await
-            .map(|s| {
-                (
-                    s.announces_received,
-                    s.announces_token_rejected,
-                    s.announces_suppressed_readonly,
-                )
-            })
-            .unwrap_or((0, 0, 0));
-        // Inbound get_peers queries — a high-volume passive live signal.
-        let lookups_received = primary.stats().await.map(|s| s.lookups_received).unwrap_or(0);
         let s = &stats;
         let r = std::sync::atomic::Ordering::Relaxed;
         // Unique-hash discovery rate over the last tick (unique/hr) so the

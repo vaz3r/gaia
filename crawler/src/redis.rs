@@ -13,6 +13,10 @@ const MAX_SEEN_ENTRIES: usize = 1_000_000;
 /// Max nodes in the shared Redis node pool (matches `--max-nodes`).
 const NODE_POOL_CAP: usize = 16_384;
 
+/// Default TTL for fleet-wide dead-peer markings (seconds). Used to prune
+/// expired members from the `dht:dead` sorted set on read.
+const DEAD_PEER_TTL: i64 = 600;
+
 /// Shared cross-instance coordination via Redis. Used for the fleet-wide
 /// dedup sets (seen/announced/lookedup), the fleet-wide dead-peer cache, the
 /// **shared DHT node pool** (the single source of truth for the discovered
@@ -151,27 +155,46 @@ impl SharedState {
     }
 
     /// Whether `ip` is currently flagged dead fleet-wide. Best-effort; returns
-    /// false on error so a peer is not spuriously skipped.
+    /// false on error so a peer is not spuriously skipped. Prunes expired
+    /// members opportunistically.
     pub async fn dead_contains(&self, ip: std::net::IpAddr) -> bool {
         let Some(conn) = &self.conn else { return false };
         let key = format!("{}:dead", self.prefix);
         let mut c = conn.as_ref().clone();
-        let r: redis::RedisResult<bool> = c.sismember(key, ip.to_string()).await;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        // Prune members whose score <= now - TTL.
+        let expired: redis::RedisResult<Vec<String>> =
+            c.zrangebyscore(&key, 0, now - DEAD_PEER_TTL).await;
+        if let Ok(members) = expired {
+            if !members.is_empty() {
+                let _: redis::RedisResult<i64> = c.zrem(&key, &members).await;
+            }
+        }
+        let r: redis::RedisResult<bool> = c
+            .zscore(&key, ip.to_string())
+            .await
+            .map(|v: Option<f64>| v.is_some());
         r.unwrap_or(false)
     }
 
-    /// Flag `ip` as dead fleet-wide with a TTL. Best-effort.
+    /// Flag `ip` as dead fleet-wide until `now + ttl_secs`. Uses a sorted set
+    /// with a per-member timestamp so individual entries expire — a whole-key
+    /// TTL would reset on every insert and never expire under continuous
+    /// crawling. Best-effort.
     pub async fn dead_add(&self, ip: std::net::IpAddr, ttl_secs: i64) {
         let Some(conn) = &self.conn else { return };
         let key = format!("{}:dead", self.prefix);
         let mut c = conn.as_ref().clone();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
         let member = ip.to_string();
-        if let Err(e) = c.sadd::<_, _, i64>(key.clone(), &member).await {
+        if let Err(e) = c.zadd::<_, _, _, i64>(&key, member, now + ttl_secs).await {
             warn!(error = %e, "redis dead_add failed");
-            return;
-        }
-        if let Err(e) = c.expire::<_, i64>(key, ttl_secs).await {
-            warn!(error = %e, "redis dead_add expire failed");
         }
     }
 

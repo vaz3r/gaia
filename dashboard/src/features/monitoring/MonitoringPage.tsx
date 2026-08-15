@@ -84,7 +84,11 @@ export function MonitoringPage(): JSX.Element {
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <MetricCard
           label="Verified (per hr)"
-          value={live ? Math.round((live.metadata_verified ?? 0) / Math.max(1, (Date.now() - Date.parse(live.ts)) / 3.6e6)).toString() : "-"}
+          value={
+            verified.data && verified.data.length > 0
+              ? Math.round(verified.data[verified.data.length - 1]?.value ?? 0).toString()
+              : "-"
+          }
           sub={live ? `total ${live.metadata_verified}` : undefined}
           accent
         />
