@@ -55,8 +55,19 @@ services:
     container_name: redis
     hostname: redis
     restart: unless-stopped
-    # Local coordination only (seen-set + dead-peer cache); stays on the
-    # compose network so it does not consume tunnel bandwidth.
+    # Durable shared state: the crawler's node pool, per-instance node IDs, and
+    # sampler quality maps live here (Redis is the only state store — no files).
+    # AOF every 1s + a named volume so state survives restarts.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --save
+      - ""
+    volumes:
+      - redis-data:/data
     networks:
       - gaia
     healthcheck:
@@ -169,8 +180,6 @@ services:
       - run
       - --pg
       - postgres://crawler:${POSTGRES_PASSWORD}@postgres:5432/crawler
-      - --state-dir
-      - /data/state
       - --port
       - "6881"
       - --instances
@@ -249,6 +258,8 @@ volumes:
     name: dht-crawler-data
   pg-data:
     name: dht-crawler-pg-data
+  redis-data:
+    name: dht-crawler-redis-data
 
 networks:
   gaia:

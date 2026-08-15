@@ -12,7 +12,6 @@ use gaia_core::{AddressFamily, Id20};
 use gaia_dht::{DhtConfig, DhtHandle};
 use rand::RngCore;
 use tokio_util::sync::CancellationToken;
-use std::path::PathBuf;
 
 use crate::cli::RunArgs;
 
@@ -51,64 +50,16 @@ pub struct FetchRequest {
     pub lookup_seed: Option<SocketAddr>,
 }
 
-/// Load known-live nodes from a persisted routing table (`dht_state.json`)
-/// and return them as `host:port` bootstrap seed strings. Used to warm new
-/// instances from the primary's already-discovered routing table so they do
-/// not start from an empty table.
-pub fn seed_nodes_from_state(state_dir: &std::path::Path) -> Vec<String> {
-    let path = state_dir.join("dht_state.json");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Vec::new();
-    };
-    let Ok(state) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return Vec::new();
-    };
-    let Some(nodes) = state.get("nodes").and_then(|n| n.as_array()) else {
-        return Vec::new();
-    };
-    nodes
-        .iter()
-        .filter_map(|n| {
-            let addr = n.get("addr")?.as_str()?;
-            Some(addr.to_string())
-        })
-        .collect()
-}
-
-/// Load or create a persistent node ID for an instance. A stable node ID lets
-/// the DHT node build reputation over restarts: peers keep routing
-/// `announce_peer`/`get_peers` queries to a well-known ID, which is what makes
-/// the passive-intake firehose grow with uptime (bitmagnet's model). The ID is
-/// stored as `node_id.json` in the instance's state dir.
-fn load_or_create_node_id(state_dir: &std::path::Path) -> Option<gaia_core::Id20> {
-    let path = state_dir.join("node_id.json");
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-            if let Some(hex) = v.get("node_id").and_then(|n| n.as_str()) {
-                if let Ok(id) = gaia_core::Id20::from_hex(hex) {
-                    return Some(id);
-                }
-            }
-        }
-    }
-    let mut bytes = [0u8; 20];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    let id = gaia_core::Id20(bytes);
-    let json = serde_json::json!({ "node_id": id.to_hex() });
-    if let Ok(text) = serde_json::to_string_pretty(&json) {
-        let _ = std::fs::write(&path, text);
-    }
-    Some(id)
-}
-
-/// Start the DHT actor for instance `i` (0-based), bound to `port + i` and
-/// persisting its routing table to `state_dir/instance-i/`. `extra_seeds` are
-/// additional `host:port` bootstrap nodes (e.g. from the primary's warm table).
+/// Start the DHT actor for instance `i` (0-based), bound to `port + i`. No file
+/// persistence: the node ID is loaded from / persisted to Redis, and routing
+/// state lives in the shared Redis node pool (the crawler seeds from it at
+/// startup and persists back on shutdown). `extra_seeds` are `host:port`
+/// bootstrap nodes (e.g. from the shared pool or the primary's warm table).
 pub async fn start_dht(
     args: &RunArgs,
-    state_dir: PathBuf,
     instance: usize,
     extra_seeds: Vec<String>,
+    shared: &crate::redis::SharedState,
 ) -> Result<DhtHandle> {
     let port = args.port.saturating_add(instance as u16);
     let bind_addr = if args.ipv6 {
@@ -118,11 +69,12 @@ pub async fn start_dht(
     };
     let mut bootstrap = args.bootstrap.clone();
     bootstrap.extend(extra_seeds);
-    let own_id = load_or_create_node_id(&state_dir);
+    let own_id = load_or_create_node_id_redis(instance, shared).await;
     let dht = DhtConfig {
         bind_addr,
         bootstrap_nodes: bootstrap,
-        state_dir: Some(state_dir),
+        // No file persistence — Redis is the only state store.
+        state_dir: None,
         address_family: if args.ipv6 {
             AddressFamily::V6
         } else {
@@ -137,6 +89,25 @@ pub async fn start_dht(
     };
     let (handle, _ip) = DhtHandle::start(dht).await?;
     Ok(handle)
+}
+
+/// Load or create a stable node ID for instance `i`, persisted in Redis (no
+/// files). A stable ID lets the DHT node build reputation over restarts: peers
+/// keep routing `announce_peer`/`get_peers` queries to a well-known ID.
+async fn load_or_create_node_id_redis(
+    instance: usize,
+    shared: &crate::redis::SharedState,
+) -> Option<gaia_core::Id20> {
+    if let Some(hex) = shared.node_id_get(instance).await {
+        if let Ok(id) = gaia_core::Id20::from_hex(&hex) {
+            return Some(id);
+        }
+    }
+    let mut bytes = [0u8; 20];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let id = gaia_core::Id20(bytes);
+    shared.node_id_set(instance, &id.to_hex()).await;
+    Some(id)
 }
 
 /// Continuously grow the routing table by issuing `get_peers` on random 20-byte

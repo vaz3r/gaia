@@ -1,29 +1,17 @@
 use std::io::Write;
 
 use anyhow::{Context, Result};
+use redis::AsyncCommands;
 use sqlx::PgPool;
 
 use crate::cli::PurgeArgs;
 
-/// Delete the crawl data (TRUNCATE Postgres tables) and the routing state
-/// directory so a subsequent `run` starts from scratch.
+/// Delete the crawl data: TRUNCATE Postgres tables and flush the Redis state
+/// (node pool, per-instance node IDs, sampler state) so a subsequent `run`
+/// starts from scratch. There is no file persistence anymore.
 pub async fn purge(args: &PurgeArgs) -> Result<()> {
-    println!("Purging crawl data:");
-    let mut removed = Vec::new();
-    if args.state_dir.exists() {
-        removed.push(args.state_dir.display().to_string());
-    }
-
-    if removed.is_empty() {
-        println!("  nothing to purge");
-        return Ok(());
-    }
-    for r in &removed {
-        println!("  - {r}");
-    }
-
     if !args.yes {
-        eprint!("Delete the crawl tables and the routing state? [y/N] ");
+        eprint!("Purge Postgres crawl data and the Redis DHT state? [y/N] ");
         std::io::stdout().flush()?;
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
@@ -40,10 +28,24 @@ pub async fn purge(args: &PurgeArgs) -> Result<()> {
         .execute(&pool)
         .await
         .context("truncate crawl tables")?;
+    println!("  - postgres: torrents, scanned, crawl_stats_history");
 
-    if args.state_dir.exists() {
-        std::fs::remove_dir_all(&args.state_dir)
-            .with_context(|| format!("remove {}", args.state_dir.display()))?;
+    // Flush the Redis DHT state keys (best-effort; no-op without redis).
+    if let Some(redis_url) = &args.redis_url {
+        let client = redis::Client::open(redis_url.as_str())
+            .with_context(|| format!("open redis {redis_url}"))?;
+        let mut conn = redis::aio::ConnectionManager::new(client)
+            .await
+            .with_context(|| format!("connect redis {redis_url}"))?;
+        let keys = ["nodes", "samp:interval", "samp:quality"];
+        for k in keys {
+            let _: redis::RedisResult<i64> = conn.del(format!("dht:{k}")).await;
+        }
+        // Per-instance node IDs: dht:node:{0..N}.
+        for i in 0..32 {
+            let _: redis::RedisResult<i64> = conn.del(format!("dht:node:{i}")).await;
+        }
+        println!("  - redis: dht:nodes, dht:samp:* , dht:node:*");
     }
 
     println!("purged");

@@ -485,7 +485,9 @@ All "crawl stats" fields are logged in `crawler.rs:431-496`. Sources:
    output first, so a concurrent run would fail).
 10. **`wait_for_shutdown` drains up to `SHUTDOWN_DRAIN` (10s) + 5s** (`crawler.rs:290`), then
     aborts the fetcher. The `write_loop` is awaited; `stats_task` is aborted (no final stats).
-    On graceful stop the DHT tables are persisted (`crawler.rs:298-302`).
+    On graceful stop the union of all instances' routing tables is persisted to the
+    Redis node pool (`dht:nodes`), node IDs to `dht:node:{i}`, and sampler intervals/quality
+    to `dht:samp:*`. There is no file persistence.
 11. **`effective_concurrency` (1536) is not capped** — the fetch pool can spawn 1536 concurrent
     `fetch_one` tasks, each of which may hold a `lookup_permits` slot (384 max) only during
     `get_peers_seeded`. The 4s `RECV_TIMEOUT` and 8s deadline bound slot hold time.

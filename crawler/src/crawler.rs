@@ -61,9 +61,6 @@ const SHUTDOWN_DRAIN: Duration = Duration::from_secs(10);
 /// Run the crawl daemon until SIGTERM/SIGINT: N BEP 51 samplers → metadata
 /// fetcher → storage writer, then drain and persist state on shutdown.
 pub async fn run(args: RunArgs) -> Result<()> {
-    let state_dir = args.state_dir.clone();
-    std::fs::create_dir_all(&state_dir)?;
-
     let storage = Storage::connect(&args.pg).await?;
     let stats = Arc::new(CrawlStats::default());
     let blocklist = Arc::new(Blocklist::load(args.blocklist.as_deref())?);
@@ -75,33 +72,22 @@ pub async fn run(args: RunArgs) -> Result<()> {
         instances = instances,
         ipv6 = args.ipv6,
         pg = %args.pg,
-        state_dir = %state_dir.display(),
         concurrency = args.effective_concurrency(),
         aggressive = args.aggressive,
         "dht crawler starting"
     );
 
-    // Each instance gets its own DHT node/sampler but shares one storage and
-    // one fetch pool. Instance 0 uses the configured state dir (may already
-    // hold a warm routing table); instances 1..N bootstrap from instance 0's
-    // known-live nodes so they do not start from an empty table.
+    // Each instance gets its own DHT node/sampler but shares one storage, one
+    // fetch pool, and one Redis node pool. There is no file persistence: node
+    // IDs live in Redis, and every instance seeds from the shared pool so all
+    // converge on one table (DRY).
+    let pool = shared.node_pool().await;
+    info!(pool_size = pool.len(), "seeding instances from shared node pool");
+
     let mut handles = Vec::with_capacity(instances);
     for i in 0..instances {
-        let instance_dir = if instances == 1 {
-            args.state_dir.clone()
-        } else {
-            state_dir.join(format!("instance-{i}"))
-        };
-        std::fs::create_dir_all(&instance_dir)?;
-        // Instance 0 loads the configured state; later instances reuse its
-        // persisted nodes as bootstrap seeds (captured before instance 0's
-        // in-memory table is used).
-        let seeds = if i == 0 {
-            Vec::new()
-        } else {
-            discovery::seed_nodes_from_state(&args.state_dir)
-        };
-        let handle = discovery::start_dht(&args, instance_dir, i, seeds).await?;
+        let seeds = pool.clone();
+        let handle = discovery::start_dht(&args, i, seeds, &shared).await?;
         handles.push(handle);
     }
 
@@ -321,12 +307,19 @@ pub async fn run(args: RunArgs) -> Result<()> {
     let _ = writer.await;
     stats_task.abort();
 
-    // Persist every instance's routing table before exit.
+    // Persist the shared node pool (union of every instance's routing table)
+    // to Redis, then shut each instance down cleanly. No files are written.
+    let mut pool_nodes: Vec<String> = Vec::new();
     for handle in &handles {
+        for (_, addr) in handle.get_routing_nodes().await {
+            pool_nodes.push(addr.to_string());
+        }
         if let Err(e) = handle.shutdown_and_wait().await {
-            error!(error = %e, "failed to persist routing table");
+            error!(error = %e, "failed to shut down DHT instance");
         }
     }
+    shared.node_pool_put(&pool_nodes).await;
+    info!(pool_size = pool_nodes.len(), "persisted shared node pool to redis");
     info!("shutdown complete");
     Ok(())
 }

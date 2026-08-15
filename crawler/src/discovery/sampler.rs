@@ -287,6 +287,35 @@ impl Sampler {
         // addrs toward the per-loop caps (8192/32768).
         let intervals = Arc::new(std::sync::Mutex::new(IntervalMap::new(INTERVAL_MAP_CAP)));
         let node_stats = Arc::new(std::sync::Mutex::new(NodeStats::new(NODE_STATS_CAP)));
+
+        // Load persisted per-node state from Redis so the sampler converges on
+        // productive nodes immediately instead of re-learning them.
+        let now = Instant::now();
+        let interval_rows = self.shared.sampler_intervals_get().await;
+        let quality_rows = self.shared.sampler_quality_get().await;
+        for (addr, elapsed, interval) in interval_rows {
+            let mut iv = intervals.lock().unwrap();
+            if let Ok(addr) = addr.parse() {
+                // `elapsed` = seconds since the node was last queried (stored
+                // on shutdown); rebase onto this process's clock.
+                let last = now
+                    .checked_sub(Duration::from_secs(elapsed.max(0) as u64))
+                    .unwrap_or(now);
+                iv.record(addr, Duration::from_secs(interval), last);
+            }
+        }
+        for (addr, samples, failures, stale) in quality_rows {
+            let mut ns = node_stats.lock().unwrap();
+            if let Ok(addr) = addr.parse() {
+                ns.ensure_locked(addr);
+                if let Some(s) = ns.map.get_mut(&addr) {
+                    s.samples = samples;
+                    s.failures = failures;
+                    s.consecutive_stale = stale;
+                }
+            }
+        }
+
         let mut tasks = tokio::task::JoinSet::new();
         for _ in 0..self.cfg.concurrency.max(1) {
             let mut loop_ = SamplerLoop {
@@ -310,6 +339,32 @@ impl Sampler {
             tasks.spawn(async move { loop_.run_loop().await });
         }
         while tasks.join_next().await.is_some() {}
+
+        // Persist per-node sampler state to Redis on shutdown so the next start
+        // resumes with the same intervals/quality (no file persistence).
+        let interval_rows: Vec<(String, i64, u64)> = {
+            let iv = intervals.lock().unwrap();
+            let now = Instant::now();
+            iv.map
+                .iter()
+                .map(|(addr, (last, interval))| {
+                    (
+                        addr.to_string(),
+                        now.duration_since(*last).as_secs() as i64,
+                        interval.as_secs(),
+                    )
+                })
+                .collect()
+        };
+        let quality_rows: Vec<(String, u64, u64, u32)> = {
+            let ns = node_stats.lock().unwrap();
+            ns.map
+                .iter()
+                .map(|(addr, s)| (addr.to_string(), s.samples, s.failures, s.consecutive_stale))
+                .collect()
+        };
+        self.shared.sampler_intervals_put(&interval_rows).await;
+        self.shared.sampler_quality_put(&quality_rows).await;
     }
 
     /// Wait until the routing table has nodes, warning on timeout.

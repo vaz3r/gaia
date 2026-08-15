@@ -81,12 +81,8 @@ pub struct RunArgs {
     #[arg(long)]
     pub ipv6: bool,
 
-    /// Directory for persisting the DHT routing table.
-    #[arg(long, default_value = "state")]
-    pub state_dir: PathBuf,
-
-    /// Number of independent DHT nodes/samplers to run, sharing one database.
-    /// Instance i binds UDP port `port+i` and uses `state-dir/instance-i/`.
+    /// Number of independent DHT nodes/samplers to run, sharing one database,
+    /// one fetch pool, and one Redis node pool. Instance i binds UDP port+i.
     #[arg(long, default_value_t = 1)]
     pub instances: usize,
 
@@ -223,9 +219,10 @@ pub struct PurgeArgs {
     #[arg(long, default_value = "postgres://crawler:crawler@localhost:5432/crawler")]
     pub pg: String,
 
-    /// Directory holding the persisted DHT routing table.
-    #[arg(long, default_value = "state")]
-    pub state_dir: PathBuf,
+    /// Redis URL used to flush the shared DHT state (node pool, node IDs,
+    /// sampler state).
+    #[arg(long)]
+    pub redis_url: Option<String>,
 
     /// Skip asking for confirmation.
     #[arg(long)]

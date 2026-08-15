@@ -10,9 +10,14 @@ use tracing::warn;
 /// ~40 MB at 1M entries).
 const MAX_SEEN_ENTRIES: usize = 1_000_000;
 
-/// Shared cross-instance coordination via Redis. Used for a fleet-wide
-/// seen-set (dedup emitted infohashes across instances) and a fleet-wide
-/// dead-peer cache (skip IPs that failed to connect anywhere).
+/// Max nodes in the shared Redis node pool (matches `--max-nodes`).
+const NODE_POOL_CAP: usize = 16_384;
+
+/// Shared cross-instance coordination via Redis. Used for the fleet-wide
+/// dedup sets (seen/announced/lookedup), the fleet-wide dead-peer cache, the
+/// **shared DHT node pool** (the single source of truth for the discovered
+/// neighborhood — instances seed from it and persist back to it), per-instance
+/// stable node IDs, and sampler quality/interval state.
 ///
 /// All operations are best-effort: if Redis is unreachable or a command
 /// fails, callers fall back to per-instance in-memory state and the crawler
@@ -170,6 +175,117 @@ impl SharedState {
         }
     }
 
+    // ---- Shared DHT node pool ----
+    // The pool is the single source of truth for the discovered neighborhood.
+    // Instances seed from it at startup and write their routing-table union
+    // back to it on shutdown, so every instance converges on one shared table
+    // (DRY — no per-instance files).
+
+    /// Read the full shared node pool as `host:port` seed strings.
+    pub async fn node_pool(&self) -> Vec<String> {
+        let Some(conn) = &self.conn else { return Vec::new() };
+        let key = format!("{}:nodes", self.prefix);
+        let mut c = conn.as_ref().clone();
+        let r: redis::RedisResult<Vec<String>> = c.smembers(&key).await;
+        r.unwrap_or_default()
+    }
+
+    /// Replace the pool contents with `nodes` (`host:port` strings), bounded to
+    /// `NODE_POOL_CAP`. `DEL` + `SADD` is atomic enough for our cadence.
+    pub async fn node_pool_put(&self, nodes: &[String]) {
+        let Some(conn) = &self.conn else { return };
+        let key = format!("{}:nodes", self.prefix);
+        let mut c = conn.as_ref().clone();
+        let _: redis::RedisResult<i64> = c.del(&key).await;
+        let limited: Vec<&String> = nodes.iter().take(NODE_POOL_CAP).collect();
+        let _: redis::RedisResult<i64> = c.sadd(&key, &limited).await;
+    }
+
+    // ---- Per-instance stable node ID ----
+
+    /// Load instance `i`'s stable node ID (hex), or `None` if not yet set.
+    pub async fn node_id_get(&self, instance: usize) -> Option<String> {
+        let Some(conn) = &self.conn else { return None };
+        let key = format!("{}:node:{}", self.prefix, instance);
+        let mut c = conn.as_ref().clone();
+        let r: redis::RedisResult<String> = c.get(&key).await;
+        r.ok()
+    }
+
+    /// Persist instance `i`'s node ID (hex).
+    pub async fn node_id_set(&self, instance: usize, hex: &str) {
+        let Some(conn) = &self.conn else { return };
+        let key = format!("{}:node:{}", self.prefix, instance);
+        let mut c = conn.as_ref().clone();
+        let _: redis::RedisResult<()> = c.set(&key, hex).await;
+    }
+
+    // ---- Sampler state (per-node intervals + quality) ----
+    // Serialized as a JSON map addr -> value; loaded on start so the sampler
+    // converges on productive nodes immediately instead of re-learning them.
+
+    /// Load sampler interval state: `addr -> (last_query_unix_secs, interval_secs)`.
+    pub async fn sampler_intervals_get(&self) -> Vec<(String, i64, u64)> {
+        let Some(conn) = &self.conn else { return Vec::new() };
+        let key = format!("{}:samp:interval", self.prefix);
+        let mut c = conn.as_ref().clone();
+        let r: redis::RedisResult<Vec<(String, String)>> = c.hgetall(&key).await;
+        let Ok(rows) = r else { return Vec::new() };
+        rows.into_iter()
+            .filter_map(|(addr, v)| {
+                let (t, i) = v.split_once(':')?;
+                Some((addr, t.parse().ok()?, i.parse().ok()?))
+            })
+            .collect()
+    }
+
+    /// Replace sampler interval state.
+    pub async fn sampler_intervals_put(&self, rows: &[(String, i64, u64)]) {
+        let Some(conn) = &self.conn else { return };
+        let key = format!("{}:samp:interval", self.prefix);
+        let mut c = conn.as_ref().clone();
+        let _: redis::RedisResult<i64> = c.del(&key).await;
+        let fields: Vec<(String, String)> = rows
+            .iter()
+            .map(|(a, t, i)| (a.clone(), format!("{t}:{i}")))
+            .collect();
+        if !fields.is_empty() {
+            let _: redis::RedisResult<i64> = c.hset_multiple(&key, &fields).await;
+        }
+    }
+
+    /// Load sampler quality state: `addr -> (samples, failures, consecutive_stale)`.
+    pub async fn sampler_quality_get(&self) -> Vec<(String, u64, u64, u32)> {
+        let Some(conn) = &self.conn else { return Vec::new() };
+        let key = format!("{}:samp:quality", self.prefix);
+        let mut c = conn.as_ref().clone();
+        let r: redis::RedisResult<Vec<(String, String)>> = c.hgetall(&key).await;
+        let Ok(rows) = r else { return Vec::new() };
+        rows.into_iter()
+            .filter_map(|(addr, v)| {
+                let mut parts = v.split(':');
+                let s = parts.next()?.parse().ok()?;
+                let f = parts.next()?.parse().ok()?;
+                let cs = parts.next()?.parse().ok()?;
+                Some((addr, s, f, cs))
+            })
+            .collect()
+    }
+
+    /// Replace sampler quality state.
+    pub async fn sampler_quality_put(&self, rows: &[(String, u64, u64, u32)]) {
+        let Some(conn) = &self.conn else { return };
+        let key = format!("{}:samp:quality", self.prefix);
+        let mut c = conn.as_ref().clone();
+        let _: redis::RedisResult<i64> = c.del(&key).await;
+        let fields: Vec<(String, String)> = rows
+            .iter()
+            .map(|(a, s, f, cs)| (a.clone(), format!("{s}:{f}:{cs}")))
+            .collect();
+        if !fields.is_empty() {
+            let _: redis::RedisResult<i64> = c.hset_multiple(&key, &fields).await;
+        }
+    }
 }
 
 fn info_connected() {

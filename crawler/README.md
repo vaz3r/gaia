@@ -13,8 +13,8 @@ cargo build --release
 
 # Crawl (daemon)
 ./target/release/crawler run \
-  --db crawler.sqlite \
-  --state-dir state \
+  --pg postgres://crawler:crawler@localhost:5432/crawler \
+  --redis-url redis://localhost:6379 \
   --port 6881
 
 # Search the index
@@ -110,12 +110,12 @@ SQLite (WAL, batched upserts)
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port <PORT>` | `6881` | UDP port to bind the DHT node |
-| `--db <DB>` | `crawler.sqlite` | SQLite database path |
+| `--pg <URL>` | `postgres://crawler:crawler@localhost:5432/crawler` | PostgreSQL connection URL (the single store) |
+| `--redis-url <URL>` | none | Redis URL — shared node pool, per-instance node IDs, sampler state, dedup sets, dead-peer cache (Redis is the only DHT state store; no files) |
 | `--concurrency <N>` | `512` | Max concurrent in-flight metadata fetches |
 | `--ipv6` | off | Enable IPv6 DHT support |
-| `--state-dir <DIR>` | `state` | Directory for the persisted routing table |
 | `--bootstrap <HOSTS>` | 5 well-known nodes | Comma-separated bootstrap nodes |
-| `--instances <N>` | `1` | Run N independent DHT nodes/samplers, sharing one DB. Instance i binds `port+i` and uses `state-dir/instance-i/` |
+| `--instances <N>` | `1` | Run N independent DHT nodes/samplers, sharing one DB, one fetch pool, and one Redis node pool. Instance i binds `port+i` |
 | `--qps <N>` | `2000` | Aggregate DHT query budget shared by sampling and peer lookups |
 | `--sampler-qps <N>` | `400` | Sampler query budget across all sampling loops |
 | `--sampler-loops <N>` | `32` | Number of concurrent sampling loops |
@@ -153,18 +153,22 @@ from the `scanned` table instead.
 ### `purge`
 
 ```
-crawler purge [--db <DB>] [--state-dir <DIR>] [--yes]
+crawler purge [--pg <URL>] [--redis-url <URL>] [--yes]
 ```
 
-Deletes the SQLite database (plus its WAL/SHM sidecars) and the persisted
-routing state so the next `run` starts completely fresh. Prompts for
+Deletes the Postgres crawl data (TRUNCATE `torrents`, `scanned`,
+`crawl_stats_history`) and flushes the Redis DHT state (node pool, node IDs,
+sampler state) so the next `run` starts completely fresh. Prompts for
 confirmation unless `--yes` is given.
 
 ## Options reference (behavior notes)
 
-- On startup the persisted routing table (`state/dht_state.json`) is loaded, so
-  restarts resume from a warm table. A missing or corrupt file simply starts
-  empty.
+- On startup the shared node pool is loaded from Redis (`dht:nodes`) and every
+  instance seeds from it, so all instances converge on one table. On shutdown
+  the union of all instances' routing tables is persisted back to Redis
+  (`dht:nodes`), per-instance node IDs in `dht:node:{i}`, and sampler
+  intervals/quality in `dht:samp:*`. There is no file persistence — Redis (with
+  AOF + a named volume) is the only DHT state store.
 - Sampling politely respects per-node BEP 51 intervals and a global per-second
   query budget, and concentrates queries on nodes that actually return samples.
 - Metadata fetch failure rates are high by nature (dead peers, no `ut_metadata`,
