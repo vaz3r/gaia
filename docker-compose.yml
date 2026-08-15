@@ -84,7 +84,7 @@ services:
     networks:
       - gaia
     ports:
-      - "127.0.0.1:5432:5432"
+      - "5432:5432"
     volumes:
       - pg-data:/var/lib/postgresql/data
     # Tuned for the crawler platform: index data is re-crawlable, so we relax
@@ -205,7 +205,7 @@ services:
     networks:
       - gaia
     ports:
-      - "127.0.0.1:3000:3000"
+      - "3000:3000"
     environment:
       - DATABASE_URL=postgres://crawler:${POSTGRES_PASSWORD}@postgres:5432/crawler
       - REDIS_URL=redis://redis:6379
@@ -234,7 +234,7 @@ services:
     networks:
       - gaia
     ports:
-      - "127.0.0.1:8080:80"
+      - "8080:80"
     depends_on:
       api:
         condition: service_healthy
