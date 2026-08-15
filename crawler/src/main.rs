@@ -9,6 +9,7 @@ mod net;
 mod purge;
 mod query;
 mod redis;
+mod retry;
 mod stats;
 mod storage;
 mod sysmetrics;

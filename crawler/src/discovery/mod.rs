@@ -33,6 +33,9 @@ pub enum FetchSource {
     LookedUp,
     /// Resolved via public trackers (BEP 15 UDP announce).
     Tracker,
+    /// Actively re-fetched by the retry worker (an already-failed hash whose
+    /// next_attempt has passed and which is under its class retry cap).
+    Retried,
 }
 
 #[derive(Debug, Clone)]

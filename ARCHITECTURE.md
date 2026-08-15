@@ -25,7 +25,7 @@ The binary entrypoint (`main.rs:26-39`) dispatches on subcommand: `run`, `query`
 
 All tasks below are spawned inside `crawler::run` (`crawler.rs:63`) unless noted. "Live count"
 is at the **deployed config**: `--instances 8 --scale 1 --min-seen 1 --min-seen-shadow 3
---max-nodes 8192 --max-attempts 2 --no-restrict-ips` (`docker-compose.yml:92-102`), not `--aggressive`.
+--max-nodes 8192 --max-attempts 4 --no-restrict-ips` (`docker-compose.yml:92-102`), not `--aggressive`.
 
 | # | Loop / task | Spawned at | Count live (8 instances, scale 3) | Owns / mutates |
 |---|---|---|---|---|
@@ -322,7 +322,7 @@ compose doesn't override. Effective values computed by `cli.rs:237-284`.
 | `--min-seen-shadow` | 0 (`cli.rs:134`) | **3** (`compose:97`) | — |
 | `--min-sightings` | 1 (`cli.rs:128`) | **1** (not in compose) | `sampler.rs:301` |
 | `--max-nodes` | 4096 (`cli.rs:161`) | **8192** (`compose:101`) | `cli.rs:273` |
-| `--max-attempts` | 2 (`cli.rs:160`) | **2** (`compose:101`) | `sampler.rs` (terminal dead-hash bloom cache) |
+| `--max-attempts` | 4 (`cli.rs:160`) | **4** (`compose:101`) | per-class caps via `failure::retry_cap`; retry worker uses transient budget |
 | `--sampler-qps` | 400 (`cli.rs:104`) | → **800** (effective) | `cli.rs:238-240` (`min(400×3, 800)`) |
 | `--sampler-loops` | 32 (`cli.rs:108`) | → **64** (effective) | `cli.rs:246-248` (`min(32×3, 64)`) |
 | `--concurrency` | 512 (`cli.rs:78`) | → **512** (effective) | `cli.rs:252-254` (no cap) |

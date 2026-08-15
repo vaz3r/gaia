@@ -8,11 +8,6 @@ pub fn backoff_secs(attempts: i64) -> i64 {
     secs.min(MAX)
 }
 
-/// Fixed short retry window for hashes that failed with no peers at all.
-/// Their swarm may appear within a minute, so retry faster than the standard
-/// exponential backoff.
-pub const EMPTY_PEERS_RETRY_SECS: i64 = 60;
-
 /// A single accepted torrent record, keyed by its 20-byte info hash. Holds
 /// torrent metadata only; classification lives in a future `torrent_details`
 /// table and is re-derivable from `scanned.info_bytes`.

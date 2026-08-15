@@ -54,10 +54,19 @@ pub struct CrawlStats {
     pub connection_reset: AtomicU64,
     pub connection_closed: AtomicU64,
     pub parse_error: AtomicU64,
+    /// Transient infrastructure failures (retry-productive classes).
+    pub dht_lookup_failed: AtomicU64,
+    pub lookup_pool_exhausted: AtomicU64,
     /// Verified torrents split by discovery source, so we can see which path
     /// actually converts (announce-with-peer-hint vs sampled).
     pub verified_announced: AtomicU64,
     pub verified_sampled: AtomicU64,
+    /// Verified torrents that the retry worker recovered (an actively drained
+    /// failed hash that later verified).
+    pub verified_retried: AtomicU64,
+    /// Number of retry-worker poll/select cycles run (confirms the worker
+    /// loops and how often it scans).
+    pub retry_worker_scans: AtomicU64,
     /// Hashes the sparse/stalled discriminator withheld (single-source, never
     /// refreshed). Rising with ~constant verified = the gate is working.
     pub discriminator_filtered: AtomicU64,
@@ -111,6 +120,8 @@ pub struct CrawlSnapshot {
     pub no_ut_metadata: u64,
     pub metadata_rejected: u64,
     pub parse_error: u64,
+    pub dht_lookup_failed: u64,
+    pub lookup_pool_exhausted: u64,
     pub sha1_mismatch: u64,
     pub empty_peers: u64,
     pub fetch_deadline: u64,
@@ -118,6 +129,8 @@ pub struct CrawlSnapshot {
     pub peer_errors_other: u64,
     pub verified_announced: u64,
     pub verified_sampled: u64,
+    pub verified_retried: u64,
+    pub retry_worker_scans: u64,
     pub verified_lookedup: u64,
     pub verified_tracker: u64,
     pub scrape_saw_seeds: u64,

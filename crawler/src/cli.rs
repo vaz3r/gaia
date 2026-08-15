@@ -152,10 +152,13 @@ pub struct RunArgs {
     #[arg(long, default_value_t = 60)]
     pub sampler_max_interval: u64,
 
-    /// A failed fetch is retried until this many attempts, then treated as a
-    /// terminal dead hash (cached in the in-process bloom, never re-emitted).
-    /// Dead hashes never recover (F-series), so retries are wasted fetch work.
-    #[arg(long, default_value_t = 2)]
+    /// Retry budget for transient failure classes (timeout, deadline,
+    /// connect_refused, dht_lookup_failed, ...). Dead-verdict classes
+    /// (empty_peers, no_ut_metadata, ...) are always capped at 2. The retry
+    /// worker and the sampler's terminal-dead check use per-class caps derived
+    /// from the persisted failure_reason; this flag overrides the transient
+    /// default.
+    #[arg(long, default_value_t = 4)]
     pub max_attempts: u32,
 
     /// Maximum concurrent DHT `get_peers` lookups (bounds query-budget use).

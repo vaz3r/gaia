@@ -103,6 +103,11 @@ export function MonitoringPage(): JSX.Element {
           value={live ? formatBytes(live.container_mem_current) : "-"}
           sub={live ? `host free ${formatBytes(live.host_mem_available)}` : undefined}
         />
+        <MetricCard
+          label="Retry worker"
+          value={live ? String(live.retry_worker_scans) : "-"}
+          sub={live ? `retried verified ${live.verified_retried}` : undefined}
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

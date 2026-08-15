@@ -133,7 +133,6 @@ pub async fn run(args: RunArgs) -> Result<()> {
         min_sightings: args.min_sightings,
         min_seen_shadow: (args.min_seen_shadow > 0).then_some(args.min_seen_shadow),
         max_interval_secs: args.sampler_max_interval,
-        max_attempts: args.max_attempts,
     };
 
     // All instances share the hash channel; the fetcher consumes from it once.
@@ -255,10 +254,16 @@ pub async fn run(args: RunArgs) -> Result<()> {
     }
 
     // The shared channel must outlive all sampler + intake clones: keep a live
-    // sender owned by this scope until they finish.
+    // sender owned by this scope until they finish. The retry worker also gets
+    // a sender so it can re-queue failed hashes.
+    let hash_tx_retry = hash_tx.clone();
     drop(hash_tx);
 
     let primary = handles[0].clone();
+    // Shared in-flight set so the retry worker and the fetcher never fetch the
+    // same hash concurrently.
+    let in_flight: Arc<std::sync::Mutex<std::collections::HashSet<gaia_core::Id20>>> =
+        Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
     let mut fetcher = tokio::spawn(run_fetcher(
         hash_rx,
         record_tx,
@@ -271,9 +276,24 @@ pub async fn run(args: RunArgs) -> Result<()> {
             shared: shared.clone(),
         },
         stats.clone(),
+        in_flight.clone(),
     ));
 
     let writer = tokio::spawn(write_loop(record_rx, storage.clone(), stats.clone()));
+
+    // Active retry worker: drains retry-eligible failed hashes into the same
+    // fetch queue with its own bounded concurrency so it can't starve fresh
+    // fetches. It shares the in_flight set to avoid double-fetching.
+    let retry_semaphore = Arc::new(tokio::sync::Semaphore::new(64));
+    let retry_task = tokio::spawn(crate::retry::run_retry_worker(
+        storage.clone(),
+        hash_tx_retry,
+        retry_semaphore,
+        in_flight,
+        stats.clone(),
+        args.max_attempts,
+        shutdown.clone(),
+    ));
 
     let stats_task = tokio::spawn(stats_loop(
         handles.clone(),
@@ -295,6 +315,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
     while sweep.join_next().await.is_some() {}
     let _ = tokio::time::timeout(SHUTDOWN_DRAIN + Duration::from_secs(5), &mut fetcher).await;
     fetcher.abort();
+    retry_task.abort();
     // Dropping the fetcher aborts its JoinSet; the fetch tasks' `record_tx`
     // clones then drop, closing the write channel so the writer drains.
     let _ = writer.await;
@@ -497,6 +518,8 @@ async fn stats_loop(
             no_ut_metadata = s.no_ut_metadata.load(r),
             metadata_rejected = s.metadata_rejected.load(r),
             parse_error = s.parse_error.load(r),
+            dht_lookup_failed = s.dht_lookup_failed.load(r),
+            lookup_pool_exhausted = s.lookup_pool_exhausted.load(r),
             sha1_mismatch = s.sha1_mismatch.load(r),
             empty_peers = s.empty_peers.load(r),
             fetch_deadline = s.fetch_deadline.load(r),
@@ -536,6 +559,8 @@ async fn stats_loop(
             no_ut_metadata: s.no_ut_metadata.load(r),
             metadata_rejected: s.metadata_rejected.load(r),
             parse_error: s.parse_error.load(r),
+            dht_lookup_failed: s.dht_lookup_failed.load(r),
+            lookup_pool_exhausted: s.lookup_pool_exhausted.load(r),
             sha1_mismatch: s.sha1_mismatch.load(r),
             empty_peers: s.empty_peers.load(r),
             fetch_deadline: s.fetch_deadline.load(r),
@@ -543,6 +568,8 @@ async fn stats_loop(
             peer_errors_other: s.peer_errors_other.load(r),
             verified_announced: s.verified_announced.load(r),
             verified_sampled: s.verified_sampled.load(r),
+            verified_retried: s.verified_retried.load(r),
+            retry_worker_scans: s.retry_worker_scans.load(r),
             verified_lookedup: s.verified_lookedup.load(r),
             verified_tracker: s.verified_tracker.load(r),
             scrape_saw_seeds: s.scrape_saw_seeds.load(r),

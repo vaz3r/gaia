@@ -5,7 +5,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 
 pub use model::{
-    backoff_secs, EMPTY_PEERS_RETRY_SECS, ScannedRecord, ScannedStatus, TorrentRecord,
+    backoff_secs, ScannedRecord, ScannedStatus, TorrentRecord,
 };
 
 /// PostgreSQL-backed storage. `sqlx::migrate!` applies `db/migrations` at
@@ -234,6 +234,49 @@ impl Storage {
             .collect())
     }
 
+    /// Select hashes eligible for retry: failed, past `next_attempt`, and under
+    /// their per-class cap. The cap is enforced in SQL via the persisted
+    /// `failure_reason` (unknown/transient classes use the caller's `max_attempts`;
+    /// dead-verdict classes are always capped at 2). Ordered by `next_attempt`
+    /// so the most due hashes retry first.
+    pub async fn retry_eligible(
+        &self,
+        now: i64,
+        max_attempts: u32,
+        limit: i64,
+    ) -> Result<Vec<[u8; 20]>> {
+        let rows = sqlx::query(
+            "SELECT info_hash
+             FROM scanned
+             WHERE status = 'failed'
+               AND next_attempt <= $1::bigint
+               AND attempts < CASE
+                   WHEN COALESCE(failure_reason,'') IN
+                        ('empty_peers','no_ut_metadata','metadata_rejected','sha1_mismatch','parse_error')
+                   THEN 2::int
+                   ELSE $2::int
+               END
+             ORDER BY next_attempt ASC
+             LIMIT $3::bigint",
+        )
+        .bind(now)
+        .bind(max_attempts as i32)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .context("select retry-eligible hashes")?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let bytes: Vec<u8> = row.get(0);
+            if bytes.len() == 20 {
+                let mut h = [0u8; 20];
+                h.copy_from_slice(&bytes);
+                out.push(h);
+            }
+        }
+        Ok(out)
+    }
+
     /// Best-effort insert of one full monitoring snapshot. Failures are logged
     /// and swallowed so the crawl loop never breaks on a stats write.
     #[allow(clippy::too_many_arguments)]
@@ -263,12 +306,14 @@ impl Storage {
                 jemalloc_allocated, jemalloc_active, jemalloc_mapped, jemalloc_retained,
                 net_rx_bytes, net_tx_bytes, net_rx_rate_bps, net_tx_rate_bps,
                 host_mem_total, host_mem_available, container_mem_current, cpu_percent,
-                disk_total_bytes, disk_free_bytes, loadavg_1, loadavg_5, loadavg_15
+                disk_total_bytes, disk_free_bytes, loadavg_1, loadavg_5, loadavg_15,
+                dht_lookup_failed, lookup_pool_exhausted, verified_retried, retry_worker_scans
             ) VALUES (
                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
                 $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,
                 $37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,
-                $54,$55,$56,$57,$58,$59,$60,$61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72
+                $54,$55,$56,$57,$58,$59,$60,$61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72,
+                $73,$74,$75,$76
             )",
         )
         .bind(s.hashes_sampled as i64)
@@ -343,6 +388,10 @@ impl Storage {
         .bind(s.loadavg_1)
         .bind(s.loadavg_5)
         .bind(s.loadavg_15)
+        .bind(s.dht_lookup_failed as i64)
+        .bind(s.lookup_pool_exhausted as i64)
+        .bind(s.verified_retried as i64)
+        .bind(s.retry_worker_scans as i64)
         .execute(&self.pool)
         .await;
         if let Err(e) = result {
@@ -572,5 +621,99 @@ mod tests {
         assert_eq!(backoff_secs(3), 240);
         assert!(backoff_secs(100) <= 6 * 3600);
         assert_eq!(backoff_secs(100), backoff_secs(200));
+    }
+
+    #[tokio::test]
+    async fn retry_eligible_respects_class_caps_and_time() {
+        let db = Storage::connect(&test_pg()).await.unwrap();
+        clean(&db).await;
+        let now = 1_700_000_000i64;
+
+        // empty_peers at 2 attempts: dead-verdict cap 2 -> not eligible.
+        let dead = [11u8; 20];
+        db.record_scanned(&ScannedRecord {
+            info_hash: dead,
+            status: ScannedStatus::Failed {
+                attempts: 2,
+                next_attempt: now - 10,
+                failure_reason: Some("empty_peers".into()),
+            },
+            info_bytes: None,
+            raw_name: None,
+            last_attempt: now - 10,
+        })
+        .await
+        .unwrap();
+
+        // empty_peers at 1 attempt, due: eligible.
+        let dead_due = [12u8; 20];
+        db.record_scanned(&ScannedRecord {
+            info_hash: dead_due,
+            status: ScannedStatus::Failed {
+                attempts: 1,
+                next_attempt: now - 10,
+                failure_reason: Some("empty_peers".into()),
+            },
+            info_bytes: None,
+            raw_name: None,
+            last_attempt: now - 10,
+        })
+        .await
+        .unwrap();
+
+        // timeout at 4 attempts (transient cap 4), due: NOT eligible (== cap).
+        let timeout_capped = [13u8; 20];
+        db.record_scanned(&ScannedRecord {
+            info_hash: timeout_capped,
+            status: ScannedStatus::Failed {
+                attempts: 4,
+                next_attempt: now - 10,
+                failure_reason: Some("timeout".into()),
+            },
+            info_bytes: None,
+            raw_name: None,
+            last_attempt: now - 10,
+        })
+        .await
+        .unwrap();
+
+        // timeout at 3 attempts, due: eligible.
+        let timeout_due = [14u8; 20];
+        db.record_scanned(&ScannedRecord {
+            info_hash: timeout_due,
+            status: ScannedStatus::Failed {
+                attempts: 3,
+                next_attempt: now - 10,
+                failure_reason: Some("timeout".into()),
+            },
+            info_bytes: None,
+            raw_name: None,
+            last_attempt: now - 10,
+        })
+        .await
+        .unwrap();
+
+        // Not yet due (future next_attempt): not eligible.
+        let future = [15u8; 20];
+        db.record_scanned(&ScannedRecord {
+            info_hash: future,
+            status: ScannedStatus::Failed {
+                attempts: 1,
+                next_attempt: now + 100,
+                failure_reason: Some("timeout".into()),
+            },
+            info_bytes: None,
+            raw_name: None,
+            last_attempt: now,
+        })
+        .await
+        .unwrap();
+
+        let eligible = db.retry_eligible(now, 4, 100).await.unwrap();
+        assert!(eligible.contains(&dead_due), "dead-verdict under cap eligible");
+        assert!(eligible.contains(&timeout_due), "transient under cap eligible");
+        assert!(!eligible.contains(&dead), "dead-verdict at cap excluded");
+        assert!(!eligible.contains(&timeout_capped), "transient at cap excluded");
+        assert!(!eligible.contains(&future), "future next_attempt excluded");
     }
 }

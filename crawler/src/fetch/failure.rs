@@ -36,6 +36,12 @@ pub enum FetchFailureKind {
     Deadline,
     /// get_peers returned no dialable peers at all.
     EmptyPeers,
+    /// A DHT `get_peers` lookup failed during the fetch (infrastructure
+    /// failure — transient, retry-productive).
+    DhtLookupFailed,
+    /// The fetch could not acquire a lookup-pool permit (infrastructure
+    /// failure — transient, retry-productive).
+    LookupPoolExhausted,
     /// Anything not covered above (kept so no failure is dropped).
     Other,
 }
@@ -56,6 +62,8 @@ impl FetchFailureKind {
             Self::EarlyAbort => "early_abort",
             Self::Deadline => "deadline",
             Self::EmptyPeers => "empty_peers",
+            Self::DhtLookupFailed => "dht_lookup_failed",
+            Self::LookupPoolExhausted => "lookup_pool_exhausted",
             Self::Other => "other",
         }
     }
@@ -115,7 +123,45 @@ impl FetchFailureKind {
         {
             Self::ParseError
         } else {
+            // Unmatched fallback: log so taxonomy gaps stay visible instead of
+            // silently folding into `other`.
+            tracing::debug!(unmatched_failure = msg, "unmatched failure classification");
             Self::Other
+        }
+    }
+}
+
+/// Maximum attempts per failure class. Transient classes (network/backend
+/// failures that often recover) get a generous budget; dead-verdict classes
+/// (peer said no / hash is dead) are capped low so dead-hash churn stays
+/// bounded. `kind` is the persisted `failure_reason` string (`None` = the
+/// legacy "unknown" bucket, treated as transient).
+pub fn retry_cap(kind: Option<&str>) -> u32 {
+    match kind {
+        Some("empty_peers")
+        | Some("no_ut_metadata")
+        | Some("metadata_rejected")
+        | Some("sha1_mismatch")
+        | Some("parse_error") => 2,
+        _ => 4,
+    }
+}
+
+/// Backoff before the next attempt, per class. Transient classes use a shorter
+/// schedule (so a recoverable hash is retried promptly); dead-verdict classes
+/// use the longer exponential backoff and are capped at 2 attempts anyway.
+pub fn retry_delay(kind: Option<&str>, attempts: i64) -> i64 {
+    match kind {
+        Some("empty_peers")
+        | Some("no_ut_metadata")
+        | Some("metadata_rejected")
+        | Some("sha1_mismatch")
+        | Some("parse_error") => crate::storage::backoff_secs(attempts),
+        _ => {
+            // Transient: 1m, 2m, 4m, 8m, ... capped at 10m.
+            let n = attempts.max(1) - 1;
+            let shift = n.min(10);
+            (60i64.saturating_mul(1i64 << shift)).min(600)
         }
     }
 }
@@ -215,9 +261,41 @@ mod tests {
             FetchFailureKind::EarlyAbort,
             FetchFailureKind::Deadline,
             FetchFailureKind::EmptyPeers,
+            FetchFailureKind::DhtLookupFailed,
+            FetchFailureKind::LookupPoolExhausted,
             FetchFailureKind::Other,
         ] {
             assert!(seen.insert(k.as_str().to_string()), "dup: {}", k.as_str());
         }
+    }
+
+    #[test]
+    fn retry_cap_varies_by_class() {
+        assert_eq!(retry_cap(Some("empty_peers")), 2);
+        assert_eq!(retry_cap(Some("no_ut_metadata")), 2);
+        assert_eq!(retry_cap(Some("metadata_rejected")), 2);
+        assert_eq!(retry_cap(Some("sha1_mismatch")), 2);
+        assert_eq!(retry_cap(Some("parse_error")), 2);
+        assert_eq!(retry_cap(Some("timeout")), 4);
+        assert_eq!(retry_cap(Some("deadline")), 4);
+        assert_eq!(retry_cap(Some("connect_refused")), 4);
+        assert_eq!(retry_cap(Some("dht_lookup_failed")), 4);
+        assert_eq!(retry_cap(Some("lookup_pool_exhausted")), 4);
+        assert_eq!(retry_cap(None), 4);
+        assert_eq!(retry_cap(Some("unknown_reason")), 4);
+    }
+
+    #[test]
+    fn retry_delay_varies_by_class() {
+        // Dead-verdict: long exponential (backoff_secs).
+        assert_eq!(retry_delay(Some("empty_peers"), 1), 60);
+        assert_eq!(retry_delay(Some("empty_peers"), 2), 120);
+        // Transient: short, capped at 600s.
+        assert_eq!(retry_delay(Some("timeout"), 1), 60);
+        assert_eq!(retry_delay(Some("timeout"), 2), 120);
+        assert_eq!(retry_delay(Some("timeout"), 3), 240);
+        assert_eq!(retry_delay(Some("timeout"), 4), 480);
+        assert_eq!(retry_delay(Some("timeout"), 10), 600);
+        assert_eq!(retry_delay(None, 1), 60);
     }
 }

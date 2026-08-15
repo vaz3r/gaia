@@ -22,7 +22,7 @@ use crate::discovery::{FetchRequest, FetchSource};
 use crate::net::{Blocklist, DeadPeerCache};
 use crate::stats::CrawlStats;
 use crate::storage::{
-    backoff_secs, EMPTY_PEERS_RETRY_SECS, ScannedRecord, ScannedStatus, Storage, TorrentRecord,
+    ScannedRecord, ScannedStatus, Storage, TorrentRecord,
 };
 
 use parse::extract_metadata;
@@ -149,10 +149,10 @@ pub async fn run_fetcher(
     storage: Storage,
     cfg: FetcherConfig,
     stats: Arc<CrawlStats>,
+    in_flight: Arc<Mutex<HashSet<Id20>>>,
 ) {
     let peer_id = random_peer_id();
     let lookup_permits = Arc::new(Semaphore::new(cfg.lookup_concurrency.max(1)));
-    let in_flight: Arc<Mutex<HashSet<Id20>>> = Arc::new(Mutex::new(HashSet::new()));
     let dead_peers: Arc<Mutex<DeadPeerCache>> = Arc::new(Mutex::new(DeadPeerCache::new(2, 600)));
     let mut queue = HashQueue::new();
     let mut tasks = JoinSet::new();
@@ -250,11 +250,10 @@ pub async fn run_fetcher(
                                 _ => 1,
                             });
                         let now = unix_secs();
-                        let delay = if fe.dominant_failure.as_deref() == Some("empty_peers") {
-                            EMPTY_PEERS_RETRY_SECS
-                        } else {
-                            backoff_secs(attempts)
-                        };
+                        let delay = crate::fetch::failure::retry_delay(
+                            fe.dominant_failure.as_deref(),
+                            attempts,
+                        );
                         let _ = storage
                 .record_scanned(&ScannedRecord {
                             info_hash: *req.hash.as_bytes(),
@@ -373,7 +372,7 @@ async fn fetch_one(
                             last_seen: now,
                         };
                         tx.send(record).await.context("storage channel closed")
-                            .map_err(|e| FetchError { reason: e, dominant_failure: None })?;
+                            .map_err(|e| FetchError { reason: e, dominant_failure: Some(FetchFailureKind::Other.as_str().to_string()) })?;
                         stats
                             .records_persisted
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -385,6 +384,18 @@ async fn fetch_one(
                 } else {
                     *failure_counts.entry(FetchFailureKind::Sha1Mismatch).or_insert(0) += 1;
                 }
+            } else if let Ok(Err(e)) = result {
+                // Hint dial reached the peer but metadata failed — classify so
+                // the dominant failure is never None.
+                let kind = FetchFailureKind::from_error(&e);
+                *failure_counts.entry(kind).or_insert(0) += 1;
+                record_peer_failure(kind, stats);
+            } else {
+                // Hint dial timed out or the task panicked.
+                *failure_counts.entry(FetchFailureKind::Timeout).or_insert(0) += 1;
+                stats
+                    .connect_timeout
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }
     }
@@ -453,9 +464,9 @@ async fn fetch_one(
 
     let mut peers = {
         let _permit = lookup_permits.acquire().await.context("lookup permit")
-            .map_err(|e| FetchError { reason: e, dominant_failure: None })?;
+            .map_err(|e| FetchError { reason: e, dominant_failure: Some(FetchFailureKind::LookupPoolExhausted.as_str().to_string()) })?;
         handle.get_peers_seeded(info_hash, lookup_seed).await.context("get_peers failed")
-            .map_err(|e| FetchError { reason: e, dominant_failure: None })?
+            .map_err(|e| FetchError { reason: e, dominant_failure: Some(FetchFailureKind::DhtLookupFailed.as_str().to_string()) })?
     };
 
     'outer: loop {
@@ -542,9 +553,14 @@ async fn fetch_one(
         stats.failed_without_seeds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    let dominant = failure_counts.iter()
+    // Never persist a NULL dominant: if no peer failure was recorded, the hash
+    // had no reachable peer (EmptyPeers is normally added above when nothing
+    // was dialed, but a failed hint dial can leave the count empty).
+    let dominant = failure_counts
+        .iter()
         .max_by_key(|(_, count)| **count)
-        .map(|(reason, _)| reason.as_str().to_string());
+        .map(|(reason, _)| reason.as_str().to_string())
+        .or_else(|| Some(FetchFailureKind::EmptyPeers.as_str().to_string()));
 
     Err(FetchError {
         reason: anyhow!("no reachable peer yielded verified metadata"),
@@ -680,7 +696,7 @@ async fn persist_verified(
         last_seen: now,
     };
     tx.send(record).await.context("storage channel closed")
-        .map_err(|e| FetchError { reason: e, dominant_failure: None })?;
+        .map_err(|e| FetchError { reason: e, dominant_failure: Some(FetchFailureKind::Other.as_str().to_string()) })?;
     stats
         .records_persisted
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -699,6 +715,7 @@ fn record_verified(source: FetchSource, stats: &CrawlStats) {
         S::LookedUp => stats.verified_lookedup.fetch_add(1, rel),
         S::Sampled => stats.verified_sampled.fetch_add(1, rel),
         S::Tracker => stats.verified_tracker.fetch_add(1, rel),
+        S::Retried => stats.verified_retried.fetch_add(1, rel),
     };
 }
 
@@ -719,6 +736,8 @@ fn record_peer_failure(kind: FetchFailureKind, stats: &CrawlStats) {
         K::EarlyAbort => stats.early_abort.fetch_add(1, rel),
         K::Deadline => stats.fetch_deadline.fetch_add(1, rel),
         K::EmptyPeers => stats.empty_peers.fetch_add(1, rel),
+        K::DhtLookupFailed => stats.dht_lookup_failed.fetch_add(1, rel),
+        K::LookupPoolExhausted => stats.lookup_pool_exhausted.fetch_add(1, rel),
         K::Other => stats.peer_errors_other.fetch_add(1, rel),
     };
 }

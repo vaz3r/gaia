@@ -33,8 +33,12 @@ export interface CrawlSnapshot {
   fetch_deadline: number;
   early_abort: number;
   peer_errors_other: number;
+  dht_lookup_failed: number;
+  lookup_pool_exhausted: number;
   verified_announced: number;
   verified_sampled: number;
+  verified_retried: number;
+  retry_worker_scans: number;
   verified_lookedup: number;
   verified_tracker: number;
   scrape_saw_seeds: number;

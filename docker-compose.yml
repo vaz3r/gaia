@@ -184,7 +184,7 @@ services:
       - --max-nodes
       - "8192"
       - --max-attempts
-      - "2"
+      - "4"
       - --no-restrict-ips
       - --redis-url
       - redis://redis:6379
