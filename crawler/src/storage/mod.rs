@@ -28,6 +28,17 @@ impl Storage {
         Ok(Self { pool })
     }
 
+    /// Postgres liveness probe: a trivial round-trip. Used by the /health
+    /// endpoint so external checks reflect DB reachability, not just the
+    /// crawler process being alive.
+    pub async fn ping(&self) -> Result<()> {
+        sqlx::query_scalar::<_, i32>("SELECT 1")
+            .fetch_one(&self.pool)
+            .await
+            .context("postgres ping")
+            .map(|_| ())
+    }
+
     /// Insert or update a batch of records in a single transaction, preserving
     /// the original `first_seen` on duplicates.
     pub async fn insert_batch(&self, records: &[TorrentRecord]) -> Result<()> {
@@ -277,6 +288,79 @@ impl Storage {
         Ok(out)
     }
 
+    /// Re-evaluate long-dead hashes. Terminal hashes (attempts >= the per-class
+    /// retry cap) are never re-emitted by default, which permanently drops a
+    /// torrent that gained seeders long after its last attempt. This resets the
+    /// attempt budget of terminal `failed` rows whose last attempt is older than
+    /// `min_age_secs`, so `retry_eligible` will pick them up again on the next
+    /// scan. The retry budget now effectively becomes: retry within the cap,
+    /// then cold after `min_age_secs`, then retry again.
+    pub async fn reevaluate_terminal_hashes(&self, now: i64, min_age_secs: i64) -> Result<u64> {
+        // Dead-verdict classes (capped at 2 attempts) are more likely genuinely
+        // dead, so wait 2x longer before giving them a fresh budget. Transient
+        // classes (timeout, deadline, etc.) reset after the base age.
+        let res = sqlx::query(
+            "UPDATE scanned
+             SET attempts = 0,
+                 next_attempt = $1::bigint
+             WHERE status = 'failed'
+               AND attempts > 0
+               AND (
+                 (failure_reason IS NULL OR failure_reason NOT IN
+                  ('empty_peers','no_ut_metadata','metadata_rejected','sha1_mismatch','parse_error')
+                  AND last_attempt < $1::bigint - $2::bigint)
+                 OR last_attempt < $1::bigint - $3::bigint
+               )",
+        )
+        .bind(now)
+        .bind(min_age_secs)
+        .bind(min_age_secs * 2)
+        .execute(&self.pool)
+        .await
+        .context("re-evaluate terminal hashes")?
+        .rows_affected();
+        Ok(res)
+    }
+
+    /// Batch scan-status lookup for many hashes. Returns a map from hash -> status
+    /// for rows present in `scanned`. Only rows with `status='ok'`/`'skipped'` are
+    /// returned (they are the only *terminal* skip verdicts the sampler's bloom
+    /// caches; failures are handled per-hash by the caller's backoff logic).
+    pub async fn scan_statuses_batch(
+        &self,
+        hashes: &[[u8; 20]],
+    ) -> Result<std::collections::HashMap<[u8; 20], ()>> {
+        let mut terminal: std::collections::HashMap<[u8; 20], ()> =
+            std::collections::HashMap::new();
+        if hashes.is_empty() {
+            return Ok(terminal);
+        }
+        // Chunk to stay under Postgres' bind limit (64 hashes/query is safe).
+        for chunk in hashes.chunks(64) {
+            let placeholders: Vec<String> = (1..=chunk.len())
+                .map(|i| format!("${i}::bytea"))
+                .collect();
+            let sql = format!(
+                "SELECT info_hash FROM scanned WHERE info_hash IN ({}) AND status IN ('ok','skipped')",
+                placeholders.join(",")
+            );
+            let mut q = sqlx::query(&sql);
+            for h in chunk {
+                q = q.bind(h.as_slice());
+            }
+            let rows = q.fetch_all(&self.pool).await.context("batch scan status")?;
+            for row in rows {
+                let bytes: Vec<u8> = row.get(0);
+                if bytes.len() == 20 {
+                    let mut h = [0u8; 20];
+                    h.copy_from_slice(&bytes);
+                    terminal.insert(h, ());
+                }
+            }
+        }
+        Ok(terminal)
+    }
+
     /// Best-effort insert of one full monitoring snapshot. Failures are logged
     /// and swallowed so the crawl loop never breaks on a stats write.
     #[allow(clippy::too_many_arguments)]
@@ -287,6 +371,7 @@ impl Storage {
     ) {
         let result = sqlx::query(
             "INSERT INTO crawl_stats_history (
+                process_start_ts,
                 hashes_sampled, hashes_unique, hashes_announced, announces_deduped_redis,
                 announces_emitted, shadow_emitted, shadow_filtered, shadow_near_miss_1,
                 shadow_near_miss_2, shadow_near_miss_1_sparse, shadow_near_miss_1_stalled,
@@ -313,9 +398,10 @@ impl Storage {
                 $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,
                 $37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,
                 $54,$55,$56,$57,$58,$59,$60,$61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72,
-                $73,$74,$75,$76
+                $73,$74,$75,$76,$77
             )",
         )
+        .bind(s.process_start_ts as i64)
         .bind(s.hashes_sampled as i64)
         .bind(s.hashes_unique as i64)
         .bind(s.hashes_announced as i64)
@@ -715,5 +801,68 @@ mod tests {
         assert!(!eligible.contains(&dead), "dead-verdict at cap excluded");
         assert!(!eligible.contains(&timeout_capped), "transient at cap excluded");
         assert!(!eligible.contains(&future), "future next_attempt excluded");
+    }
+
+    #[tokio::test]
+    async fn reevaluate_terminal_resets_only_old_exhausted() {
+        let db = Storage::connect(&test_pg()).await.unwrap();
+        clean(&db).await;
+        let now = 1_700_000_000i64;
+
+        // exhausted empty_peers, old enough (beyond 2x min age): reset.
+        let old_dead = [21u8; 20];
+        db.record_scanned(&ScannedRecord {
+            info_hash: old_dead,
+            status: ScannedStatus::Failed {
+                attempts: 3,
+                next_attempt: now - 10,
+                failure_reason: Some("empty_peers".into()),
+            },
+            info_bytes: None,
+            raw_name: None,
+            last_attempt: now - 100_000,
+        })
+        .await
+        .unwrap();
+
+        // exhausted timeout, old past base age but before 2x: reset.
+        let old_transient = [22u8; 20];
+        db.record_scanned(&ScannedRecord {
+            info_hash: old_transient,
+            status: ScannedStatus::Failed {
+                attempts: 5,
+                next_attempt: now - 10,
+                failure_reason: Some("timeout".into()),
+            },
+            info_bytes: None,
+            raw_name: None,
+            last_attempt: now - 30_000,
+        })
+        .await
+        .unwrap();
+
+        // exhausted timeout, only recently attempted: do NOT reset.
+        let recent = [23u8; 20];
+        db.record_scanned(&ScannedRecord {
+            info_hash: recent,
+            status: ScannedStatus::Failed {
+                attempts: 5,
+                next_attempt: now - 10,
+                failure_reason: Some("timeout".into()),
+            },
+            info_bytes: None,
+            raw_name: None,
+            last_attempt: now - 100,
+        })
+        .await
+        .unwrap();
+
+        let reset = db.reevaluate_terminal_hashes(now, 3600).await.unwrap();
+        assert_eq!(reset, 2, "only old terminal hashes reset");
+
+        let eligible = db.retry_eligible(now, 4, 100).await.unwrap();
+        assert!(eligible.contains(&old_dead), "revived dead-verdict eligible");
+        assert!(eligible.contains(&old_transient), "revived transient eligible");
+        assert!(!eligible.contains(&recent), "recent attempt still excluded");
     }
 }

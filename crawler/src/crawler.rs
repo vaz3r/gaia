@@ -61,10 +61,17 @@ const SHUTDOWN_DRAIN: Duration = Duration::from_secs(10);
 /// Run the crawl daemon until SIGTERM/SIGINT: N BEP 51 samplers → metadata
 /// fetcher → storage writer, then drain and persist state on shutdown.
 pub async fn run(args: RunArgs) -> Result<()> {
+    // Unix seconds at process start, persisted with every stats snapshot so the
+    // admin API/dashboard can reset cumulative-rate windows on restart (the
+    // in-process counters reset to zero at process start).
+    let process_start_ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     let storage = Storage::connect(&args.pg).await?;
     let stats = Arc::new(CrawlStats::default());
     let blocklist = Arc::new(Blocklist::load(args.blocklist.as_deref())?);
-    let shared = crate::redis::init_shared(args.redis_url.clone()).await;
+    let shared = crate::redis::init_shared(args.redis_url.clone(), Some(args.redis_prefix.clone())).await;
 
     let instances = args.instances.max(1);
     info!(
@@ -286,7 +293,20 @@ pub async fn run(args: RunArgs) -> Result<()> {
         stats.clone(),
         liveness.clone(),
         storage.clone(),
+        process_start_ts,
     ));
+
+    // Optional built-in HTTP health endpoint (--health-port, default off). The
+    // DHT UDP path has no HTTP surface; this gives the container healthcheck and
+    // external monitoring a real endpoint plus a Postgres liveness probe.
+    if args.health_port > 0 {
+        tokio::spawn(crate::health::serve(
+            args.health_port,
+            process_start_ts,
+            storage.clone(),
+            shutdown.clone(),
+        ));
+    }
 
     wait_for_shutdown().await;
 
@@ -372,6 +392,7 @@ async fn stats_loop(
     stats: Arc<CrawlStats>,
     liveness: Arc<discovery::LivenessCounter>,
     storage: Storage,
+    process_start_ts: u64,
 ) {
     let mut tick = tokio::time::interval(STATS_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -513,6 +534,7 @@ async fn stats_loop(
         // failed write is logged and the crawl continues.
         let sys = sysmetrics.sample();
         let snap = crate::stats::CrawlSnapshot {
+            process_start_ts,
             hashes_sampled: s.hashes_sampled.load(r),
             hashes_unique: s.hashes_unique.load(r),
             hashes_announced: s.hashes_announced.load(r),

@@ -69,6 +69,10 @@ pub struct RunArgs {
     #[arg(long, default_value_t = 6881)]
     pub port: u16,
 
+    /// Port for the built-in HTTP health endpoint (0 = disabled).
+    #[arg(long, default_value_t = 0)]
+    pub health_port: u16,
+
     /// PostgreSQL connection URL (the single store).
     #[arg(long, default_value = "postgres://crawler:crawler@localhost:5432/crawler")]
     pub pg: String,
@@ -192,6 +196,12 @@ pub struct RunArgs {
     /// falls back to per-instance in-memory dedup/cache.
     #[arg(long)]
     pub redis_url: Option<String>,
+
+    /// Redis keyspace prefix (namespace) for all shared-state keys. Lets
+    /// multiple crawler fleets share one Redis without key collisions
+    /// (defaults to "dht").
+    #[arg(long, default_value = "dht")]
+    pub redis_prefix: String,
 
     /// Override the RUST_LOG tracing filter (e.g. "crawler=debug").
     #[arg(long)]

@@ -27,6 +27,11 @@ use crate::storage::Storage;
 pub const RETRY_SCAN_INTERVAL: Duration = Duration::from_secs(30);
 /// Max hashes selected per scan.
 pub const RETRY_BATCH: i64 = 256;
+/// After this age (seconds), a terminal `failed` hash gets its attempt budget
+/// reset so it can be retried again (it may have gained seeders since). Runs on
+/// a slow cadence (RE_EVAL_EVERY scans) so it does not re-flood the queue.
+pub const REEVAL_MIN_AGE_SECS: i64 = 12 * 3600;
+const RE_EVAL_EVERY: u64 = 20; // 20 * 30s ≈ every 10 minutes
 
 /// Run the retry worker until shutdown. `max_attempts` is the transient-class
 /// budget (dead-verdict classes are always capped at 2 by `retry_eligible`).
@@ -41,6 +46,7 @@ pub async fn run_retry_worker(
 ) {
     let mut tick = tokio::time::interval(RETRY_SCAN_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut scan_count: u64 = 0;
 
     loop {
         tokio::select! {
@@ -49,6 +55,21 @@ pub async fn run_retry_worker(
         }
 
         let now = unix_secs();
+        // On a slow cadence, reset the attempt budget of terminal hashes whose
+        // last attempt is long past, so long-dead torrents that gained seeders
+        // get a fresh chance instead of being dropped forever.
+        scan_count += 1;
+        if scan_count.is_multiple_of(RE_EVAL_EVERY) {
+            match storage.reevaluate_terminal_hashes(now, REEVAL_MIN_AGE_SECS).await {
+                Ok(n) => {
+                    if n > 0 {
+                        tracing::debug!(reset = n, "re-evaluated terminal hashes");
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "re-evaluate terminal hashes failed"),
+            }
+        }
+
         let eligible = match storage.retry_eligible(now, max_attempts, RETRY_BATCH).await {
             Ok(v) => v,
             Err(e) => {

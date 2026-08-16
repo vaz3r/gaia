@@ -5,6 +5,7 @@ mod crawler;
 mod db;
 mod discovery;
 mod fetch;
+mod health;
 mod net;
 mod purge;
 mod query;

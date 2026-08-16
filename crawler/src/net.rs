@@ -91,6 +91,42 @@ impl Blocklist {
     }
 }
 
+/// True if `ip` is globally dialable in practice. Peer-reported addresses from
+/// DHT announce/get_peers are often the sender's own (NAT'd) address: private
+/// RFC 1918 space, loopback, and carrier-grade NAT (100.64.0.0/10) can never be
+/// reached from this host, so dialing them is guaranteed waste. `--no-restrict-ips`
+/// disables *routing-table* diversity restrictions, but a hint dial to a
+/// non-routable address always fails — it is filtered here unconditionally.
+pub fn is_globally_dialable(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V6(v6) => {
+            // Globally routable unicast: not loopback, link-local, ULA, or
+            // multicast.
+            !v6.is_loopback()
+                && !v6.is_multicast()
+                && !v6.is_unspecified()
+                && !(v6.segments()[0] & 0xfe00 == 0xfc00) // fc00::/7 ULA
+                && !(v6.segments()[0] & 0xffc0 == 0xfe80) // fe80::/10 link-local
+        }
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            let raw = u32::from(v4);
+            // 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10 (CGNAT), 127.0.0.0/8,
+            // 169.254.0.0/16 (link-local), 172.16.0.0/12, 192.168.0.0/16,
+            // 224.0.0.0/4 (multicast), 240.0.0.0/4 (reserved).
+            !(o[0] == 0)
+                && !(o[0] == 10)
+                && !(o[0] == 100 && (o[1] & 0xc0) == 0x40)
+                && !(o[0] == 127)
+                && !(o[0] == 169 && o[1] == 254)
+                && !(o[0] == 172 && (o[1] & 0xf0) == 16)
+                && !(o[0] == 192 && o[1] == 168)
+                && !(0xE0000000..0xF0000000).contains(&raw)
+                && !(raw >= 0xF0000000)
+        }
+    }
+}
+
 /// In-run cache of peer IPs that repeatedly failed to connect. Once an IP has
 /// failed `required_failures` times within the TTL window, it is skipped when
 /// dialing further hashes; it becomes eligible again after the TTL elapses.
@@ -171,6 +207,36 @@ mod tests {
     fn bad_lines_rejected() {
         assert!(Blocklist::from_text("not-an-ip\n").is_err());
         assert!(Blocklist::from_text("1.2.3.4/99\n").is_err());
+    }
+
+    #[test]
+    fn global_dialability_classifies_private_and_cgnat() {
+        let cases: &[(&str, bool)] = &[
+            ("8.8.8.8", true),
+            ("93.184.216.34", true),
+            ("1.2.3.4", true),
+            ("10.1.2.3", false),           // RFC1918
+            ("172.16.0.1", false),         // RFC1918
+            ("172.31.255.254", false),     // RFC1918
+            ("192.168.1.7", false),        // RFC1918
+            ("100.64.0.1", false),         // CGNAT
+            ("100.127.255.254", false),    // CGNAT
+            ("127.0.0.1", false),          // loopback
+            ("169.254.169.254", false),    // link-local
+            ("0.0.0.0", false),            // unspecified
+            ("224.0.0.1", false),          // multicast
+            ("240.0.0.1", false),          // reserved
+            ("2001:db8::1", true),         // docs /2000::/3 globally unique pattern
+            ("::1", false),                // loopback v6
+            ("fc00::1", false),            // ULA
+            ("fd12:3456::1", false),       // ULA
+            ("fe80::1", false),            // link-local v6
+            ("2001:4860:4860::8888", true), // Google DNS v6
+        ];
+        for (s, expect) in cases {
+            let ip: IpAddr = s.parse().unwrap();
+            assert_eq!(is_globally_dialable(ip), *expect, "case {s}");
+        }
     }
 
     #[test]

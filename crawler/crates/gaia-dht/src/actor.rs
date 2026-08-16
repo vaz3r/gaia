@@ -347,6 +347,11 @@ enum DhtCommand {
         target: Id20,
         reply: oneshot::Sender<Result<SampleInfohashesResult>>,
     },
+    DirectGetPeers {
+        target: SocketAddr,
+        info_hash: Id20,
+        reply: oneshot::Sender<Result<Vec<SocketAddr>>>,
+    },
     GetRoutingNodes {
         reply: oneshot::Sender<Vec<(Id20, SocketAddr)>>,
     },
@@ -694,6 +699,25 @@ impl DhtHandle {
         reply_rx.await.map_err(|_| Error::Shutdown)?
     }
 
+    /// Query a specific remote DHT node directly for peers of an infohash in a single
+    /// 1-shot KRPC `get_peers` request (Bitmagnet pattern).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Shutdown`] if the actor has stopped, or [`Error::Timeout`] if no response arrives.
+    pub async fn direct_get_peers(&self, target: SocketAddr, info_hash: Id20) -> Result<Vec<SocketAddr>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(DhtCommand::DirectGetPeers {
+                target,
+                info_hash,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| Error::Shutdown)?;
+        reply_rx.await.map_err(|_| Error::Shutdown)?
+    }
+
     /// Retrieve a mutable item from the DHT (BEP 44).
     ///
     /// Returns `(value, seq)` if found, `None` if not.
@@ -777,6 +801,8 @@ struct DhtActor {
     ip_consensus_tx: mpsc::Sender<std::net::IpAddr>,
     /// Pending one-shot replies for `sample_infohashes` queries.
     sample_replies: HashMap<u16, oneshot::Sender<Result<SampleInfohashesResult>>>,
+    /// Pending one-shot replies for `direct_get_peers` queries.
+    direct_peer_replies: HashMap<u16, oneshot::Sender<Result<Vec<SocketAddr>>>>,
     /// Token-bucket rate limiter shared with spawned `DhtLookup` tasks.
     rate_limiter: Arc<SharedRateLimiter>,
     /// Active iterative bootstrap lookup (`find_node` self-lookup after initial bootstrap).
@@ -854,6 +880,8 @@ pub(crate) enum PendingQueryKind {
     PutItem,
     /// BEP 51: outgoing `sample_infohashes` query.
     SampleInfohashes,
+    /// 1-shot direct `get_peers` query to a reporting node.
+    DirectGetPeers,
 }
 
 /// State for an active BEP 44 get lookup.
@@ -984,6 +1012,7 @@ impl DhtActor {
             ip_consensus_tx,
             events_tx,
             sample_replies: HashMap::new(),
+            direct_peer_replies: HashMap::new(),
             rate_limiter: Arc::new(SharedRateLimiter::new(queries_per_second)),
             bootstrap_lookup: None,
             bootstrap_complete: false,
@@ -1080,6 +1109,9 @@ impl DhtActor {
                         }
                         Some(DhtCommand::SampleInfohashes { target, reply }) => {
                             self.handle_sample_infohashes(target, reply).await;
+                        }
+                        Some(DhtCommand::DirectGetPeers { target, info_hash, reply }) => {
+                            self.handle_direct_get_peers(target, info_hash, reply).await;
                         }
                         Some(DhtCommand::GetRoutingNodes { reply }) => {
                             let nodes = self.routing_table.read().all_nodes();
@@ -1939,6 +1971,21 @@ impl DhtActor {
                     }));
                 }
             }
+            (PendingQueryKind::DirectGetPeers, KrpcResponse::GetPeers(gp)) => {
+                for node in &gp.nodes {
+                    if self.matches_family(&node.addr) {
+                        self.checked_insert(node.id, node.addr, false);
+                    }
+                }
+                for node in &gp.nodes6 {
+                    if self.matches_family(&node.addr) {
+                        self.checked_insert(node.id, node.addr, false);
+                    }
+                }
+                if let Some(reply) = self.direct_peer_replies.remove(&txn) {
+                    let _ = reply.send(Ok(gp.peers.clone()));
+                }
+            }
             (
                 PendingQueryKind::GetItem { target },
                 KrpcResponse::GetItem {
@@ -2342,6 +2389,11 @@ impl DhtActor {
                 }
                 if matches!(pending.kind, PendingQueryKind::SampleInfohashes)
                     && let Some(reply) = self.sample_replies.remove(&txn)
+                {
+                    let _ = reply.send(Err(Error::Timeout));
+                }
+                if matches!(pending.kind, PendingQueryKind::DirectGetPeers)
+                    && let Some(reply) = self.direct_peer_replies.remove(&txn)
                 {
                     let _ = reply.send(Err(Error::Timeout));
                 }
@@ -3001,6 +3053,47 @@ impl DhtActor {
         }
         // Store the reply sender for when the response comes back
         self.sample_replies.insert(txn, reply);
+    }
+
+    async fn handle_direct_get_peers(
+        &mut self,
+        target: SocketAddr,
+        info_hash: Id20,
+        reply: oneshot::Sender<Result<Vec<SocketAddr>>>,
+    ) {
+        if !self.rate_limiter.try_acquire() {
+            let _ = reply.send(Err(Error::Timeout));
+            return;
+        }
+        let txn = self.next_transaction_id();
+        let own_id = *self.routing_table.read().own_id();
+        let msg = KrpcMessage {
+            transaction_id: TransactionId::from_u16(txn),
+            body: KrpcBody::Query(KrpcQuery::GetPeers {
+                id: own_id,
+                info_hash,
+                noseed: None,
+                scrape: None,
+                want: self.outgoing_want(),
+            }),
+            sender_ip: None,
+            read_only: self.config.read_only_mode,
+        };
+        if let Ok(bytes) = msg.to_bytes() {
+            let _ = self.socket.send_to(&bytes, target).await;
+            self.pending.insert(
+                txn,
+                PendingQuery {
+                    sent_at: Instant::now(),
+                    addr: target,
+                    kind: PendingQueryKind::DirectGetPeers,
+                    node_id: None,
+                    response_tx: None,
+                },
+            );
+            self.stats.total_queries_sent += 1;
+        }
+        self.direct_peer_replies.insert(txn, reply);
     }
 
     fn next_transaction_id(&self) -> u16 {
@@ -4550,5 +4643,21 @@ mod tests {
     fn dht_config_v6_enable_multi_address_default_true() {
         let cfg = DhtConfig::default_v6();
         assert!(cfg.enable_multi_address);
+    }
+
+    #[tokio::test]
+    async fn direct_get_peers_times_out_on_unresponsive_target() {
+        let config = DhtConfig {
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            bootstrap_nodes: Vec::new(),
+            query_timeout: Duration::from_millis(50),
+            ..DhtConfig::default()
+        };
+        let (handle, _ip_rx) = DhtHandle::start(config).await.unwrap();
+        let target: SocketAddr = "127.0.0.1:65432".parse().unwrap();
+        let hash = Id20::from_hex("0123456789abcdef0123456789abcdef01234567").unwrap();
+        let res = handle.direct_get_peers(target, hash).await;
+        assert!(res.is_err());
+        handle.shutdown().await.unwrap();
     }
 }

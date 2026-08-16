@@ -1,0 +1,33 @@
+# --- Rust build artifacts (21GB — the single biggest context win) ---
+target/
+
+# --- Git / VCS ---
+.git
+.gitignore
+.gitattributes
+
+# --- Secrets (never ship) ---
+.env
+.env.*
+!.env.example
+
+# --- Node ---
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+
+# --- Logs / temp ---
+*.log
+*.tmp
+*.swp
+.DS_Store
+
+# --- Editor / OS ---
+.idea/
+.vscode/
+*.code-workspace
+
+# --- Local docs / scratch (not part of the build) ---
+*.md
+!README.md

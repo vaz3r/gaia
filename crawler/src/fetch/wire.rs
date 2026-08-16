@@ -1,14 +1,12 @@
 use std::net::SocketAddr;
-use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use gaia_core::Id20;
 use gaia_wire::{ExtHandshake, Handshake, Message, MessageCodec, MetadataMessage, MetadataMessageType};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::time::timeout;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
 /// `ut_metadata` requests split the metadata into 16 KiB pieces (BEP 9).
@@ -17,9 +15,10 @@ pub const PIECE_SIZE: usize = 16 * 1024;
 /// Upper bound on metadata size we are willing to assemble (16 MiB).
 const MAX_METADATA_SIZE: usize = 16 * 1024 * 1024;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-const PIECE_TIMEOUT: Duration = Duration::from_secs(10);
+// NOTE: fetch_from_peer is ALWAYS wrapped in the caller's `FETCH_TIMEOUT`
+// (fetch/mod.rs), so per-stage inner timeouts here were dead config (they
+// could never fire before the outer 3s aborted). The outer timeout is the
+// single source of truth; these calls rely on it.
 
 /// Successfully assembled, verified info dictionary.
 #[derive(Debug, Clone)]
@@ -37,9 +36,8 @@ pub async fn fetch_from_peer(
     info_hash: Id20,
     peer_id: Id20,
 ) -> Result<FetchedMetadata> {
-    let stream = timeout(CONNECT_TIMEOUT, TcpStream::connect(peer))
+    let stream = TcpStream::connect(peer)
         .await
-        .map_err(|_| anyhow!("connect to {peer} timed out"))?
         .with_context(|| format!("connect to {peer}"))?;
     stream.set_nodelay(true)?;
 
@@ -48,9 +46,9 @@ pub async fn fetch_from_peer(
     // 1. Standard handshake advertising BEP 10 extensions (raw 68 bytes).
     let hs = Handshake::new(info_hash, peer_id).to_bytes();
     let mut writer = write;
-    timeout(HANDSHAKE_TIMEOUT, writer.write_all(&hs))
+    writer
+        .write_all(&hs)
         .await
-        .context("send handshake timed out")?
         .with_context(|| format!("send handshake to {peer}"))?;
 
     // 2. Extension handshake advertising ut_metadata (length-delimited).
@@ -61,17 +59,17 @@ pub async fn fetch_from_peer(
         payload: ext.to_bytes()?,
     };
     let mut framed = FramedWrite::new(writer, MessageCodec::new());
-    timeout(HANDSHAKE_TIMEOUT, framed.send(ext_msg))
+    framed
+        .send(ext_msg)
         .await
-        .context("send extension handshake timed out")?
         .context("send extension handshake")?;
 
     // 3. Read the peer's raw 68-byte handshake from the unframed read half.
     let mut raw_reader = read;
     let mut peer_hs_bytes = [0u8; 68];
-    timeout(HANDSHAKE_TIMEOUT, raw_reader.read_exact(&mut peer_hs_bytes))
+    raw_reader
+        .read_exact(&mut peer_hs_bytes)
         .await
-        .map_err(|_| anyhow!("timed out waiting for peer handshake"))?
         .context("connection closed during handshake")?;
     let peer_hs = Handshake::from_bytes(&peer_hs_bytes)?;
     if !peer_hs.supports_extensions() {
@@ -89,11 +87,13 @@ pub async fn fetch_from_peer(
         bail!("peer {peer} advertised zero metadata size");
     }
 
-    // 4. Request metadata pieces incrementally: ask for piece 0 first, then
-    // request the next piece only after a piece's data arrives. A peer that
-    // advertises ut_metadata but stalls (honeypot, slow leecher) then costs us
-    // at most ~2 pieces instead of a request for the whole metadata — the
-    // largest per-fetch bandwidth item at ~84 fetches/s.
+    // 4. Request metadata pieces as a pipeline: send the request for every
+    // piece up front (BEP 9 allows overlapping requests), then assemble the
+    // pieces as the responses arrive. The old serial request-response cycle
+    // cost one RTT per piece (13 RTTs for a 200 KiB metadata); pipelining
+    // collapses that to a single RTT. A peer that advertises ut_metadata but
+    // stalls is still bounded by the outer FETCH_TIMEOUT, so the extra
+    // outbound requests cost nothing on failure.
     let mut received: Vec<Option<Bytes>> = vec![None; pieces];
     let mut remaining = pieces;
     let mut next = 0usize;
@@ -104,25 +104,25 @@ pub async fn fetch_from_peer(
         idx: u32,
     ) -> Result<()> {
         let req = MetadataMessage::request(idx);
-        timeout(
-            PIECE_TIMEOUT,
-            framed.send(Message::Extended {
+        framed
+            .send(Message::Extended {
                 ext_id: ut_id,
                 payload: req.to_bytes()?,
-            }),
-        )
-        .await
-        .context("send metadata request timed out")?
-        .context("send metadata request")
+            })
+            .await
+            .context("send metadata request")
     }
 
-    request_piece(&mut framed, ut_id, next as u32).await?;
+    while next < pieces {
+        request_piece(&mut framed, ut_id, next as u32).await?;
+        next += 1;
+    }
 
-    // 5. Collect pieces until complete, requesting the next piece as we go.
+    // 5. Collect pieces until complete, requesting any dropped pieces as we go.
     while remaining > 0 {
-        let frame = timeout(PIECE_TIMEOUT, reader.next())
+        let frame = reader
+            .next()
             .await
-            .map_err(|_| anyhow!("timed out waiting for metadata from {peer}"))?
             .context("connection closed while fetching metadata")?
             .context("invalid message from peer")?;
 
@@ -141,14 +141,6 @@ pub async fn fetch_from_peer(
                                 if data.len() <= PIECE_SIZE {
                                     received[idx] = Some(data);
                                     remaining -= 1;
-                                    // Ask for the next piece only after this
-                                    // one arrived, bounding a stall's cost.
-                                    while next < pieces && received[next].is_some() {
-                                        next += 1;
-                                    }
-                                    if next < pieces {
-                                        request_piece(&mut framed, ut_id, next as u32).await?;
-                                    }
                                 }
                             }
                         }
@@ -181,9 +173,9 @@ async fn read_ext_handshake<R: tokio::io::AsyncRead + Unpin>(
     reader: &mut FramedRead<R, MessageCodec>,
 ) -> Result<(Option<u8>, usize)> {
     loop {
-        let frame = timeout(HANDSHAKE_TIMEOUT, reader.next())
+        let frame = reader
+            .next()
             .await
-            .map_err(|_| anyhow!("timed out waiting for extension handshake"))?
             .context("connection closed during extension handshake")?
             .context("invalid message")?;
 

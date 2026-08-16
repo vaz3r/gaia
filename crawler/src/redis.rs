@@ -34,32 +34,34 @@ pub struct SharedState {
 }
 
 impl SharedState {
-    /// Connect to Redis at `url`. Returns a state with `conn = None` if the
-    /// URL is absent or the initial connection fails.
-    pub async fn connect(url: Option<String>) -> SharedState {
+    /// Connect to Redis at `url`, namespacing all keys under `prefix`. Returns
+    /// a state with `conn = None` if the URL is absent or the initial
+    /// connection fails.
+    pub async fn connect(url: Option<String>, prefix: &str) -> SharedState {
+        let prefix = if prefix.is_empty() { "dht".into() } else { prefix.to_string() };
         let Some(url) = url else {
-            return SharedState { conn: None, prefix: "dht".into() };
+            return SharedState { conn: None, prefix };
         };
         let client = match redis::Client::open(url.as_str()) {
             Ok(c) => c,
             Err(e) => {
                 warn!(error = %e, "invalid redis url; running without shared state");
-                return SharedState { conn: None, prefix: "dht".into() };
+                return SharedState { conn: None, prefix };
             }
         };
         let connect_fut = ConnectionManager::new(client.clone());
         match tokio::time::timeout(std::time::Duration::from_secs(5), connect_fut).await {
             Ok(Ok(cm)) => {
                 info_connected();
-                SharedState { conn: Some(Arc::new(cm)), prefix: "dht".into() }
+                SharedState { conn: Some(Arc::new(cm)), prefix }
             }
             Ok(Err(e)) => {
                 warn!(error = %e, "could not connect to redis; running without shared state");
-                SharedState { conn: None, prefix: "dht".into() }
+                SharedState { conn: None, prefix }
             }
             Err(_) => {
                 warn!("redis connect timed out after 5s; running without shared state");
-                SharedState { conn: None, prefix: "dht".into() }
+                SharedState { conn: None, prefix }
             }
         }
     }
@@ -154,30 +156,56 @@ impl SharedState {
         self.maybe_cap_set(&key).await;
     }
 
-    /// Whether `ip` is currently flagged dead fleet-wide. Best-effort; returns
-    /// false on error so a peer is not spuriously skipped. Prunes expired
-    /// members opportunistically.
-    pub async fn dead_contains(&self, ip: std::net::IpAddr) -> bool {
-        let Some(conn) = &self.conn else { return false };
-        let key = format!("{}:dead", self.prefix);
-        let mut c = conn.as_ref().clone();
+    /// Prune expired members from the dead set (score <= now - TTL). Best-effort.
+    async fn prune_dead(&self, key: &str, c: &mut ConnectionManager) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        // Prune members whose score <= now - TTL.
         let expired: redis::RedisResult<Vec<String>> =
-            c.zrangebyscore(&key, 0, now - DEAD_PEER_TTL).await;
+            c.zrangebyscore(key, 0, now - DEAD_PEER_TTL).await;
         if let Ok(members) = expired {
             if !members.is_empty() {
-                let _: redis::RedisResult<i64> = c.zrem(&key, &members).await;
+                let _: redis::RedisResult<i64> = c.zrem(key, &members).await;
             }
         }
-        let r: redis::RedisResult<bool> = c
-            .zscore(&key, ip.to_string())
-            .await
-            .map(|v: Option<f64>| v.is_some());
-        r.unwrap_or(false)
+    }
+
+    /// Whether `ip` is currently flagged dead fleet-wide. Best-effort; returns
+    /// false on error so a peer is not spuriously skipped.
+    pub async fn dead_contains(&self, ip: std::net::IpAddr) -> bool {
+        let mut out = [false];
+        self.dead_contains_many(&[ip], &mut out).await;
+        out[0]
+    }
+
+    /// Batch variant of `dead_contains`: single round-trip for many IPs, with
+    /// per-member results written into `out` (same length as `ips`). This is
+    /// the hot path for candidate-peer filtering in fetch. Best-effort.
+    pub async fn dead_contains_many(
+        &self,
+        ips: &[std::net::IpAddr],
+        out: &mut [bool],
+    ) {
+        for (o, _) in out.iter_mut().zip(ips) {
+            *o = false;
+        }
+        let Some(conn) = &self.conn else { return };
+        if ips.is_empty() {
+            return;
+        }
+        let key = format!("{}:dead", self.prefix);
+        let mut c = conn.as_ref().clone();
+        self.prune_dead(&key, &mut c).await;
+        let members: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
+        let r: redis::RedisResult<Option<Vec<f64>>> = c.zscore_multiple(&key, &members).await;
+        if let Ok(Some(scores)) = r {
+            for (i, s) in scores.into_iter().enumerate() {
+                if let Some(v) = out.get_mut(i) {
+                    *v = s.is_finite();
+                }
+            }
+        }
     }
 
     /// Flag `ip` as dead fleet-wide until `now + ttl_secs`. Uses a sorted set
@@ -316,11 +344,12 @@ fn info_connected() {
 }
 
 /// Build a `SharedState` from a CLI option, logging whether shared state is
-/// active.
-pub async fn init_shared(redis_url: Option<String>) -> SharedState {
-    let s = SharedState::connect(redis_url).await;
+/// active. `prefix` namespaces all Redis keys (defaults to "dht").
+pub async fn init_shared(redis_url: Option<String>, prefix: Option<String>) -> SharedState {
+    let prefix = prefix.unwrap_or_else(|| "dht".to_string());
+    let s = SharedState::connect(redis_url, &prefix).await;
     if s.is_connected() {
-        tracing::info!("shared redis dedup/cache enabled");
+        tracing::info!(prefix = %s.prefix, "shared redis dedup/cache enabled");
     } else {
         tracing::info!("no redis — using per-instance in-memory dedup/cache");
     }

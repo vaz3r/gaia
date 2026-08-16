@@ -10,9 +10,10 @@
 //! the authoritative DB check, keeping correctness despite a cold filter.
 
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// Fixed-size bloom filter with `2^bits_power` bits and `k` hash functions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BloomFilter {
     bits: Vec<u64>,
     mask: u64,
@@ -51,19 +52,71 @@ impl BloomFilter {
             self.bits[(idx >> 6) as usize] & (1u64 << (idx & 63)) != 0
         })
     }
+
+    /// Reset all bits to zero.
+    pub fn clear(&mut self) {
+        self.bits.fill(0);
+    }
 }
 
-/// Interior-mutable, cloneable bloom filter so it can be shared across sampler
+/// Generational aging bloom filter. Maintains active (`current`) and previous (`prev`)
+/// generations, rotating generations after `rotation_interval` (default 24h).
+/// This prevents permanent poison-blacklisting of dead torrents (Bitmagnet stable bloom pattern).
+#[derive(Debug)]
+pub struct GenerationalBloom {
+    current: BloomFilter,
+    prev: BloomFilter,
+    bits_power: u32,
+    k: u32,
+    last_rotation: Instant,
+    rotation_interval: Duration,
+}
+
+impl GenerationalBloom {
+    pub fn new(bits_power: u32, k: u32, rotation_interval: Duration) -> Self {
+        Self {
+            current: BloomFilter::new(bits_power, k),
+            prev: BloomFilter::new(bits_power, k),
+            bits_power,
+            k,
+            last_rotation: Instant::now(),
+            rotation_interval,
+        }
+    }
+
+    fn maybe_rotate(&mut self) {
+        if self.last_rotation.elapsed() >= self.rotation_interval {
+            self.prev = std::mem::replace(&mut self.current, BloomFilter::new(self.bits_power, self.k));
+            self.last_rotation = Instant::now();
+        }
+    }
+
+    pub fn insert(&mut self, key: &[u8]) {
+        self.maybe_rotate();
+        self.current.insert(key);
+    }
+
+    pub fn contains(&mut self, key: &[u8]) -> bool {
+        self.maybe_rotate();
+        self.current.contains(key) || self.prev.contains(key)
+    }
+}
+
+/// Interior-mutable, cloneable generational bloom filter shared across sampler
 /// loops and the fetcher without copying the backing bits.
 #[derive(Debug, Clone)]
 pub struct SharedBloom {
-    inner: std::sync::Arc<Mutex<BloomFilter>>,
+    inner: std::sync::Arc<Mutex<GenerationalBloom>>,
 }
 
 impl SharedBloom {
     pub fn new(bits_power: u32, k: u32) -> Self {
+        Self::with_interval(bits_power, k, Duration::from_secs(24 * 3600))
+    }
+
+    pub fn with_interval(bits_power: u32, k: u32, rotation_interval: Duration) -> Self {
         Self {
-            inner: std::sync::Arc::new(Mutex::new(BloomFilter::new(bits_power, k))),
+            inner: std::sync::Arc::new(Mutex::new(GenerationalBloom::new(bits_power, k, rotation_interval))),
         }
     }
 
@@ -72,7 +125,7 @@ impl SharedBloom {
         self.inner.lock().unwrap().insert(key);
     }
 
-    /// True if `key` may have been added.
+    /// True if `key` may have been added in current or previous generation.
     pub fn contains(&self, key: &[u8]) -> bool {
         self.inner.lock().unwrap().contains(key)
     }

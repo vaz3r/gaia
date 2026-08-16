@@ -47,28 +47,58 @@ export class StatsRepository {
     return downsample(rows, stepSecs);
   }
 
-  /** Rate history for a cumulative counter: delta vs previous row / time. */
+  /**
+   * Rate history for a cumulative counter: delta vs previous row / time.
+   *
+   * The crawler persists `process_start_ts` with every row; when it changes
+   * between two consecutive rows, the counters reset to zero on restart, so the
+   * inter-row delta is meaningless — emit NULL for that boundary instead of a
+   * bogus spike, and for the first row(s) after a restart. Rows are then
+   * smoothed with a trailing moving average (default window 3 rows) so the
+   * discrete 30s-tick increments of counters like `records_persisted` do not
+   * render as wild per-tick spikes (0/hr, 120/hr, 600/hr).
+   */
   async rateHistory(
     metric: string,
     rangeSecs: number,
     perSecs = 3600,
+    smoothRows = 3,
   ): Promise<Array<{ ts: string; value: number | null }>> {
     const since = `now() - interval '${rangeSecs} seconds'`;
     const sql = `
       SELECT ts,
         CASE
-          WHEN prev_ts IS NULL OR prev_ts = ts THEN NULL
-          ELSE ("${metric}" - prev_val)::float8
-               / (EXTRACT(EPOCH FROM (ts - prev_ts)))
-               * ${perSecs}
+          WHEN smooth_cnt = 0 THEN NULL
+          ELSE avg_value
         END AS value
       FROM (
-        SELECT ts, "${metric}",
-               LAG("${metric}") OVER (ORDER BY ts) AS prev_val,
-               LAG(ts) OVER (ORDER BY ts) AS prev_ts
-        FROM crawl_stats_history
-        WHERE ts >= ${since}
-      ) t
+        SELECT ts,
+               AVG(bound) OVER (ORDER BY ts ROWS BETWEEN
+                 ${smoothRows - 1} PRECEDING AND CURRENT ROW) AS avg_value,
+               COUNT(bound) OVER (ORDER BY ts ROWS BETWEEN
+                 ${smoothRows - 1} PRECEDING AND CURRENT ROW) AS smooth_cnt
+        FROM (
+          SELECT ts,
+            CASE
+              WHEN prev_ts IS NULL OR prev_ts = ts OR prev_val IS NULL
+                   OR "${metric}" < prev_val
+                   OR prev_start IS NULL
+                   OR prev_start != process_start_ts
+              THEN NULL
+              ELSE ("${metric}" - prev_val)::float8
+                   / (EXTRACT(EPOCH FROM (ts - prev_ts)))
+                   * ${perSecs}
+            END AS bound
+          FROM (
+            SELECT ts, "${metric}", process_start_ts,
+                   LAG("${metric}") OVER (ORDER BY ts) AS prev_val,
+                   LAG(process_start_ts) OVER (ORDER BY ts) AS prev_start,
+                   LAG(ts) OVER (ORDER BY ts) AS prev_ts
+            FROM crawl_stats_history
+            WHERE ts >= ${since}
+          ) t
+        ) r
+      ) s
       ORDER BY ts ASC
     `;
     const { rows } = await this.pool.query<{

@@ -169,10 +169,10 @@ services:
       # _RJEM_MALLOC_CONF when debugging memory.
       - GAIA_PROF_DUMP_EVERY_TICKS=0
     healthcheck:
-      # The crawler is a UDP daemon with no HTTP surface. PID 1 is the crawler
-      # (gosu-exec'd), so its comm name is the practical liveness signal.
-      test: ["CMD", "sh", "-c", "test \"$(cat /proc/1/comm 2>/dev/null)\" = crawler"]
-      interval: 60s
+      # Real HTTP health endpoint: the crawler binds --health-port inside
+      # gluetun's shared netns, so localhost works from this container.
+      test: ["CMD", "sh", "-c", "curl -sf http://127.0.0.1:9777/health >/dev/null"]
+      interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
@@ -182,12 +182,16 @@ services:
       - postgres://crawler:${POSTGRES_PASSWORD}@postgres:5432/crawler
       - --port
       - "6881"
+      - --health-port
+      - "9777"
       - --instances
       - "8"
       - --min-seen
-      - "1"
+      - "3"
       - --min-seen-shadow
       - "3"
+      - --min-sightings
+      - "2"
       - --scale
       - "1"
       - --max-nodes

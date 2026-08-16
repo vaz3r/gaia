@@ -109,6 +109,17 @@ fn trackers_per_query() -> usize {
 
 static TRACKER_START: OnceLock<usize> = OnceLock::new();
 
+/// Cache of resolved tracker addresses, keyed by the `udp://host:port` URL.
+/// The 57 tracker hosts are static; resolving them on every query is wasted
+/// DNS. Populated lazily on first use, held for the process lifetime.
+static TRACKER_DNS: OnceLock<std::sync::Mutex<std::collections::HashMap<String, SocketAddr>>> =
+    OnceLock::new();
+
+fn tracker_dns_cache(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, SocketAddr>> {
+    TRACKER_DNS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
 /// A connection-id handshake / announce exchange on a fresh UDP socket.
 struct TrackerSocket {
     socket: UdpSocket,
@@ -328,18 +339,25 @@ pub async fn resolve_peers_from_trackers(info_hash: &[u8; 20]) -> Vec<SocketAddr
 
 /// Parse a `udp://host:port/announce` tracker URL into its socket address,
 /// resolving the hostname via DNS (tracker hosts are usually hostnames).
+/// Resolutions are cached for the process lifetime (tracker hosts are static).
 async fn parse_tracker(url: &str) -> Result<SocketAddr> {
+    if let Some(addr) = tracker_dns_cache().lock().unwrap().get(url) {
+        return Ok(*addr);
+    }
     let rest = url.strip_prefix("udp://").ok_or_else(|| anyhow!("not a udp tracker"))?;
     let host_port = rest.split('/').next().unwrap_or(rest);
     let mut addrs = tokio::net::lookup_host(host_port).await?;
     let mut best: Option<SocketAddr> = None;
     for a in &mut addrs {
         if a.is_ipv4() {
-            return Ok(a);
+            best = Some(a);
+            break;
         }
         best.get_or_insert(a);
     }
-    best.ok_or_else(|| anyhow!("tracker host resolved to no addresses"))
+    let addr = best.ok_or_else(|| anyhow!("tracker host resolved to no addresses"))?;
+    tracker_dns_cache().lock().unwrap().insert(url.to_string(), addr);
+    Ok(addr)
 }
 
 async fn query_udp_tracker(tracker: SocketAddr, info_hash: &[u8; 20]) -> Result<Vec<SocketAddr>> {

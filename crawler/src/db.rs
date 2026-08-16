@@ -30,6 +30,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260815200000_retry_metrics.sql",
         include_str!("../../db/migrations/20260815200000_retry_metrics.sql"),
     ),
+    (
+        "20260815203000_process_uptime.sql",
+        include_str!("../../db/migrations/20260815203000_process_uptime.sql"),
+    ),
 ];
 
 /// Apply all pending migrations. Idempotent: applied migrations are skipped.

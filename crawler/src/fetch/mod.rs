@@ -349,7 +349,8 @@ async fn fetch_one(
     // discovery traffic — this is the whole point of the announce-first path.
     if let Some(hint) = peer_hint {
         let now = unix_secs();
-        if !blocklist.contains(hint.ip())
+        if crate::net::is_globally_dialable(hint.ip())
+            && !blocklist.contains(hint.ip())
             && !dead_peers.lock().unwrap().is_dead(hint.ip(), now)
             && !shared.dead_contains(hint.ip()).await
             && seen_peers.insert(hint)
@@ -403,6 +404,81 @@ async fn fetch_one(
         }
     }
 
+    // Direct peer resolution (Bitmagnet pattern): if the hash was sampled from a
+    // specific node (`lookup_seed`), query that reporting node directly with a single
+    // 1-shot KRPC `get_peers` RPC. The reporting node *already* proved it tracks this hash,
+    // so it can return the swarm peer IPs in 1 RTT without doing an iterative Kademlia walk.
+    if peer_hint.is_none() {
+        if let Some(seed) = lookup_seed {
+            let direct_result = tokio::time::timeout(
+                Duration::from_secs(2),
+                handle.direct_get_peers(seed, info_hash),
+            )
+            .await;
+
+            if let Ok(Ok(seed_peers)) = direct_result {
+                if !seed_peers.is_empty() {
+                    any_peers_seen = true;
+                    let now = unix_secs();
+                    dead_peers.lock().unwrap().prune(now);
+                    let mut pool: Vec<SocketAddr> = Vec::new();
+                    for peer in seed_peers {
+                        if tried >= MAX_PEERS_PER_HASH {
+                            break;
+                        }
+                        if blocklist.contains(peer.ip()) {
+                            continue;
+                        }
+                        if dead_peers.lock().unwrap().is_dead(peer.ip(), now) {
+                            continue;
+                        }
+                        if !seen_peers.insert(peer) || !dialed_ips.insert(peer.ip()) {
+                            continue;
+                        }
+                        pool.push(peer);
+                    }
+                    let mut dead: Vec<bool> = vec![false; pool.len()];
+                    shared.dead_contains_many(&pool.iter().map(|p| p.ip()).collect::<Vec<_>>(), &mut dead).await;
+                    let mut candidate_pool: Vec<SocketAddr> = Vec::new();
+                    for (peer, is_dead) in pool.into_iter().zip(dead) {
+                        if is_dead {
+                            continue;
+                        }
+                        candidate_pool.push(peer);
+                        tried += 1;
+                        if tried >= MAX_PEERS_PER_HASH {
+                            break;
+                        }
+                    }
+                    if let Some(meta) = dial_peers(
+                        candidate_pool,
+                        info_hash,
+                        peer_id,
+                        deadline,
+                        &mut consecutive_connect_failures,
+                        &mut any_handshake,
+                        &mut failure_counts,
+                        stats,
+                        dead_peers,
+                        shared,
+                    )
+                    .await
+                    {
+                        return persist_verified(
+                            meta,
+                            info_hash,
+                            source,
+                            stats,
+                            tx,
+                            scrape_saw_seeds,
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
+    }
+
     // Tracker peer resolution: query a small set of public trackers for this
     // hash (BEP 15 UDP announce). A tracker returning peers is strong evidence
     // those peers are live (they announced themselves), so dial them first —
@@ -423,10 +499,9 @@ async fn fetch_one(
             any_peers_seen = true;
             let now = unix_secs();
             dead_peers.lock().unwrap().prune(now);
-            // Dial ALL tracker-resolved peers in batches, not just the first
-            // PARALLEL_DIALS: if the first batch fails, keep trying the rest
-            // until success, exhaustion of the tracker peers or the deadline.
-            let mut candidate_pool: Vec<SocketAddr> = Vec::new();
+            // Dial ALL tracker-resolved peers through the streaming dial pool
+            // (≤ PARALLEL_DIALS concurrent; freed slots refilled immediately).
+            let mut pool: Vec<SocketAddr> = Vec::new();
             for peer in tracker_peers {
                 if tried >= MAX_PEERS_PER_HASH {
                     break;
@@ -437,22 +512,28 @@ async fn fetch_one(
                 if dead_peers.lock().unwrap().is_dead(peer.ip(), now) {
                     continue;
                 }
-                if shared.dead_contains(peer.ip()).await {
+                if !seen_peers.insert(peer) || !dialed_ips.insert(peer.ip()) {
                     continue;
                 }
-                if !seen_peers.insert(peer) || !dialed_ips.insert(peer.ip()) {
+                pool.push(peer);
+            }
+            // Batch fleet-wide dead check.
+            let mut dead: Vec<bool> = vec![false; pool.len()];
+            shared.dead_contains_many(&pool.iter().map(|p| p.ip()).collect::<Vec<_>>(), &mut dead).await;
+            let mut candidate_pool: Vec<SocketAddr> = Vec::new();
+            for (peer, is_dead) in pool.into_iter().zip(dead) {
+                if is_dead {
                     continue;
                 }
                 candidate_pool.push(peer);
                 tried += 1;
-            }
-            for candidates in candidate_pool.chunks(PARALLEL_DIALS) {
-                if tokio::time::Instant::now() >= deadline {
+                if tried >= MAX_PEERS_PER_HASH {
                     break;
                 }
-                if let Some(meta) = dial_peers(
-                    candidates.to_vec(),
-                    info_hash,
+            }
+            if let Some(meta) = dial_peers(
+                candidate_pool,
+                info_hash,
                     peer_id,
                     deadline,
                     &mut consecutive_connect_failures,
@@ -476,7 +557,6 @@ async fn fetch_one(
                 }
             }
         }
-    }
 
     // Acquire the lookup permit BEFORE starting the lookup and hold it across
     // the streaming loop: get_peers_seeded only enqueues a command; the DHT
@@ -524,10 +604,12 @@ async fn fetch_one(
             any_peers_seen = true;
         }
 
-        let mut candidates: Vec<SocketAddr> = Vec::with_capacity(PARALLEL_DIALS);
+        // Collect candidate peers for this batch (blocklist/tried/seen-checks
+        // are local), then do ONE fleet-wide dead check for all of them.
         let now = unix_secs();
         dead_peers.lock().unwrap().prune(now);
-        for peer in batch.peers {
+        let mut pool: Vec<SocketAddr> = Vec::new();
+        for peer in &batch.peers {
             if tried >= MAX_PEERS_PER_HASH {
                 break 'outer;
             }
@@ -537,16 +619,22 @@ async fn fetch_one(
             if dead_peers.lock().unwrap().is_dead(peer.ip(), now) {
                 continue;
             }
-            // Fleet-wide dead check (best-effort; Redis failure allows dialing).
-            if shared.dead_contains(peer.ip()).await {
+            if !seen_peers.insert(*peer) || !dialed_ips.insert(peer.ip()) {
                 continue;
             }
-            if !seen_peers.insert(peer) || !dialed_ips.insert(peer.ip()) {
+            pool.push(*peer);
+        }
+        // Batch fleet-wide dead check (best-effort; Redis failure allows all).
+        let mut dead: Vec<bool> = vec![false; pool.len()];
+        shared.dead_contains_many(&pool.iter().map(|p| p.ip()).collect::<Vec<_>>(), &mut dead).await;
+        let mut candidates: Vec<SocketAddr> = Vec::with_capacity(pool.len());
+        for (peer, is_dead) in pool.into_iter().zip(dead) {
+            if is_dead {
                 continue;
             }
             candidates.push(peer);
             tried += 1;
-            if candidates.len() >= PARALLEL_DIALS {
+            if tried >= MAX_PEERS_PER_HASH {
                 break;
             }
         }
@@ -616,13 +704,16 @@ fn is_post_handshake_kind(kind: FetchFailureKind) -> bool {
     )
 }
 
-/// Dial a batch of candidate peers in parallel and return verified metadata on
-/// the first success. Mirrors the in-loop dial logic so tracker-resolved peers
-/// and DHT-discovered peers use the same path. Returns `Ok(Some(meta))` when a
-/// peer yielded SHA-1-verified metadata (the caller persists it).
+/// Dial a pool of candidate peers with a streaming concurrency cap: up to
+/// PARALLEL_DIALS dials in flight, refilling the freed slot with the next
+/// candidate as each completes. This avoids the batch model's stall — if 3
+/// peers fail instantly and 1 hangs for the full FETCH_TIMEOUT, the next
+/// candidates are dialed while the slow one is still pending. Returns
+/// `Ok(Some(meta))` when a peer yielded SHA-1-verified metadata (the caller
+/// persists it), dropping the pool (cancelling in-flight dials) on success.
 #[allow(clippy::too_many_arguments)]
 async fn dial_peers(
-    batch: Vec<SocketAddr>,
+    candidates: Vec<SocketAddr>,
     info_hash: Id20,
     peer_id: Id20,
     deadline: tokio::time::Instant,
@@ -633,8 +724,9 @@ async fn dial_peers(
     dead_peers: &Arc<Mutex<DeadPeerCache>>,
     shared: &crate::redis::SharedState,
 ) -> Option<crate::fetch::wire::FetchedMetadata> {
+    let mut queue = candidates.into_iter();
     let mut dials = JoinSet::new();
-    for peer in batch {
+    for peer in queue.by_ref().take(PARALLEL_DIALS) {
         dials.spawn(async move {
             let result =
                 tokio::time::timeout(FETCH_TIMEOUT, fetch_from_peer(peer, info_hash, peer_id))
@@ -685,6 +777,16 @@ async fn dial_peers(
                 *failure_counts.entry(kind).or_insert(0) += 1;
                 record_peer_failure(kind, stats);
                 debug!(%info_hash, error = %e, kind = kind.as_str(), "peer fetch failed");
+                if let Some(peer) = queue.next() {
+                    dials.spawn(async move {
+                        let result = tokio::time::timeout(
+                            FETCH_TIMEOUT,
+                            fetch_from_peer(peer, info_hash, peer_id),
+                        )
+                        .await;
+                        (peer, result)
+                    });
+                }
                 continue;
             }
             Err(_elapsed) => {
@@ -706,6 +808,16 @@ async fn dial_peers(
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     return None;
                 }
+                if let Some(peer) = queue.next() {
+                    dials.spawn(async move {
+                        let result = tokio::time::timeout(
+                            FETCH_TIMEOUT,
+                            fetch_from_peer(peer, info_hash, peer_id),
+                        )
+                        .await;
+                        (peer, result)
+                    });
+                }
                 continue;
             }
         };
@@ -717,6 +829,16 @@ async fn dial_peers(
                 .sha1_mismatch
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             debug!(%info_hash, "metadata SHA-1 mismatch, rejected");
+            if let Some(peer) = queue.next() {
+                dials.spawn(async move {
+                    let result = tokio::time::timeout(
+                        FETCH_TIMEOUT,
+                        fetch_from_peer(peer, info_hash, peer_id),
+                    )
+                    .await;
+                    (peer, result)
+                });
+            }
             continue;
         }
         return Some(meta);

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use gaia_core::Id20;
 use gaia_dht::DhtHandle;
-use rand::seq::SliceRandom;
+use rand::Rng;
 use rand::thread_rng;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -24,7 +24,7 @@ const FAIL_BACKOFF: Duration = Duration::from_secs(30);
 /// its FIRST empty response. A healthy node may legitimately have nothing new
 /// once; re-query it soon since it may pick up hashes shortly. Only after
 /// `STALE_GRADUATION` consecutive empties does it earn the longer shelf.
-const STALE_BACKOFF: Duration = Duration::from_secs(60);
+const STALE_BACKOFF: Duration = Duration::from_secs(30);
 /// After this many consecutive 0-new responses, a node graduates to the long
 /// backoff (it has stopped yielding). Tolerates normal variance — a single
 /// unlucky empty response must not shelve a productive node for 5 minutes.
@@ -48,8 +48,9 @@ const PICK_CANDIDATES: usize = 256;
 /// resolves a query via a oneshot reply; if a peer answers with a KRPC error
 /// the actor can drop that reply without firing it (an irontide quirk), which
 /// would otherwise hang the loop forever. This timeout bounds the wait and the
-/// node is retried later via `FAIL_BACKOFF`.
-const SAMPLE_TIMEOUT: Duration = Duration::from_secs(15);
+/// node is retried later via `FAIL_BACKOFF`. 6s: legitimate BEP 51 responses
+/// arrive in 1-3s; the old 15s tied up sampler loops on dead nodes.
+const SAMPLE_TIMEOUT: Duration = Duration::from_secs(6);
 
 /// Sampler loop configuration.
 #[derive(Debug, Clone)]
@@ -464,10 +465,36 @@ impl SamplerLoop {
                         "sample_infohashes ok"
                     );
                     let mut new_count = 0u32;
+                    // Batch pre-filter: bloom + a single batched DB check for
+                    // terminal (ok/skipped) hashes, so the per-hash hot loop
+                    // below only awaits DB/Redis for the survivors. Semantics
+                    // are unchanged: terminal verdicts are cached in the bloom
+                    // exactly as `emit_sample` would; Failed/backoff rows still
+                    // flow through `emit_sample`'s own scan_status per hash.
+                    let bloom_miss: Vec<Id20> = res
+                        .samples
+                        .iter()
+                        .filter(|h| !self.seen_bloom.contains(h.as_bytes()))
+                        .copied()
+                        .collect();
+                    let terminal = self
+                        .storage
+                        .scan_statuses_batch(
+                            &bloom_miss.iter().map(|h| *h.as_bytes()).collect::<Vec<_>>(),
+                        )
+                        .await
+                        .unwrap_or_default();
+                    for h in &bloom_miss {
+                        if terminal.contains_key(h.as_bytes()) {
+                            self.seen_bloom.insert(h.as_bytes());
+                        }
+                    }
                     for sample in res.samples {
                         // `target` is the sampled node's own ID — the source of
                         // this report for the liveness counter; `node_addr` is
                         // the reporting node, used as a fetch lookup seed.
+                        // Terminal hashes (pre-cached above) short-circuit inside
+                        // emit_sample's bloom check without a per-hash DB query.
                         match self.emit_sample(sample, target, node_addr).await {
                             EmitOutcome::Shutdown => return,
                             EmitOutcome::Repeat => {}
@@ -557,15 +584,13 @@ impl SamplerLoop {
             }
             Ok(Some(ScannedStatus::Failed { attempts, next_attempt, failure_reason })) => {
                 // Terminal dead hash: exhausted this class's retry budget.
-                // Cache the skip verdict so it is never re-emitted (bounded
-                // waste on hashes that never recover). The `scanned` row is
-                // retained.
+                // Do not permanently cache in bloom — let generational decay / backoff
+                // allow resurfaced torrents to be retried later.
                 let cap = crate::fetch::failure::retry_cap(failure_reason.as_deref());
                 if attempts >= cap as i64 {
                     self.stats
                         .terminal_dead
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    self.seen_bloom.insert(hash.as_bytes());
                     return if new { EmitOutcome::New } else { EmitOutcome::Repeat };
                 }
                 if next_attempt > unix_secs() {
@@ -651,7 +676,6 @@ fn pick_target(
     nodes: &[(Id20, SocketAddr)],
     now: Instant,
 ) -> Option<(Id20, SocketAddr)> {
-    let mut rng = thread_rng();
     let iv = intervals.lock().unwrap();
     let ns = node_stats.lock().unwrap();
     let mut ready: Vec<(Id20, SocketAddr)> = nodes
@@ -666,20 +690,26 @@ fn pick_target(
     // keep landing on the same spot of the ready list.
     *cursor = cursor.checked_add(1).unwrap_or(0) % ready.len().max(1);
     let rot = *cursor % ready.len();
-    // Rotate the ready list so the scan window starts at the cursor, then
-    // shuffle only within a bounded window to keep coverage broad.
+    // Rotate the ready list so the scan window starts at the cursor. We do NOT
+    // shuffle: shuffling right after the rotation negates the cursor and
+    // re-randomizes every pick. Within the window, pick randomly among the
+    // top-N scored nodes so lower-scored but still productive nodes get picked
+    // instead of always choosing the single global best.
     ready.rotate_left(rot);
-    ready.shuffle(&mut rng);
-    let sample = ready.iter().take(PICK_CANDIDATES);
-    let mut best: Option<(i64, Id20, SocketAddr)> = None;
-    for (id, addr) in sample {
-        let score = ns.score_locked(addr);
-        if best.as_ref().is_none_or(|(s, _, _)| score > *s) {
-            best = Some((score, *id, *addr));
-        }
-    }
-    // Target = the node's own ID so the actor queries this exact node.
-    best.map(|(_, id, addr)| (id, addr))
+    let mut scored: Vec<(i64, Id20, SocketAddr)> = ready
+        .iter()
+        .take(PICK_CANDIDATES)
+        .map(|(id, addr)| (ns.score_locked(addr), *id, *addr))
+        .collect();
+    // Sort descending by score, keep the top TOP_N (at least 1), then pick
+    // one at random from that shortlist.
+    const TOP_N: usize = 8;
+    scored.sort_by_key(|s| std::cmp::Reverse(s.0));
+    let shortlist_len = scored.len().clamp(1, TOP_N);
+    let pick = thread_rng().gen_range(0..shortlist_len);
+    scored
+        .get(pick)
+        .map(|(_, id, addr)| (*id, *addr))
 }
 
 fn unix_secs() -> i64 {
@@ -811,26 +841,29 @@ mod tests {
 
     #[test]
     fn pick_target_prefers_productive_node() {
-        let mut node_stats = NodeStats::new(16);
-        let a: SocketAddr = "127.0.0.1:1".parse().unwrap();
-        let b: SocketAddr = "127.0.0.1:2".parse().unwrap();
-        node_stats.ensure_locked(b);
-        node_stats.ensure_locked(a);
-        node_stats.map.get_mut(&b).unwrap().samples = 50;
-        node_stats.map.get_mut(&a).unwrap().failures = 5;
+        // With more ready nodes than the TOP_N shortlist, a clearly-penalized
+        // node (ranked worst) must be excluded from the shortlist and never
+        // picked, while the best-scoring node is always in the shortlist.
+        let mut node_stats = NodeStats::new(64);
+        let mut nodes: Vec<(Id20, SocketAddr)> = Vec::new();
+        for i in 0..12u8 {
+            let addr: SocketAddr = format!("127.0.0.1:{i}").parse().unwrap();
+            node_stats.ensure_locked(addr);
+            nodes.push((id(i), addr));
+        }
+        let best_addr: SocketAddr = "127.0.0.1:9".parse().unwrap();
+        let worst_addr: SocketAddr = "127.0.0.1:3".parse().unwrap();
+        node_stats.map.get_mut(&best_addr).unwrap().samples = 50;
+        node_stats.map.get_mut(&worst_addr).unwrap().failures = 100;
 
-        let intervals = IntervalMap::new(16);
-        let nodes = vec![(id(1), a), (id(2), b)];
+        let intervals = Arc::new(std::sync::Mutex::new(IntervalMap::new(64)));
+        let node_stats = Arc::new(std::sync::Mutex::new(node_stats));
         let now = Instant::now();
-        let (target, addr) = pick_target(
-            &mut 0,
-            &Arc::new(std::sync::Mutex::new(intervals)),
-            &Arc::new(std::sync::Mutex::new(node_stats)),
-            &nodes,
-            now,
-        )
-        .unwrap();
-        assert_eq!(addr, b, "productive node must be picked over penalized one");
-        assert_eq!(target, id(2));
+        let mut cursor = 0usize;
+        for _ in 0..50 {
+            let (_, addr) = pick_target(&mut cursor, &intervals, &node_stats, &nodes, now)
+                .unwrap();
+            assert_ne!(addr, worst_addr, "worst-scored node must never be picked");
+        }
     }
 }

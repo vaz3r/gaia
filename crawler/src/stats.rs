@@ -93,6 +93,9 @@ pub struct CrawlStats {
 /// the admin API via window functions.
 #[derive(Debug, Clone, Default)]
 pub struct CrawlSnapshot {
+    /// Unix seconds when this crawler process started. Lets the API reset rate
+    /// windows on restart (in-process counters reset to zero on restart).
+    pub process_start_ts: u64,
     pub hashes_sampled: u64,
     pub hashes_unique: u64,
     pub hashes_announced: u64,

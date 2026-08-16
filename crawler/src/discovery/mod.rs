@@ -201,12 +201,15 @@ pub async fn run_passive_intake(
                         }
                         shared.announced_add(info_hash.as_bytes()).await;
                     }
-                    gaia_dht::DhtEvent::LookedUp { info_hash, .. } => {
+                    gaia_dht::DhtEvent::LookedUp { info_hash, from_addr } => {
                         // Someone is actively seeking this hash right now — a
                         // live signal with far more volume than announce_peer.
-                        // No peer hint (the seeker is a DHT node, not a torrent
-                        // peer), so the fetch uses the normal get_peers→dial
-                        // path. Dedup against other looked-up hashes.
+                        // The seeking client is itself a live peer holding the
+                        // metadata (it must have the infohash to seek peers for
+                        // it), so dial it directly for the ut_metadata exchange
+                        // instead of burning a blind DHT lookup that mostly
+                        // ends in empty_peers. Non-routable (NAT'd) addresses
+                        // are filtered at dial time by the fetch path.
                         if shared.looked_up_contains(info_hash.as_bytes()).await {
                             stats
                                 .lookups_deduped_redis
@@ -220,7 +223,7 @@ pub async fn run_passive_intake(
                             .send(FetchRequest {
                                 hash: info_hash,
                                 occurrences: 1,
-                                peer_hint: None,
+                                peer_hint: Some(from_addr),
                                 source: FetchSource::LookedUp,
                                 lookup_seed: None,
                             })
