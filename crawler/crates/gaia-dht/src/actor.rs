@@ -3073,7 +3073,7 @@ impl DhtActor {
                 id: own_id,
                 info_hash,
                 noseed: None,
-                scrape: None,
+                scrape: Some(1),
                 want: self.outgoing_want(),
             }),
             sender_ip: None,

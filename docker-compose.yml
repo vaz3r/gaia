@@ -187,15 +187,15 @@ services:
       - --instances
       - "8"
       - --min-seen
-      - "3"
-      - --min-seen-shadow
-      - "3"
-      - --min-sightings
-      - "2"
-      - --scale
       - "1"
+      - --min-seen-shadow
+      - "0"
+      - --min-sightings
+      - "1"
+      - --scale
+      - "10"
       - --max-nodes
-      - "8192"
+      - "16384"
       - --max-attempts
       - "4"
       - --no-restrict-ips
