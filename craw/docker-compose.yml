@@ -49,6 +49,24 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
       DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@${DB_HOST:-127.0.0.1}:${PG_PORT:-55432}/${POSTGRES_DB:-craw}?sslmode=disable
 
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    image: craw-dashboard
+    container_name: craw-dashboard
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@db:5432/${POSTGRES_DB:-craw}?sslmode=disable
+      PORT: "3000"
+    ports:
+      - "0.0.0.0:${DASH_PORT:-3000}:3000"
+    networks:
+      - internal
+
 networks:
   internal:
     driver: bridge
