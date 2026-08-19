@@ -131,16 +131,15 @@ impl LivenessCounter {
     pub fn record(&self, hash: &[u8; 20], source: Id20, now: Instant) -> RecordOutcome {
         let window = self.cfg.window;
 
-        // Brand-new hash: insert and report New.
-        if !self.inner.contains_key(hash) {
-            self.inner.insert(*hash, Entry::new(source, now));
-            return RecordOutcome::New;
-        }
+        let mut entry = match self.inner.entry(*hash) {
+            dashmap::Entry::Vacant(v) => {
+                v.insert(Entry::new(source, now));
+                return RecordOutcome::New;
+            }
+            dashmap::Entry::Occupied(o) => o,
+        };
 
-        let mut e = self
-            .inner
-            .get_mut(hash)
-            .expect("contains_key checked above");
+        let e = entry.get_mut();
         e.sightings = e.sightings.saturating_add(1);
 
         // Prune expired reports (each report has its own timestamp).

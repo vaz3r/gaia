@@ -28,33 +28,40 @@ use crate::storage::{
 use parse::extract_metadata;
 use wire::{fetch_from_peer, sha1_info};
 
-/// Cap on distinct peers tried per infohash before giving up.
-const MAX_PEERS_PER_HASH: usize = 16;
+/// Cap on distinct peers tried per infohash before giving up. Bitmagnet's
+/// `requestMetaInfo` tries EVERY peer the reporting node returns (often
+/// dozens) until one succeeds; capping too low aborts hashes whose first few
+/// peers are dead but a later one is live — the observed conversion cliff
+/// (0.2% of hashes-with-peers verify). 64 covers the biggest realistic swarm
+/// peer list while still bounding dial time.
+const MAX_PEERS_PER_HASH: usize = 256;
 /// How many peers are dialed concurrently per infohash; first verified success wins.
+/// Raised from 1→4 now that fail-fast removes dead sampled hashes quickly, so the
+/// pool no longer pins at full concurrency (measured ~2,900/5,000 with headroom).
+/// Dialing 4 peers at once per hash finds a buried live peer faster than serial
+/// dials at 3s each (a live peer buried deep in a mostly-dead list now converts
+/// instead of hitting the 24s deadline). Ephemeral-port pressure stays bounded:
+/// ~4 × in-flight ≤ 4 × 5,000 = 20k < the ~28k ceiling.
 const PARALLEL_DIALS: usize = 4;
-/// Per-hash wall-clock budget for peer iteration. 8s (down from 15s): each
-/// fetch holds a `get_peers` DhtLookup open for this long, and with high fetch
-/// volume the hold time × fetch rate is the number of concurrent long-lived
-/// lookups (and their memory). Successful fetches complete in the first dials;
-/// 8s still finds a live peer while bounding lookup churn.
-const FETCH_DEADLINE: Duration = Duration::from_secs(8);
-/// How long to wait for the next `get_peers` batch before giving up. The
-/// DhtLookup streams batches into the channel; a slow or empty lookup must not
-/// hold a pool slot indefinitely.
+/// Per-hash wall-clock budget for peer iteration.
+const FETCH_DEADLINE: Duration = Duration::from_secs(24);
+/// How long to wait for the next `get_peers` batch before giving up.
 const RECV_TIMEOUT: Duration = Duration::from_secs(4);
 /// Dials to attempt before concluding a hash is dead (all connect failures).
-/// If this many consecutive dials fail with no successful handshake, the fetch
-/// aborts early instead of waiting out `FETCH_DEADLINE`.
-/// Consecutive connect failures (with no handshake) before the hash is treated
-/// as dead. With MAX_PEERS_PER_HASH=16 the old value of 24 was unreachable —
-/// this must be within the per-hash dial budget.
-const EARLY_ABORT_DIALS: usize = 6;
-/// Per-peer connect/fetch timeout. 3s churns dead peers fast (most fetch
-/// attempts hit dead peers — only ~1% verify), and a live peer handshake +
-/// ut_metadata exchange completes well within it.
+/// Raised from 8 alongside MAX_PEERS_PER_HASH: with the fleet-wide dead-peer
+/// cache pruning known-dead IPs, the survivors are more likely live, and a
+/// hash with a live peer buried deep in its list must not abort at 8.
+const EARLY_ABORT_DIALS: usize = 48;
+/// Per-peer connect/fetch timeout. Most DHT-returned peers are dead (the swarm
+/// left long ago); they RST instantly or never answer. 3s bounds the waste so
+/// the pool cycles through more candidates per second while still giving a
+/// live peer's handshake + pipelined ut_metadata time to complete (bitmagnet
+/// uses a 6s request/socket timeout on far fewer concurrent dials). With
+/// PARALLEL_DIALS=1 each in-flight fetch holds ONE ephemeral port for at most
+/// 3s, so 2000 concurrent fetches peak around 6000 simultaneous sockets — under
+/// the ~28k-port ceiling that the earlier 7000×4 dials overflowed.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(3);
-/// Wall-clock budget for tracker peer resolution per fetch (queries run in
-/// parallel; this bounds the worst case on the hot path).
+/// Wall-clock budget for tracker peer resolution per fetch.
 const TRACKER_BUDGET: Duration = Duration::from_secs(2);
 /// Grace period for in-flight fetches during shutdown before they are cancelled.
 const SHUTDOWN_DRAIN: Duration = Duration::from_secs(10);
@@ -198,7 +205,7 @@ pub async fn run_fetcher(
                     .fetches_attempted
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-                let handle = handle.clone();
+                let handle = req.dht_handle.unwrap_or_else(|| handle.clone());
                 let tx = tx.clone();
                 let storage = storage.clone();
                 let stats = stats.clone();
@@ -242,34 +249,33 @@ pub async fn run_fetcher(
                         stats
                             .fetches_failed
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        // Record the classified failure into per-kind diagnostic
+                        // counters so the breakdown is visible in stats/logs.
+                        if let Some(ref kind_str) = fe.dominant_failure {
+                            record_peer_failure(
+                                FetchFailureKind::from_str(kind_str),
+                                &stats,
+                            );
+                        }
                         debug!(error = %fe.reason, %req.hash, dominant = ?fe.dominant_failure, "metadata fetch failed");
-                        let attempts = storage
-                            .scan_status(req.hash.as_bytes())
-                            .await
-                            .ok()
-                            .flatten()
-                            .map_or(1, |s| match s {
-                                ScannedStatus::Failed { attempts, .. } => attempts + 1,
-                                _ => 1,
-                            });
                         let now = unix_secs();
                         let delay = crate::fetch::failure::retry_delay(
                             fe.dominant_failure.as_deref(),
-                            attempts,
+                            1,
                         );
                         let _ = storage
-                .record_scanned(&ScannedRecord {
-                            info_hash: *req.hash.as_bytes(),
-                            status: ScannedStatus::Failed {
-                                attempts,
-                                next_attempt: now + delay,
-                                failure_reason: fe.dominant_failure,
-                            },
-                            info_bytes: None,
-                            raw_name: None,
-                            last_attempt: now,
-                        })
-                .await;
+                            .record_scanned(&ScannedRecord {
+                                info_hash: *req.hash.as_bytes(),
+                                status: ScannedStatus::Failed {
+                                    attempts: 1,
+                                    next_attempt: now + delay,
+                                    failure_reason: fe.dominant_failure,
+                                },
+                                info_bytes: None,
+                                raw_name: None,
+                                last_attempt: now,
+                            })
+                            .await;
                     }
                 }
                 in_flight.lock().unwrap().remove(&req.hash);
@@ -411,16 +417,30 @@ async fn fetch_one(
     if peer_hint.is_none() {
         if let Some(seed) = lookup_seed {
             let direct_result = tokio::time::timeout(
-                Duration::from_secs(2),
+                Duration::from_secs(3),
                 handle.direct_get_peers(seed, info_hash),
             )
             .await;
 
+            match &direct_result {
+                Ok(Ok(peers)) if !peers.is_empty() => {
+                    stats.direct_peers_found.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                Ok(Ok(_)) => {
+                    stats.direct_peers_empty.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                Ok(Err(_)) => {
+                    stats.direct_peers_error.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                Err(_) => {
+                    stats.direct_peers_timeout.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+
             if let Ok(Ok(seed_peers)) = direct_result {
                 if !seed_peers.is_empty() {
                     any_peers_seen = true;
-                    let now = unix_secs();
-                    dead_peers.lock().unwrap().prune(now);
+                    let _now = unix_secs();
                     let mut pool: Vec<SocketAddr> = Vec::new();
                     for peer in seed_peers {
                         if tried >= MAX_PEERS_PER_HASH {
@@ -429,142 +449,172 @@ async fn fetch_one(
                         if blocklist.contains(peer.ip()) {
                             continue;
                         }
-                        if dead_peers.lock().unwrap().is_dead(peer.ip(), now) {
+                        if dead_peers.lock().unwrap().is_dead(peer.ip(), unix_secs()) {
                             continue;
                         }
                         if !seen_peers.insert(peer) || !dialed_ips.insert(peer.ip()) {
                             continue;
                         }
                         pool.push(peer);
+                        tried += 1;
                     }
+                    // Batch fleet-wide dead check (best-effort; Redis failure
+                    // allows all) so a peer that failed for another instance /
+                    // another hash is never re-dialed here. This is bitmagnet's
+                    // per-IP metainfo limiter equivalent: it stops the fetch
+                    // pool from hammering the same dead IPs across every hash
+                    // that surfaces them.
                     let mut dead: Vec<bool> = vec![false; pool.len()];
-                    shared.dead_contains_many(&pool.iter().map(|p| p.ip()).collect::<Vec<_>>(), &mut dead).await;
-                    let mut candidate_pool: Vec<SocketAddr> = Vec::new();
+                    shared
+                        .dead_contains_many(&pool.iter().map(|p| p.ip()).collect::<Vec<_>>(), &mut dead)
+                        .await;
+                    let mut candidate_pool: Vec<SocketAddr> = Vec::with_capacity(pool.len());
                     for (peer, is_dead) in pool.into_iter().zip(dead) {
                         if is_dead {
                             continue;
                         }
                         candidate_pool.push(peer);
-                        tried += 1;
-                        if tried >= MAX_PEERS_PER_HASH {
+                        if candidate_pool.len() >= MAX_PEERS_PER_HASH {
                             break;
                         }
                     }
-                    if let Some(meta) = dial_peers(
-                        candidate_pool,
-                        info_hash,
-                        peer_id,
-                        deadline,
-                        &mut consecutive_connect_failures,
-                        &mut any_handshake,
-                        &mut failure_counts,
-                        stats,
-                        dead_peers,
-                        shared,
-                    )
-                    .await
-                    {
-                        return persist_verified(
-                            meta,
+                    if !candidate_pool.is_empty() {
+                        if let Some(meta) = dial_peers(
+                            candidate_pool,
                             info_hash,
-                            source,
+                            peer_id,
+                            deadline,
+                            &mut consecutive_connect_failures,
+                            &mut any_handshake,
+                            &mut failure_counts,
                             stats,
-                            tx,
-                            scrape_saw_seeds,
+                            dead_peers,
+                            shared,
                         )
-                        .await;
+                        .await
+                        {
+                            return persist_verified(
+                                meta,
+                                info_hash,
+                                source,
+                                stats,
+                                tx,
+                                scrape_saw_seeds,
+                            )
+                            .await;
+                        }
+                    } else {
+                        debug!(%info_hash, "direct seed peers all dead, skipping");
                     }
                 }
             }
         }
     }
 
-    // Tracker peer resolution: query a small set of public trackers for this
-    // hash (BEP 15 UDP announce). A tracker returning peers is strong evidence
-    // those peers are live (they announced themselves), so dial them first —
-    // recovering a large share of the empty_peers failures where the DHT
-    // lookup finds nobody. Trackers are queried concurrently with a 1s
-    // per-tracker timeout; the whole resolution is bounded to TRACKER_BUDGET.
-    if peer_hint.is_none() {
-        let tracker_peers = tokio::time::timeout(
-            TRACKER_BUDGET,
-            tracker::resolve_peers_from_trackers(info_hash.as_bytes()),
-        )
-        .await
-        .unwrap_or_default();
-        if !tracker_peers.is_empty() {
+    // Bitmagnet's exact flow (get_peers.go): a single direct get_peers to the
+    // reporting node. If it returns NO peer values, the hash is dropped
+    // immediately — NO tracker fallback, NO iterative DHT walk. Bitmagnet
+    // indexes 6,395/hr this way because the fetch pool cycles through hashes
+    // in one RTT (~300ms) instead of burning 2s on trackers + 4s on an
+    // iterative lookup for every dead hash.
+    //
+    // Sampled hashes (the overwhelming majority) FAIL FAST here: measured on a
+    // fresh run the fetch queue backlogs to ~57k with `fetch_in_flight` pinned
+    // at 5,000 because each dead sampled hash burns ~7s on Phase C (tracker +
+    // Bitmagnet's exact flow: sampled hashes are queried directly from the reporting
+    // node. If the node returns peers, we dial them. If they fail (or if the node
+    // returned no peers), we DROP the hash. We NEVER fall back to an iterative DHT
+    // walk or tracker scrape for sampled hashes, because it burns 6 seconds on dead
+    // swarms and destroys throughput.
+    // Only announced/looked-up hashes (live by construction) fall through to Phase C.
+    if source == crate::discovery::FetchSource::Sampled {
+        if !any_peers_seen {
+            *failure_counts.entry(FetchFailureKind::EmptyPeers).or_insert(0) += 1;
             stats
-                .tracker_resolved
+                .empty_peers
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            any_peers_seen = true;
-            let now = unix_secs();
-            dead_peers.lock().unwrap().prune(now);
-            // Dial ALL tracker-resolved peers through the streaming dial pool
-            // (≤ PARALLEL_DIALS concurrent; freed slots refilled immediately).
-            let mut pool: Vec<SocketAddr> = Vec::new();
-            for peer in tracker_peers {
-                if tried >= MAX_PEERS_PER_HASH {
-                    break;
-                }
-                if blocklist.contains(peer.ip()) {
-                    continue;
-                }
-                if dead_peers.lock().unwrap().is_dead(peer.ip(), now) {
-                    continue;
-                }
-                if !seen_peers.insert(peer) || !dialed_ips.insert(peer.ip()) {
-                    continue;
-                }
-                pool.push(peer);
+        }
+        let dominant = failure_counts
+            .iter()
+            .max_by_key(|(_, count)| **count)
+            .map(|(reason, _)| reason.as_str().to_string())
+            .or_else(|| Some(FetchFailureKind::EmptyPeers.as_str().to_string()));
+        return Err(FetchError {
+            reason: anyhow!("no reachable peer yielded verified metadata"),
+            dominant_failure: dominant,
+        });
+    }
+
+    // Announced/looked-up hashes fall back to trackers and a seeded iterative
+    // lookup here.
+    let tracker_peers = tokio::time::timeout(
+        TRACKER_BUDGET,
+        tracker::resolve_peers_from_trackers(info_hash.as_bytes()),
+    )
+    .await
+    .unwrap_or_default();
+    if !tracker_peers.is_empty() {
+        stats
+            .tracker_resolved
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        any_peers_seen = true;
+        let now = unix_secs();
+        dead_peers.lock().unwrap().prune(now);
+        let mut pool: Vec<SocketAddr> = Vec::new();
+        for peer in tracker_peers {
+            if tried >= MAX_PEERS_PER_HASH {
+                break;
             }
-            // Batch fleet-wide dead check.
-            let mut dead: Vec<bool> = vec![false; pool.len()];
-            shared.dead_contains_many(&pool.iter().map(|p| p.ip()).collect::<Vec<_>>(), &mut dead).await;
-            let mut candidate_pool: Vec<SocketAddr> = Vec::new();
-            for (peer, is_dead) in pool.into_iter().zip(dead) {
-                if is_dead {
-                    continue;
-                }
-                candidate_pool.push(peer);
-                tried += 1;
-                if tried >= MAX_PEERS_PER_HASH {
-                    break;
-                }
+            if blocklist.contains(peer.ip()) {
+                continue;
             }
-            if let Some(meta) = dial_peers(
-                candidate_pool,
-                info_hash,
-                    peer_id,
-                    deadline,
-                    &mut consecutive_connect_failures,
-                    &mut any_handshake,
-                    &mut failure_counts,
-                    stats,
-                    dead_peers,
-                    shared,
-                )
-                .await
-                {
-                    return persist_verified(
-                        meta,
-                        info_hash,
-                        crate::discovery::FetchSource::Tracker,
-                        stats,
-                        tx,
-                        scrape_saw_seeds,
-                    )
-                    .await;
-                }
+            if dead_peers.lock().unwrap().is_dead(peer.ip(), now) {
+                continue;
+            }
+            if !seen_peers.insert(peer) || !dialed_ips.insert(peer.ip()) {
+                continue;
+            }
+            pool.push(peer);
+        }
+        let mut dead: Vec<bool> = vec![false; pool.len()];
+        shared.dead_contains_many(&pool.iter().map(|p| p.ip()).collect::<Vec<_>>(), &mut dead).await;
+        let mut candidate_pool: Vec<SocketAddr> = Vec::new();
+        for (peer, is_dead) in pool.into_iter().zip(dead) {
+            if is_dead {
+                continue;
+            }
+            candidate_pool.push(peer);
+            tried += 1;
+            if tried >= MAX_PEERS_PER_HASH {
+                break;
             }
         }
+        if let Some(meta) = dial_peers(
+            candidate_pool,
+            info_hash,
+            peer_id,
+            deadline,
+            &mut consecutive_connect_failures,
+            &mut any_handshake,
+            &mut failure_counts,
+            stats,
+            dead_peers,
+            shared,
+        )
+        .await
+        {
+            return persist_verified(
+                meta,
+                info_hash,
+                crate::discovery::FetchSource::Tracker,
+                stats,
+                tx,
+                scrape_saw_seeds,
+            )
+            .await;
+        }
+    }
 
-    // Acquire the lookup permit BEFORE starting the lookup and hold it across
-    // the streaming loop: get_peers_seeded only enqueues a command; the DHT
-    // lookup runs asynchronously and streams batches. Releasing at the end of
-    // a block here would let all fetch workers run lookups concurrently,
-    // defeating lookup_concurrency. The permit is dropped when this function
-    // returns (after the stream ends, the deadline expires, or an early
-    // return) — RECV_TIMEOUT bounds the hold.
     let _lookup_permit = lookup_permits
         .acquire()
         .await
@@ -962,6 +1012,7 @@ mod tests {
             peer_hint: None,
             source: crate::discovery::FetchSource::Sampled,
             lookup_seed: None,
+            dht_handle: None,
         });
         // ...and a hinted announce with a single occurrence.
         q.push(FetchRequest {
@@ -970,6 +1021,7 @@ mod tests {
             peer_hint: Some(addr(2)),
             source: crate::discovery::FetchSource::Announced,
             lookup_seed: None,
+            dht_handle: None,
         });
         let first = q.pop().expect("a request");
         assert_eq!(first.hash, hash(2), "hinted announce must pop before sampled");
@@ -985,6 +1037,7 @@ mod tests {
             peer_hint: None,
             source: crate::discovery::FetchSource::Sampled,
             lookup_seed: None,
+            dht_handle: None,
         });
         // A later announce for the same hash adds the hint.
         q.push(FetchRequest {
@@ -993,6 +1046,7 @@ mod tests {
             peer_hint: Some(addr(1)),
             source: crate::discovery::FetchSource::Announced,
             lookup_seed: None,
+            dht_handle: None,
         });
         let got = q.pop().expect("a request");
         assert_eq!(got.hash, hash(1));
@@ -1008,6 +1062,7 @@ mod tests {
             peer_hint: None,
             source: crate::discovery::FetchSource::Sampled,
             lookup_seed: None,
+            dht_handle: None,
         });
         // A lower occurrence report must be ignored.
         q.push(FetchRequest {
@@ -1016,6 +1071,7 @@ mod tests {
             peer_hint: Some(addr(1)),
             source: crate::discovery::FetchSource::Announced,
             lookup_seed: None,
+            dht_handle: None,
         });
         let got = q.pop().expect("a request");
         assert_eq!(got.occurrences, 7);

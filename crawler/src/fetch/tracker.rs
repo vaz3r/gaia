@@ -88,8 +88,8 @@ const HTTP_TRACKERS: &[&str] = &[
     "https://open.ftorrent.com:443/announce",
 ];
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
-const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(3);
+const CONNECT_TIMEOUT: Duration = Duration::from_millis(1500);
+const ANNOUNCE_TIMEOUT: Duration = Duration::from_millis(2000);
 /// Max peers to collect from trackers per hash before stopping.
 const MAX_TRACKER_PEERS: usize = 64;
 
@@ -97,17 +97,15 @@ const ACTION_CONNECT: i32 = 0;
 const ACTION_ANNOUNCE: i32 = 1;
 const EVENT_NONE: i32 = 0;
 
-/// Number of trackers queried per hash. Kept well below the full list so a
-/// single fetch's tracker budget stays tight; every tracker is still rotated
-/// through over time via a round-robin start offset.
+/// Number of trackers queried per hash.
 fn trackers_per_query() -> usize {
     std::env::var("GAIA_TRACKERS_PER_QUERY")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(16)
+        .unwrap_or(24)
 }
 
-static TRACKER_START: OnceLock<usize> = OnceLock::new();
+static TRACKER_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Cache of resolved tracker addresses, keyed by the `udp://host:port` URL.
 /// The 57 tracker hosts are static; resolving them on every query is wasted
@@ -283,7 +281,7 @@ fn urlencode(bytes: &[u8]) -> String {
 /// UDP and HTTP(S) trackers are queried CONCURRENTLY; the worst case is a
 /// single tracker timeout, not the sum. Best-effort: failures are skipped.
 pub async fn resolve_peers_from_trackers(info_hash: &[u8; 20]) -> Vec<SocketAddr> {
-    let start = *TRACKER_START.get_or_init(|| rand::thread_rng().next_u32() as usize % 97);
+    let start = TRACKER_COUNTER.fetch_add(7, std::sync::atomic::Ordering::Relaxed);
     let mut tasks = tokio::task::JoinSet::new();
 
     let udp_n = UDP_TRACKERS.len();

@@ -86,6 +86,11 @@ pub struct CrawlStats {
     pub verified_without_seeds: AtomicU64,
     pub failed_with_seeds: AtomicU64,
     pub failed_without_seeds: AtomicU64,
+    /// Direct 1-shot get_peers outcomes (diagnostic).
+    pub direct_peers_found: AtomicU64,
+    pub direct_peers_empty: AtomicU64,
+    pub direct_peers_error: AtomicU64,
+    pub direct_peers_timeout: AtomicU64,
 }
 
 /// One immutable monitoring snapshot captured at a stats tick and persisted to

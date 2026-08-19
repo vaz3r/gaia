@@ -123,6 +123,8 @@ services:
       - autovacuum_vacuum_scale_factor=0.05
       - -c
       - autovacuum_analyze_scale_factor=0.02
+      - -c
+      - max_connections=200
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U crawler -d crawler"]
       interval: 10s
@@ -144,8 +146,12 @@ services:
     # Bound the crawler so a runaway can't OOM/swap the host. The DHT node +
     # fetch pool at --scale 1 stays well under 512 MiB in practice (~308 MB
     # measured at scale 3); 1 GiB leaves headroom for jemalloc spikes.
-    mem_limit: 1g
+    mem_limit: 8g
     pids_limit: 8192
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     # Share Gluetun's network namespace: all crawler traffic egresses via the
     # WireGuard tunnel from the Oracle public IP. Redis/Postgres are reached on
     # the local compose network (via gluetun's shared eth0) by hostname. The
@@ -168,6 +174,7 @@ services:
       # logs on EVERY subcommand exit. Set GAIA_PROF_DUMP_EVERY_TICKS>0 + the
       # _RJEM_MALLOC_CONF when debugging memory.
       - GAIA_PROF_DUMP_EVERY_TICKS=0
+      - MALLOC_CONF=background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:0
     healthcheck:
       # Real HTTP health endpoint: the crawler binds --health-port inside
       # gluetun's shared netns, so localhost works from this container.
@@ -179,13 +186,13 @@ services:
     command:
       - run
       - --pg
-      - postgres://crawler:${POSTGRES_PASSWORD}@postgres:5432/crawler
+      - postgres://crawler:${POSTGRES_PASSWORD}@postgres:5432/crawler_bench8
       - --port
       - "6881"
       - --health-port
       - "9777"
       - --instances
-      - "8"
+      - "4"
       - --min-seen
       - "1"
       - --min-seen-shadow
@@ -194,13 +201,25 @@ services:
       - "1"
       - --scale
       - "10"
+      - --concurrency
+      - "100"
+      - --lookup-concurrency
+      - "100"
+      - --sampler-qps
+      - "800"
+      - --sampler-loops
+      - "512"
       - --max-nodes
-      - "16384"
+      - "1000000"
       - --max-attempts
       - "4"
       - --no-restrict-ips
+      - --qps
+      - "8000"
       - --redis-url
       - redis://redis:6379
+      - --redis-prefix
+      - "dhtbench8"
       - --log
       - crawler=info
     logging:

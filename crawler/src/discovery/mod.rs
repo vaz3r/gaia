@@ -2,7 +2,7 @@ mod liveness;
 mod sampler;
 
 pub use liveness::{LivenessConfig, LivenessCounter, RecordOutcome};
-pub use sampler::{Sampler, SamplerConfig};
+pub use sampler::{random_id20, Sampler, SamplerConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,6 +48,7 @@ pub struct FetchRequest {
     /// the node that proved it has the hash — recovering the ~49% empty_peers
     /// failures where the keyspace-closest lookup misses the reporting node.
     pub lookup_seed: Option<SocketAddr>,
+    pub dht_handle: Option<gaia_dht::DhtHandle>,
 }
 
 /// Start the DHT actor for instance `i` (0-based), bound to `port + i`. No file
@@ -110,37 +111,100 @@ async fn load_or_create_node_id_redis(
     Some(id)
 }
 
-/// Continuously grow the routing table by issuing `get_peers` on random 20-byte
-/// targets. Each lookup walks toward the target and injects discovered nodes
-/// into the routing table, so the table climbs toward `--max-nodes` throughout
-/// the crawl rather than stalling after the startup warmup.
+/// Continuously grow the routing table (bitmagnet's `getNodesForFindNode` +
+/// `runFindNode` pattern, adapted to cycle the whole table). Each tick:
+/// 1. `find_node` a batch of table nodes with a FRESH random target per query —
+///    response nodes are injected back into the routing table by the actor.
+///    Cycling the whole table (via a rotating cursor) both refreshes existing
+///    entries and pulls their neighbors in, so the table climbs toward capacity.
+/// 2. Issue a random-target `get_peers` walk (dropped reply channel → DhtLookup
+///    fast-exits after a couple responses) to discover nodes in untouched
+///    keyspace regions.
 ///
-/// The grower drops each lookup's reply channel immediately so the DhtLookup
-/// fast-exits after a couple responses — keeping per-lookup memory bounded
-/// even at 8 instances × continuous growth (a held-open channel accumulated
-/// ~130 MB/hr).
+/// NOTE: each `find_node` must use its OWN fresh target. A shared target per
+/// tick makes all batch queries return the same ~8 closest nodes (redundant),
+/// the bug that kept node inflow far below bitmagnet-scale.
 pub async fn grow_routing(
     handle: DhtHandle,
     interval: Duration,
     shutdown: CancellationToken,
+    sought_rx: tokio::sync::watch::Receiver<Id20>,
 ) {
+    // Continuous random-target get_peers walkers. The reply channel MUST be
+    // held open for the DhtLookup to keep traversing: dropping it makes the
+    // walk wind down after ~2 responses, so distant keyspace is never ingested
+    // and the routing table can't grow past the bootstrap pool — the
+    // samplable-node supply ceiling that caps unique-hash discovery. Each
+    // walker repeatedly launches a deep (256-node) walk and drains its batches
+    // so the actor injects every discovered closer node into the routing table.
+    let mut walkers = tokio::task::JoinSet::new();
+    for _ in 0..4 {
+        let handle = handle.clone();
+        let shutdown = shutdown.clone();
+        walkers.spawn(async move {
+            loop {
+                if shutdown.is_cancelled() {
+                    return;
+                }
+                let mut bytes = [0u8; 20];
+                rand::thread_rng().fill_bytes(&mut bytes);
+                if let Ok(mut rx) = handle.get_peers(Id20(bytes)).await {
+                    let drain_deadline =
+                        tokio::time::Instant::now() + Duration::from_secs(2);
+                    while tokio::time::Instant::now() < drain_deadline {
+                        match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                            Ok(Some(_batch)) => {}
+                            Ok(None) => break,
+                            Err(_) => {}
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        });
+    }
+
+    // Bitmagnet's `runFindNode`: every tick, find_node the OLDEST nodes in the
+    // table using the SHARED rotating sought target (not a random target per
+    // query). Oldest-first re-queries the longest-unattended nodes so their
+    // stale links are refreshed and their fresh response nodes keep the table
+    // populated. Using the shared sought target makes find_node responses
+    // cluster in the region the sampler is currently scanning, so newly
+    // discovered nodes are directly sampling-relevant. Nodes that fail are
+    // dropped from the routing table (bitmagnet's DropNode) so dead/read-only
+    // nodes stop burning discovery budget.
+    let mut cursor: usize = 0;
     loop {
         if shutdown.is_cancelled() {
             return;
         }
-        let mut bytes = [0u8; 20];
-        rand::thread_rng().fill_bytes(&mut bytes);
-        let target = Id20(bytes);
-        // Drop the reply channel immediately so the DhtLookup fast-exits after
-        // a couple responses (the leak-safe behavior). A held-open channel
-        // makes each lookup walk deeper and retain more state — with 8
-        // instances × continuous growers that accumulated ~130 MB/hr.
-        let _ = handle.get_peers(target).await;
-        // Grow continuously at `interval` (250ms from crawler.rs): the routing
-        // table is the binding constraint on unique discovery, so we keep the
-        // table climbing toward --max-nodes at all times. The leak fixes
-        // (shared sampler maps, bounded announce_tokens, fast-exit lookups)
-        // keep memory flat even at a sustained grow rate.
+
+        let nodes = handle.get_oldest_nodes(256).await;
+        if !nodes.is_empty() {
+            let batch = 256usize;
+            let sought = *sought_rx.borrow();
+            let mut tasks = tokio::task::JoinSet::new();
+            for k in 0..batch.min(nodes.len()) {
+                if shutdown.is_cancelled() {
+                    return;
+                }
+                let idx = (cursor + k) % nodes.len();
+                let addr = nodes[idx].1;
+                let handle = handle.clone();
+                let sought = sought;
+                tasks.spawn(async move {
+                    if handle.find_node(addr, sought).await.is_err() {
+                        // Bitmagnet's DropNode: a node that fails find_node can't
+                        // help discovery or sampling. Remove it so the table
+                        // keeps room for fresh, reachable nodes.
+                        handle.remove_node(addr).await;
+                    }
+                });
+            }
+            while tasks.join_next().await.is_some() {}
+            cursor = (cursor + batch) % nodes.len();
+        }
+
         tokio::time::sleep(interval).await;
     }
 }
@@ -193,6 +257,7 @@ pub async fn run_passive_intake(
                                 peer_hint: Some(peer_addr),
                                 source: FetchSource::Announced,
                                 lookup_seed: None,
+                                dht_handle: Some(handle.clone()),
                             })
                             .await
                             .is_err()
@@ -206,10 +271,19 @@ pub async fn run_passive_intake(
                         // live signal with far more volume than announce_peer.
                         // The seeking client is itself a live peer holding the
                         // metadata (it must have the infohash to seek peers for
-                        // it), so dial it directly for the ut_metadata exchange
-                        // instead of burning a blind DHT lookup that mostly
-                        // ends in empty_peers. Non-routable (NAT'd) addresses
-                        // are filtered at dial time by the fetch path.
+                        // it).
+                        //
+                        // NOTE: we do NOT dial `from_addr` directly. `from_addr`
+                        // is a DHT routing node (typically port 6881) that is
+                        // forwarding the get_peers query — pure DHT
+                        // infrastructure, not a BitTorrent client, so it does NOT
+                        // serve ut_metadata (measured: 8,517 looked-up hashes
+                        // emitted with peer_hint=from_addr converted ZERO). The
+                        // correct path is a keyspace-convergent DHT get_peers
+                        // toward the hash, which reaches the ACTUAL clients
+                        // holding the metadata. So we pass NO peer_hint (letting
+                        // fetch_one run the full get_peers + dial) and seed the
+                        // lookup from the DHT node that proved the hash is live.
                         if shared.looked_up_contains(info_hash.as_bytes()).await {
                             stats
                                 .lookups_deduped_redis
@@ -223,9 +297,10 @@ pub async fn run_passive_intake(
                             .send(FetchRequest {
                                 hash: info_hash,
                                 occurrences: 1,
-                                peer_hint: Some(from_addr),
+                                peer_hint: None,
                                 source: FetchSource::LookedUp,
-                                lookup_seed: None,
+                                lookup_seed: Some(from_addr),
+                                dht_handle: Some(handle.clone()),
                             })
                             .await
                             .is_err()

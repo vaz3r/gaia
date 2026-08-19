@@ -6,33 +6,32 @@
     reason = "M175: routing table — node arithmetic and time deltas use post-bootstrap Instants; remaining unchecked-time sites are test fixtures"
 )]
 
-//! Kademlia routing table with k-buckets (BEP 5).
+//! Kademlia routing table (BEP 5).
 //!
-//! The routing table maps 160-bit node IDs to socket addresses using
-//! a binary-tree of k-buckets. Each bucket holds up to `K` (80) nodes.
-//! Buckets are split when the bucket containing our own ID overflows.
+//! The routing table maps 160-bit node IDs to socket addresses. It is
+//! structured as an **uncapped, flat store keyed by node ID** (bitmagnet's
+//! `keyspace` B-tree parity): every discovered node is retained until it fails
+//! repeatedly, so the table can grow to 100k+ nodes and sustain the broad
+//! distinct-node sampling that drives infohash discovery. A high `max_nodes`
+//! safety ceiling bounds memory with LRU eviction; there is no per-distance
+//! region cap.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use gaia_core::Id20;
 
-/// Maximum nodes per bucket (Kademlia k parameter). Raised from 8 to 80 to
-/// match bitmagnet's `nodesK` so a crawler can hold thousands of routing nodes
-/// instead of saturating at ~280 — the binding constraint on distinct-node
-/// sampling and, therefore, unique-hash discovery.
+/// Kademlia `k` parameter: the number of closest nodes returned/used for
+/// `find_node`/`get_peers`/lookups. Decoupled from capacity — the table is
+/// flat and unbounded, but responses and lookups still operate on this
+/// bounded closest-K set.
 pub const K: usize = 80;
 
 /// Maximum nodes returned in inbound-query responses (`find_node` /
-/// `get_peers` / `get` / `sample_infohashes`). Decoupled from the table `K` so
-/// a large routing table does not inflate every UDP response payload 10x: the
-/// table keeps `K=80` for capacity, but responses carry at most `RESPONSE_K`
-/// nodes (BEP 5 semantics), keeping each answer in a single small UDP packet.
+/// `get_peers` / `get` / `sample_infohashes`). Kept small (BEP 5 semantics) so
+/// each answer stays in a single small UDP packet regardless of table size.
 pub const RESPONSE_K: usize = 16;
-
-/// Maximum number of buckets (one per bit of the ID).
-const MAX_BUCKETS: usize = 160;
 
 /// Kademlia node liveness classification (BEP 5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +46,9 @@ pub enum NodeStatus {
 
 /// Age threshold for considering a node "active" (15 minutes).
 const ACTIVE_THRESHOLD: Duration = Duration::from_mins(15);
+
+/// Threshold for a node to be considered Bad (dropped/evictable).
+const BAD_FAIL_COUNT: u32 = 2;
 
 /// A node in the routing table.
 #[derive(Debug, Clone)]
@@ -80,7 +82,7 @@ impl RoutingNode {
     /// `fetch_sub(1)` underflow that shipped in M132.
     #[must_use]
     pub fn status(&self) -> NodeStatus {
-        if self.fail_count >= 2 {
+        if self.fail_count >= BAD_FAIL_COUNT {
             return NodeStatus::Bad;
         }
         let now = Instant::now();
@@ -94,65 +96,24 @@ impl RoutingNode {
     }
 }
 
-/// A single k-bucket.
-#[derive(Debug, Clone)]
-struct KBucket {
-    nodes: Vec<RoutingNode>,
-}
-
-impl KBucket {
-    fn new() -> Self {
-        Self {
-            nodes: Vec::with_capacity(K),
-        }
-    }
-
-    fn is_full(&self) -> bool {
-        self.nodes.len() >= K
-    }
-
-    fn find(&self, id: &Id20) -> Option<usize> {
-        self.nodes.iter().position(|n| n.id == *id)
-    }
-
-    /// Return the node with the highest fail count, or the oldest if tied.
-    fn worst_node(&self) -> Option<usize> {
-        self.nodes
-            .iter()
-            .enumerate()
-            .max_by(|(_, a), (_, b)| {
-                a.fail_count
-                    .cmp(&b.fail_count)
-                    .then(b.last_seen.cmp(&a.last_seen))
-            })
-            .map(|(i, _)| i)
-    }
-
-    /// Return the least-recently-seen node (for LRU replacement when a bucket
-    /// is full of healthy nodes).
-    fn oldest_node(&self) -> Option<usize> {
-        self.nodes
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| a.last_seen.cmp(&b.last_seen))
-            .map(|(i, _)| i)
-    }
-}
-
 /// Default maximum number of nodes in the routing table.
-/// Matches rqbit's default and prevents unbounded growth from adversarial injection.
-const DEFAULT_MAX_NODES: usize = 512;
+///
+/// A high safety ceiling (not a per-region gate): bounds memory with LRU
+/// eviction while admitting 100k+ nodes, matching bitmagnet's effectively
+/// unbounded table so the sampler gets broad distinct-node coverage.
+const DEFAULT_MAX_NODES: usize = 500_000;
 
 /// Kademlia routing table.
 #[derive(Debug, Clone)]
 pub struct RoutingTable {
     own_id: Id20,
-    buckets: Vec<KBucket>,
+    /// Unbounded flat node store keyed by node ID.
+    nodes: BTreeMap<Id20, RoutingNode>,
     /// When enabled, tracks IPs to enforce one-node-per-IP (BEP 42).
     ip_set: HashSet<IpAddr>,
     /// Whether to enforce one-node-per-IP restriction.
     restrict_ips: bool,
-    /// Maximum number of nodes allowed in the routing table.
+    /// Safety ceiling on total node count (bounds memory via LRU eviction).
     max_nodes: usize,
 }
 
@@ -183,16 +144,9 @@ impl RoutingTable {
     /// Create a new routing table with full configuration.
     #[must_use]
     pub fn with_config(own_id: Id20, restrict_ips: bool, max_nodes: usize) -> Self {
-        // Pre-allocate every distance bucket (0..MAX_BUCKETS-1) keyed by the
-        // exact leading-zeros distance from our own ID. Unlike a lazy
-        // last-bucket-split table — where far buckets fill to K=80 and then
-        // permanently reject — each level gets its own bucket, so the table
-        // can hold up to K × MAX_BUCKETS nodes across the whole keyspace
-        // (bitmagnet's `nodesK=80` splittable-trie equivalent).
-        let buckets = (0..MAX_BUCKETS).map(|_| KBucket::new()).collect();
         Self {
             own_id,
-            buckets,
+            nodes: BTreeMap::new(),
             ip_set: HashSet::new(),
             restrict_ips,
             max_nodes,
@@ -208,19 +162,25 @@ impl RoutingTable {
     /// Total number of nodes in the routing table.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.buckets.iter().map(|b| b.nodes.len()).sum()
+        self.nodes.len()
     }
 
     /// Whether the routing table is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.nodes.is_empty()
     }
 
-    /// Number of buckets.
+    /// Number of distinct distance levels currently represented in the table
+    /// (populated leading-zero-distance buckets, 0..=159). Mirrors the old
+    /// "how many buckets are in use" diagnostic without the fixed 160 ceiling.
     #[must_use]
     pub fn bucket_count(&self) -> usize {
-        self.buckets.len()
+        self.nodes
+            .keys()
+            .map(|id| self.distance_level(id))
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
     }
 
     /// Insert or update a node. Returns `true` if the node was added/updated.
@@ -235,21 +195,16 @@ impl RoutingTable {
         let ip = addr.ip();
 
         // BEP 42: check if another node with this IP exists (and it's not the same node)
-        if self.restrict_ips && self.ip_set.contains(&ip) {
-            let bucket_idx = self.bucket_index(&id);
-            if self.buckets[bucket_idx].find(&id).is_none() {
-                return false; // Different node, same IP — reject
-            }
+        if self.restrict_ips && self.ip_set.contains(&ip) && !self.nodes.contains_key(&id) {
+            return false; // Different node, same IP — reject
         }
 
-        let bucket_idx = self.bucket_index(&id);
-
         // Already known — update last_seen and address
-        if let Some(pos) = self.buckets[bucket_idx].find(&id) {
-            let old_ip = self.buckets[bucket_idx].nodes[pos].addr.ip();
-            self.buckets[bucket_idx].nodes[pos].last_seen = Instant::now();
-            self.buckets[bucket_idx].nodes[pos].addr = addr;
-            self.buckets[bucket_idx].nodes[pos].fail_count = 0;
+        if let Some(existing) = self.nodes.get_mut(&id) {
+            let old_ip = existing.addr.ip();
+            existing.last_seen = Instant::now();
+            existing.addr = addr;
+            existing.fail_count = 0;
             // Update IP tracking if address changed
             if self.restrict_ips && old_ip != ip {
                 self.ip_set.remove(&old_ip);
@@ -258,110 +213,58 @@ impl RoutingTable {
             return true;
         }
 
-        // Global node cap — when at limit, only allow insertion by evicting a
-        // bad node (fail_count > 0) from this bucket. This keeps the table
-        // bounded while still allowing fresh nodes to replace stale ones.
-        let at_cap = self.len() >= self.max_nodes;
-        if at_cap {
-            if let Some(worst_idx) = self.buckets[bucket_idx].worst_node()
-                && self.buckets[bucket_idx].nodes[worst_idx].fail_count > 0
-            {
-                if self.restrict_ips {
-                    self.ip_set
-                        .remove(&self.buckets[bucket_idx].nodes[worst_idx].addr.ip());
+        // At the safety ceiling: evict one failing node (fail_count > 0,
+        // LRU among them), else evict the least-recently-seen node, before
+        // admitting the new node. Never reject purely on region fullness.
+        if self.nodes.len() >= self.max_nodes {
+            let evicted = self.nodes
+                .values()
+                .enumerate()
+                .filter(|(_, n)| n.fail_count > 0)
+                .min_by_key(|(_, n)| n.last_seen)
+                .or_else(|| {
+                    self.nodes
+                        .values()
+                        .enumerate()
+                        .min_by_key(|(_, n)| n.last_seen)
+                })
+                .map(|(idx, _)| idx);
+            if let Some(idx) = evicted {
+                // Find the key at the given ordinal position in the BTreeMap.
+                let key = self.nodes.iter().nth(idx).map(|(k, _)| *k);
+                if let Some(key) = key {
+                    if self.restrict_ips {
+                        self.ip_set.remove(&self.nodes[&key].addr.ip());
+                    }
+                    self.nodes.remove(&key);
                 }
-                self.buckets[bucket_idx].nodes[worst_idx] = RoutingNode {
-                    id,
-                    addr,
-                    last_seen: Instant::now(),
-                    fail_count: 0,
-                    last_response: None,
-                    last_query: None,
-                };
-                if self.restrict_ips {
-                    self.ip_set.insert(ip);
-                }
-                return true;
             }
-            // No bad nodes to evict — reject
-            return false;
         }
 
-        // Room in bucket
-        if !self.buckets[bucket_idx].is_full() {
-            self.buckets[bucket_idx].nodes.push(RoutingNode {
+        // Insert (or re-insert after eviction) the new/updated node.
+        if self.restrict_ips {
+            self.ip_set.insert(ip);
+        }
+        self.nodes.insert(
+            id,
+            RoutingNode {
                 id,
                 addr,
                 last_seen: Instant::now(),
                 fail_count: 0,
                 last_response: None,
                 last_query: None,
-            });
-            if self.restrict_ips {
-                self.ip_set.insert(ip);
-            }
-            return true;
-        }
-
-        // Bucket full — try to evict a failed node
-        if let Some(worst_idx) = self.buckets[bucket_idx].worst_node()
-            && self.buckets[bucket_idx].nodes[worst_idx].fail_count > 0
-        {
-            // Remove old node's IP from tracking (gap fix #7)
-            if self.restrict_ips {
-                self.ip_set
-                    .remove(&self.buckets[bucket_idx].nodes[worst_idx].addr.ip());
-            }
-            self.buckets[bucket_idx].nodes[worst_idx] = RoutingNode {
-                id,
-                addr,
-                last_seen: Instant::now(),
-                fail_count: 0,
-                last_response: None,
-                last_query: None,
-            };
-            if self.restrict_ips {
-                self.ip_set.insert(ip);
-            }
-            return true;
-        }
-
-        // Bucket full, all nodes good — evict the least-recently-seen node so
-        // the table keeps the freshest K nodes per distance level. (With
-        // pre-allocated buckets there is no catch-all to split; a crawler
-        // wants maximum freshness and diversity, so LRU replacement beats
-        // rejecting new nodes outright.)
-        if let Some(oldest_idx) = self.buckets[bucket_idx].oldest_node() {
-            if self.restrict_ips {
-                self.ip_set
-                    .remove(&self.buckets[bucket_idx].nodes[oldest_idx].addr.ip());
-            }
-            self.buckets[bucket_idx].nodes[oldest_idx] = RoutingNode {
-                id,
-                addr,
-                last_seen: Instant::now(),
-                fail_count: 0,
-                last_response: None,
-                last_query: None,
-            };
-            if self.restrict_ips {
-                self.ip_set.insert(ip);
-            }
-            return true;
-        }
-
-        false
+            },
+        );
+        true
     }
 
     /// Remove a node by ID. Returns `true` if it was present.
     pub fn remove(&mut self, id: &Id20) -> bool {
-        let bucket_idx = self.bucket_index(id);
-        let bucket = &mut self.buckets[bucket_idx];
-        if let Some(pos) = bucket.find(id) {
+        if let Some(node) = self.nodes.remove(id) {
             if self.restrict_ips {
-                self.ip_set.remove(&bucket.nodes[pos].addr.ip());
+                self.ip_set.remove(&node.addr.ip());
             }
-            bucket.nodes.remove(pos);
             true
         } else {
             false
@@ -370,104 +273,72 @@ impl RoutingTable {
 
     /// Mark a node as recently seen.
     pub fn mark_seen(&mut self, id: &Id20) {
-        let bucket_idx = self.bucket_index(id);
-        if let Some(pos) = self.buckets[bucket_idx].find(id) {
-            self.buckets[bucket_idx].nodes[pos].last_seen = Instant::now();
-            self.buckets[bucket_idx].nodes[pos].fail_count = 0;
+        if let Some(node) = self.nodes.get_mut(id) {
+            node.last_seen = Instant::now();
+            node.fail_count = 0;
         }
     }
 
     /// Increment a node's fail count.
     pub fn mark_failed(&mut self, id: &Id20) {
-        let bucket_idx = self.bucket_index(id);
-        if let Some(pos) = self.buckets[bucket_idx].find(id) {
-            self.buckets[bucket_idx].nodes[pos].fail_count += 1;
+        if let Some(node) = self.nodes.get_mut(id) {
+            node.fail_count += 1;
         }
     }
 
     /// Return the `count` closest nodes to `target`, sorted by XOR distance.
     #[must_use]
     pub fn closest(&self, target: &Id20, count: usize) -> Vec<RoutingNode> {
-        let mut all: Vec<&RoutingNode> = self.buckets.iter().flat_map(|b| &b.nodes).collect();
+        let mut all: Vec<&RoutingNode> = self.nodes.values().collect();
         all.sort_by_key(|n| n.id.xor_distance(target));
         all.into_iter().take(count).cloned().collect()
-    }
-
-    /// Return bucket indices that haven't been refreshed recently.
-    ///
-    /// M175 BUG FIX: same shape as `RoutingNode::status` — `Instant::now() - max_age`
-    /// panics if `max_age` exceeds process uptime. Compares elapsed time forward
-    /// instead.
-    #[must_use]
-    pub fn stale_buckets(&self, max_age: std::time::Duration) -> Vec<usize> {
-        let now = Instant::now();
-        self.buckets
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| {
-                b.nodes.is_empty()
-                    || b.nodes
-                        .iter()
-                        .all(|n| now.duration_since(n.last_seen) > max_age)
-            })
-            .map(|(i, _)| i)
-            .collect()
-    }
-
-    /// Generate a random ID that falls within the given bucket index.
-    /// Useful for refreshing stale buckets.
-    #[must_use]
-    pub fn random_id_in_bucket(&self, bucket_idx: usize) -> Id20 {
-        let mut id = self.own_id;
-        // Flip the bit at position `bucket_idx` to land in that bucket's range.
-        // Buckets cover distances where the first differing bit is at position bucket_idx.
-        if bucket_idx < MAX_BUCKETS {
-            let byte_idx = bucket_idx / 8;
-            let bit_idx = 7 - (bucket_idx % 8);
-            id.0[byte_idx] ^= 1 << bit_idx;
-        }
-        id
     }
 
     /// Return all nodes in the routing table as (id, addr) pairs.
     #[must_use]
     pub fn all_nodes(&self) -> Vec<(Id20, SocketAddr)> {
-        self.buckets
-            .iter()
-            .flat_map(|b| b.nodes.iter().map(|n| (n.id, n.addr)))
+        self.nodes
+            .values()
+            .map(|n| (n.id, n.addr))
             .collect()
+    }
+
+    /// Return up to `n` least-recently-seen nodes across the whole table
+    /// (bitmagnet's `GetOldestNodes`). `find_node`-ing these refreshes stale
+    /// entries so they stay live in the table instead of rotting, and a failed
+    /// refresh marks them for eviction — keeping the table at max capacity with
+    /// LIVE nodes, which is what drives distinct-node sampling breadth.
+    #[must_use]
+    pub fn oldest_nodes(&self, n: usize) -> Vec<(Id20, SocketAddr)> {
+        let mut all: Vec<&RoutingNode> = self.nodes.values().collect();
+        all.sort_by_key(|node| node.last_seen);
+        all.truncate(n);
+        all.iter().map(|node| (node.id, node.addr)).collect()
     }
 
     /// Get a reference to a node by ID.
     #[must_use]
     pub fn get(&self, id: &Id20) -> Option<&RoutingNode> {
-        let bucket_idx = self.bucket_index(id);
-        self.buckets[bucket_idx]
-            .find(id)
-            .map(|pos| &self.buckets[bucket_idx].nodes[pos])
+        self.nodes.get(id)
     }
 
     /// Get a mutable reference to a node by ID.
     pub fn get_mut(&mut self, id: &Id20) -> Option<&mut RoutingNode> {
-        let bucket_idx = self.bucket_index(id);
-        let pos = self.buckets[bucket_idx].find(id)?;
-        Some(&mut self.buckets[bucket_idx].nodes[pos])
+        self.nodes.get_mut(id)
     }
 
     /// Record a successful response from a node, resetting its fail count.
     pub fn mark_response(&mut self, id: &Id20) {
-        let bucket_idx = self.bucket_index(id);
-        if let Some(pos) = self.buckets[bucket_idx].find(id) {
-            self.buckets[bucket_idx].nodes[pos].last_response = Some(Instant::now());
-            self.buckets[bucket_idx].nodes[pos].fail_count = 0;
+        if let Some(node) = self.nodes.get_mut(id) {
+            node.last_response = Some(Instant::now());
+            node.fail_count = 0;
         }
     }
 
     /// Record an incoming query from a node.
     pub fn mark_query(&mut self, id: &Id20) {
-        let bucket_idx = self.bucket_index(id);
-        if let Some(pos) = self.buckets[bucket_idx].find(id) {
-            self.buckets[bucket_idx].nodes[pos].last_query = Some(Instant::now());
+        if let Some(node) = self.nodes.get_mut(id) {
+            node.last_query = Some(Instant::now());
         }
     }
 
@@ -478,57 +349,41 @@ impl RoutingTable {
     /// Questionable (never responded, never queried). `fail_count = 0` ensures
     /// they are Questionable rather than Bad.
     pub fn mark_all_questionable(&mut self) {
-        for bucket in &mut self.buckets {
-            for node in &mut bucket.nodes {
-                node.last_response = None;
-                node.last_query = None;
-                node.fail_count = 0;
-            }
+        for node in self.nodes.values_mut() {
+            node.last_response = None;
+            node.last_query = None;
+            node.fail_count = 0;
         }
     }
 
     /// Return all nodes whose status is `Questionable`.
     #[must_use]
     pub fn questionable_nodes(&self) -> Vec<(Id20, SocketAddr)> {
-        self.buckets
-            .iter()
-            .flat_map(|b| {
-                b.nodes
-                    .iter()
-                    .filter(|n| n.status() == NodeStatus::Questionable)
-                    .map(|n| (n.id, n.addr))
-            })
+        self.nodes
+            .values()
+            .filter(|n| n.status() == NodeStatus::Questionable)
+            .map(|n| (n.id, n.addr))
             .collect()
     }
 
     // ---- Internal ----
 
-    /// Determine which bucket a node ID belongs to.
-    ///
-    /// The bucket index is the number of leading matching bits between
-    /// `own_id` and `id`, clamped to the last bucket. Every bucket is
-    /// pre-allocated, so a node maps to its exact distance level.
-    fn bucket_index(&self, id: &Id20) -> usize {
+    /// Number of leading matching bits between `own_id` and `id` (0..=159;
+    /// only our own ID, never inserted, would reach 160). Used only for the
+    /// `bucket_count()` diagnostic; insertion/lookup no longer depend on it.
+    fn distance_level(&self, id: &Id20) -> usize {
         let distance = self.own_id.xor_distance(id);
-        let leading_zeros = leading_zeros_160(&distance);
-        // Clamp to the last bucket (distance 0..MAX_BUCKETS-1 are exact;
-        // only our own ID, which is never inserted, would reach 160).
-        leading_zeros.min(MAX_BUCKETS - 1)
-    }
-}
-
-/// Count leading zero bits in a 160-bit (20-byte) value.
-fn leading_zeros_160(id: &Id20) -> usize {
-    let mut zeros = 0;
-    for &byte in id.as_bytes() {
-        if byte == 0 {
-            zeros += 8;
-        } else {
-            zeros += byte.leading_zeros() as usize;
-            break;
+        let mut zeros = 0;
+        for &byte in distance.as_bytes() {
+            if byte == 0 {
+                zeros += 8;
+            } else {
+                zeros += byte.leading_zeros() as usize;
+                break;
+            }
         }
+        zeros.min(159)
     }
-    zeros
 }
 
 #[cfg(test)]
@@ -546,44 +401,51 @@ mod tests {
         format!("10.0.0.1:{port}").parse().unwrap()
     }
 
-    /// IDs that share the same distance bucket: bytes 18-19 set so every value
-    /// has the same leading-zero count from the origin (0x00..0x00 0x80.. → lz
-    /// 144). With pre-allocated buckets this is what fills one bucket to K.
-    fn same_bucket_id(n: u8) -> Id20 {
-        let mut bytes = [0u8; 20];
-        bytes[18] = 0x01;
-        bytes[19] = 0x80 | (n & 0x7F);
-        Id20(bytes)
-    }
-
     /// A node ID derived from `n` via SHA-1 so consecutive values spread
     /// uniformly across the whole 160-bit keyspace (every distance level is
-    /// reachable), which is what lets the table grow into many buckets.
+    /// reachable), which is what lets the table grow large.
     fn spread_id(n: u64) -> Id20 {
         gaia_core::sha1(&n.to_le_bytes())
     }
 
     #[test]
     fn table_grows_past_old_ceiling() {
-        // K=8 saturated around ~280 nodes. With K=80 each pre-allocated
-        // distance level holds up to 80 nodes, so the table grows toward
-        // K × log2(N) — thousands as the observed node population grows. 500k
-        // uniformly-spread nodes must yield well past the old 280 ceiling.
-        let mut rt = RoutingTable::with_config(Id20::ZERO, false, 8192);
-        for n in 1..500_000u64 {
+        // The old 160-bucket structure saturated near ~12,800 (and far lower in
+        // practice). A flat uncapped table must admit hundreds of thousands.
+        let mut rt = RoutingTable::with_config(Id20::ZERO, false, 500_000);
+        for n in 1..20_000u64 {
             let id = spread_id(n);
             rt.insert(id, addr((n % 60_000) as u16));
         }
         assert!(
-            rt.len() > 1000,
-            "table should exceed the old ~280 ceiling, got {}",
+            rt.len() > 12_800,
+            "table should exceed the old 12,800 ceiling, got {}",
             rt.len()
         );
         assert!(
-            rt.len() <= 8192,
+            rt.len() <= 500_000,
             "table must respect the node cap, got {}",
             rt.len()
         );
+    }
+
+    #[test]
+    fn dense_region_not_saturated() {
+        // Many distinct nodes whose IDs share the high-density distance region
+        // (leading zero count 0 — half the keyspace) must all be retained rather
+        // than rejected after a fixed per-region limit.
+        let mut rt = RoutingTable::new(Id20::ZERO);
+        for n in 0..1000u64 {
+            let mut bytes = [0u8; 20];
+            // Top byte >= 0x80 ⇒ leading-zero distance level 0 (half the
+            // keyspace), same dense region for every ID.
+            bytes[0] = 0x80 | (n & 0x7F) as u8;
+            bytes[1] = ((n >> 7) & 0xFF) as u8;
+            bytes[2] = ((n >> 15) & 0xFF) as u8;
+            bytes[3] = ((n >> 23) & 0xFF) as u8;
+            rt.insert(Id20(bytes), addr((n % 60_000) as u16));
+        }
+        assert_eq!(rt.len(), 1000, "dense region must not reject distinct nodes");
     }
 
     #[test]
@@ -623,16 +485,6 @@ mod tests {
             last_query: None,
         };
         assert_eq!(stale.status(), NodeStatus::Questionable);
-    }
-
-    /// M175 regression: `RoutingTable::stale_buckets` previously used
-    /// `Instant::now() - max_age` and panicked when `max_age` exceeded
-    /// process uptime. Should now compare elapsed time forward.
-    #[test]
-    fn stale_buckets_does_not_panic_on_large_max_age() {
-        let rt = RoutingTable::new(Id20::ZERO);
-        // 24-hour max_age — far exceeds any test process uptime.
-        let _ = rt.stale_buckets(std::time::Duration::from_hours(24));
     }
 
     #[test]
@@ -685,33 +537,22 @@ mod tests {
     }
 
     #[test]
-    fn bucket_splitting() {
-        let mut rt = RoutingTable::new(Id20::ZERO);
-        // Insert K+1 nodes — should trigger split since bucket holds K=80.
-        for i in 1..=(K as u16 + 1) {
-            rt.insert(id((i % 256) as u8), addr(i));
+    fn closest_correct_at_scale() {
+        // With a large table, closest() must still return the true nearest
+        // nodes by XOR distance.
+        let mut rt = RoutingTable::with_config(Id20::ZERO, false, 500_000);
+        for n in 1..10_000u64 {
+            rt.insert(spread_id(n), addr((n % 60_000) as u16));
         }
-        assert!(rt.bucket_count() > 1);
-        assert_eq!(rt.len(), K + 1);
-    }
-
-    #[test]
-    fn evict_failed_node() {
-        let mut rt = RoutingTable::new(Id20::ZERO);
-        // Fill bucket to capacity
-        for i in 1..=K as u8 {
-            rt.insert(id(i), addr(u16::from(i)));
-        }
-        assert_eq!(rt.len(), K);
-
-        // Mark a node as failed
-        rt.mark_failed(&id(1));
-        rt.mark_failed(&id(1));
-
-        // This should evict the failed node
-        let new_id = id(100);
-        assert!(rt.insert(new_id, addr(100)));
-        assert!(rt.get(&new_id).is_some());
+        // Target ZERO; the single closest node is the smallest ID present.
+        let target = Id20::ZERO;
+        let closest = rt.closest(&target, 5);
+        assert_eq!(closest.len(), 5);
+        // Verify sorted ascending by XOR distance from target.
+        let dists: Vec<_> = closest.iter().map(|n| n.id.xor_distance(&target)).collect();
+        let mut sorted = dists.clone();
+        sorted.sort();
+        assert_eq!(dists, sorted);
     }
 
     #[test]
@@ -725,35 +566,12 @@ mod tests {
     }
 
     #[test]
-    fn stale_buckets_detection() {
-        let mut rt = RoutingTable::new(Id20::ZERO);
-        // Empty routing table — every pre-allocated bucket is stale
-        let stale = rt.stale_buckets(std::time::Duration::from_mins(15));
-        assert_eq!(stale.len(), rt.bucket_count());
-
-        // Insert a node — its bucket should not be stale
-        rt.insert(id(1), addr(1));
-        let stale = rt.stale_buckets(std::time::Duration::from_mins(15));
-        assert!(stale.len() == rt.bucket_count() - 1, "one bucket refreshed");
-    }
-
-    #[test]
-    fn leading_zeros_correct() {
-        assert_eq!(leading_zeros_160(&Id20::ZERO), 160);
-        assert_eq!(leading_zeros_160(&id(1)), 159);
-        assert_eq!(leading_zeros_160(&id(128)), 152);
-        let mut full = [0xFFu8; 20];
-        assert_eq!(leading_zeros_160(&Id20(full)), 0);
-        full[0] = 0x01;
-        full[1..].fill(0);
-        assert_eq!(leading_zeros_160(&Id20(full)), 7);
-    }
-
-    #[test]
-    fn random_id_in_bucket_differs() {
-        let rt = RoutingTable::new(Id20::ZERO);
-        let rand_id = rt.random_id_in_bucket(0);
-        assert_ne!(rand_id, Id20::ZERO);
+    fn remove_evicts_ip_slot() {
+        let mut rt = RoutingTable::new_with_config(Id20::ZERO, true);
+        let a: SocketAddr = "10.0.0.1:1".parse().unwrap();
+        rt.insert(id(1), a);
+        rt.remove(&id(1));
+        assert_eq!(rt.len(), 0);
     }
 
     // ── BEP 42 IP restriction tests ────────────────────────────────
@@ -901,131 +719,43 @@ mod tests {
         assert!(rt.questionable_nodes().is_empty());
     }
 
-    #[test]
-    fn worst_node_evicts_oldest_on_tied_fail_counts() {
-        // Build a bucket manually to control insertion order and last_seen values
-        let mut bucket = KBucket::new();
-        let now = Instant::now();
-        // Node A: inserted earlier (older last_seen), fail_count=1
-        bucket.nodes.push(RoutingNode {
-            id: id(1),
-            addr: addr(1),
-            last_seen: now - std::time::Duration::from_secs(100),
-            fail_count: 1,
-            last_response: None,
-            last_query: None,
-        });
-        // Node B: inserted more recently (newer last_seen), fail_count=1
-        bucket.nodes.push(RoutingNode {
-            id: id(2),
-            addr: addr(2),
-            last_seen: now - std::time::Duration::from_secs(10),
-            fail_count: 1,
-            last_response: None,
-            last_query: None,
-        });
-        // worst_node should return index 0 (the oldest node)
-        let worst = bucket.worst_node().unwrap();
-        assert_eq!(
-            bucket.nodes[worst].id,
-            id(1),
-            "oldest node should be evicted on tied fail counts"
-        );
-    }
-
-    #[test]
-    fn worst_node_prefers_highest_fail_count() {
-        let mut bucket = KBucket::new();
-        let now = Instant::now();
-        bucket.nodes.push(RoutingNode {
-            id: id(1),
-            addr: addr(1),
-            last_seen: now,
-            fail_count: 3,
-            last_response: None,
-            last_query: None,
-        });
-        bucket.nodes.push(RoutingNode {
-            id: id(2),
-            addr: addr(2),
-            last_seen: now - std::time::Duration::from_secs(1000),
-            fail_count: 1,
-            last_response: None,
-            last_query: None,
-        });
-        let worst = bucket.worst_node().unwrap();
-        assert_eq!(
-            bucket.nodes[worst].id,
-            id(1),
-            "highest fail_count should win regardless of age"
-        );
-    }
-
-    #[test]
-    fn restrict_ips_eviction_frees_ip_slot() {
-        let mut rt = RoutingTable::new_with_config(Id20::ZERO, true);
-        // Fill a single distance bucket to capacity, each with different IP
-        for i in 1..=K as u8 {
-            let a: SocketAddr = format!("10.0.0.{i}:6881").parse().unwrap();
-            rt.insert(same_bucket_id(i), a);
-        }
-        assert_eq!(rt.len(), K);
-
-        // Mark a node as failed
-        rt.mark_failed(&same_bucket_id(1));
-        rt.mark_failed(&same_bucket_id(1));
-
-        // New node with a different IP should evict the failed node
-        let new_addr: SocketAddr = "10.0.0.100:6881".parse().unwrap();
-        assert!(rt.insert(same_bucket_id(K as u8 + 1), new_addr));
-        assert_eq!(rt.len(), K);
-        // The old IP (10.0.0.1) should be freed
-        let old_addr: SocketAddr = "10.0.0.1:6882".parse().unwrap();
-        assert!(rt.insert(same_bucket_id(K as u8 + 2), old_addr));
-    }
-
     // ── Node cap tests ─────────────────────────────────────────────
 
     #[test]
-    fn routing_table_node_cap_rejects_at_limit() {
-        // With max_nodes=4, inserting a 5th node should fail when no bad nodes
-        // exist in the target bucket.
+    fn node_cap_rejects_when_no_evictable_node() {
+        // With max_nodes=4 and no failing node, a 5th distinct node evicts the
+        // LRU (healthy) node rather than being rejected — the flat table always
+        // admits new nodes under LRU eviction at the ceiling.
         let mut rt = RoutingTable::with_config(Id20::ZERO, false, 4);
         for i in 1..=4u8 {
-            assert!(
-                rt.insert(id(i), addr(u16::from(i))),
-                "insert {i} should succeed"
-            );
+            assert!(rt.insert(id(i), addr(u16::from(i))));
         }
         assert_eq!(rt.len(), 4);
-        // 5th insert — all nodes are good, should be rejected
-        assert!(!rt.insert(id(5), addr(5)));
+        // 5th insert evicts the least-recently-seen (id 1) and admits id 5.
+        assert!(rt.insert(id(5), addr(5)));
         assert_eq!(rt.len(), 4);
+        assert!(rt.get(&id(5)).is_some());
+        assert!(rt.get(&id(1)).is_none());
     }
 
     #[test]
-    fn routing_table_node_cap_allows_eviction() {
-        // At the cap, a new node can still be inserted if a bad node (fail_count > 0)
-        // exists in the target bucket and can be evicted.
+    fn node_cap_evicts_failed_node_first() {
+        // At the cap, a failing node (fail_count > 0) is evicted before a
+        // healthy LRU node, so a failing node can be replaced.
         let mut rt = RoutingTable::with_config(Id20::ZERO, false, 4);
-        // Use same-bucket IDs so all four nodes contend for one bucket.
         for i in 1..=4u8 {
-            rt.insert(same_bucket_id(i), addr(u16::from(i)));
+            rt.insert(id(i), addr(u16::from(i)));
         }
         assert_eq!(rt.len(), 4);
-
-        // Mark node 1 as failed so it can be evicted
-        rt.mark_failed(&same_bucket_id(1));
-
-        // Insert at cap succeeds by evicting the failed node
-        assert!(rt.insert(same_bucket_id(5), addr(5)));
+        rt.mark_failed(&id(2));
+        assert!(rt.insert(id(5), addr(5)));
         assert_eq!(rt.len(), 4);
-        assert!(rt.get(&same_bucket_id(5)).is_some());
-        assert!(rt.get(&same_bucket_id(1)).is_none());
+        assert!(rt.get(&id(5)).is_some());
+        assert!(rt.get(&id(2)).is_none(), "failed node evicted first");
     }
 
     #[test]
-    fn routing_table_node_cap_allows_update() {
+    fn node_cap_allows_update() {
         // Updating an existing node must succeed even when at the cap.
         let mut rt = RoutingTable::with_config(Id20::ZERO, false, 4);
         for i in 1..=4u8 {
@@ -1040,11 +770,11 @@ mod tests {
     }
 
     #[test]
-    fn routing_table_default_cap_512() {
+    fn table_default_cap_is_high() {
         let rt = RoutingTable::new(Id20::ZERO);
-        // The default max_nodes should be 512
+        // Default is a high safety ceiling for unbounded-style growth.
         assert_eq!(rt.max_nodes, DEFAULT_MAX_NODES);
-        assert_eq!(rt.max_nodes, 512);
+        assert!(rt.max_nodes >= 100_000);
     }
 
     #[test]

@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # ---- Builder: compile the release binary ----
 FROM rust:1-slim AS builder
 WORKDIR /build

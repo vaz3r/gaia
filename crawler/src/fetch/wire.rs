@@ -40,11 +40,17 @@ pub async fn fetch_from_peer(
         .await
         .with_context(|| format!("connect to {peer}"))?;
     stream.set_nodelay(true)?;
+    // SetLinger(0) (bitmagnet requester.go): close the socket immediately on
+    // drop, discarding unsent/unacked data so the OS never parks the port in
+    // TIME_WAIT. Crawling dials thousands of dead peers per minute; without
+    // this, TIME_WAIT sockets exhaust the ephemeral port range and new dials
+    // start failing with EADDRNOTAVAIL, collapsing throughput.
+    let _ = stream.set_linger(Some(std::time::Duration::ZERO));
 
     let (read, write) = stream.into_split();
 
     // 1. Standard handshake advertising BEP 10 extensions (raw 68 bytes).
-    let hs = Handshake::new(info_hash, peer_id).to_bytes();
+    let hs = Handshake::new(info_hash, peer_id).with_dht().with_fast().to_bytes();
     let mut writer = write;
     writer
         .write_all(&hs)
@@ -53,7 +59,7 @@ pub async fn fetch_from_peer(
 
     // 2. Extension handshake advertising ut_metadata (length-delimited).
     let mut ext = ExtHandshake::new();
-    ext.v = Some("crawler".into());
+    ext.v = Some("qBittorrent/4.6.5".into());
     let ext_msg = Message::Extended {
         ext_id: 0,
         payload: ext.to_bytes()?,
@@ -160,9 +166,10 @@ pub async fn fetch_from_peer(
     for piece in received {
         info.extend_from_slice(&piece.expect("all pieces present"));
     }
-    if info.len() != metadata_size {
+    if info.len() < metadata_size {
         bail!("assembled metadata size mismatch: got {}, want {metadata_size}", info.len());
     }
+    info.truncate(metadata_size);
 
     Ok(FetchedMetadata { info_bytes: info })
 }

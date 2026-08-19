@@ -102,6 +102,7 @@ pub async fn run_retry_worker(
                     peer_hint: None,
                     source: FetchSource::Retried,
                     lookup_seed: None,
+                    dht_handle: None,
                 })
                 .await;
             drop(permit);

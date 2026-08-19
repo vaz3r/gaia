@@ -1,0 +1,6 @@
+target/
+data/
+zerone
+.git/
+.gitignore
+*.md

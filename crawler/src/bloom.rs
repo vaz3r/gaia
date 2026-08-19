@@ -129,6 +129,19 @@ impl SharedBloom {
     pub fn contains(&self, key: &[u8]) -> bool {
         self.inner.lock().unwrap().contains(key)
     }
+
+    /// Bitmagnet's `ignoreHashes.testAndAdd`: atomically check membership and,
+    /// if absent, insert. Returns true if `key` was ALREADY present (a repeat);
+    /// false if it was newly added. One in-memory op — no Redis, no I/O — so
+    /// the sampler hot path matches bitmagnet's dedup exactly.
+    pub fn test_and_add(&self, key: &[u8]) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let present = inner.contains(key);
+        if !present {
+            inner.insert(key);
+        }
+        present
+    }
 }
 
 /// Derive two 64-bit hashes from a 20-byte infohash (splitmix64 of the key

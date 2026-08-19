@@ -94,7 +94,10 @@ impl SharedState {
             warn!(error = %e, "redis seen_add failed");
             return;
         }
-        self.maybe_cap_set(&key).await;
+        static SEEN_ADD_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        if SEEN_ADD_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 1000 == 0 {
+            self.maybe_cap_set(&key).await;
+        }
     }
 
     /// Flush a dedup set once it exceeds a cardinality cap. Dedup is
@@ -196,7 +199,15 @@ impl SharedState {
         }
         let key = format!("{}:dead", self.prefix);
         let mut c = conn.as_ref().clone();
-        self.prune_dead(&key, &mut c).await;
+        static LAST_PRUNE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let last = LAST_PRUNE.load(std::sync::atomic::Ordering::Relaxed);
+        if now - last > 30 && LAST_PRUNE.compare_exchange(last, now, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed).is_ok() {
+            self.prune_dead(&key, &mut c).await;
+        }
         let members: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
         let r: redis::RedisResult<Option<Vec<f64>>> = c.zscore_multiple(&key, &members).await;
         if let Ok(Some(scores)) = r {
@@ -305,8 +316,8 @@ impl SharedState {
         }
     }
 
-    /// Load sampler quality state: `addr -> (samples, failures, consecutive_stale)`.
-    pub async fn sampler_quality_get(&self) -> Vec<(String, u64, u64, u32)> {
+    /// Load sampler quality state: `addr -> (samples, failures, consecutive_stale, bep51_capable)`.
+    pub async fn sampler_quality_get(&self) -> Vec<(String, u64, u64, u32, bool)> {
         let Some(conn) = &self.conn else { return Vec::new() };
         let key = format!("{}:samp:quality", self.prefix);
         let mut c = conn.as_ref().clone();
@@ -318,20 +329,29 @@ impl SharedState {
                 let s = parts.next()?.parse().ok()?;
                 let f = parts.next()?.parse().ok()?;
                 let cs = parts.next()?.parse().ok()?;
-                Some((addr, s, f, cs))
+                // Backward-compatible: bep51_capable field is optional (old format
+                // has only 3 fields). Default to `true` for backward compatibility
+                // since old entries were stored from nodes that had proven BEP 51.
+                let bep51 = parts
+                    .next()
+                    .and_then(|b| b.parse().ok())
+                    .unwrap_or(true);
+                Some((addr, s, f, cs, bep51))
             })
             .collect()
     }
 
     /// Replace sampler quality state.
-    pub async fn sampler_quality_put(&self, rows: &[(String, u64, u64, u32)]) {
+    pub async fn sampler_quality_put(&self, rows: &[(String, u64, u64, u32, bool)]) {
         let Some(conn) = &self.conn else { return };
         let key = format!("{}:samp:quality", self.prefix);
         let mut c = conn.as_ref().clone();
         let _: redis::RedisResult<i64> = c.del(&key).await;
         let fields: Vec<(String, String)> = rows
             .iter()
-            .map(|(a, s, f, cs)| (a.clone(), format!("{s}:{f}:{cs}")))
+            .map(|(a, s, f, cs, bep51)| {
+                (a.clone(), format!("{s}:{f}:{cs}:{bep51}"))
+            })
             .collect();
         if !fields.is_empty() {
             let _: redis::RedisResult<i64> = c.hset_multiple(&key, &fields).await;

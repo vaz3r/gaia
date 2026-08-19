@@ -390,9 +390,11 @@ impl DhtLookup {
                     id: own_id,
                     info_hash: target,
                     noseed: None,
-                    // BEP 33: request seed/peer bloom filters so the fetch can
-                    // skip dialing hashes with no live seeders.
-                    scrape: Some(1),
+                    // Match bitmagnet: no scrape flag during peer discovery.
+                    // BEP 33 nodes reply with bloom filters when scrape=1,
+                    // which suppresses the peer `values` list; omit it so every
+                    // node returns the peers it actually knows for the hash.
+                    scrape: None,
                     want: want.clone(),
                 }),
                 sender_ip: None,

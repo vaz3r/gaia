@@ -129,6 +129,29 @@ impl FetchFailureKind {
             Self::Other
         }
     }
+
+    /// Parse a failure kind from its stable string form (as returned by
+    /// `as_str()`). Used to reconstruct a kind from the persisted
+    /// `failure_reason` or `dominant_failure` string.
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "timeout" => Self::Timeout,
+            "connect_refused" => Self::ConnectRefused,
+            "connection_reset" => Self::ConnectionReset,
+            "connection_closed" => Self::ConnectionClosed,
+            "handshake_failed" => Self::HandshakeFailed,
+            "no_ut_metadata" => Self::NoUtMetadata,
+            "metadata_rejected" => Self::MetadataRejected,
+            "parse_error" => Self::ParseError,
+            "sha1_mismatch" => Self::Sha1Mismatch,
+            "early_abort" => Self::EarlyAbort,
+            "deadline" => Self::Deadline,
+            "empty_peers" => Self::EmptyPeers,
+            "dht_lookup_failed" => Self::DhtLookupFailed,
+            "lookup_pool_exhausted" => Self::LookupPoolExhausted,
+            _ => Self::Other,
+        }
+    }
 }
 
 /// Maximum attempts per failure class. Transient classes (network/backend

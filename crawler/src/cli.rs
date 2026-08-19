@@ -165,8 +165,9 @@ pub struct RunArgs {
     #[arg(long, default_value_t = 256)]
     pub lookup_concurrency: usize,
 
-    /// Maximum number of nodes in the DHT routing table.
-    #[arg(long, default_value_t = 4096)]
+    /// Maximum number of nodes in the DHT routing table. High safety ceiling
+    /// (not a per-region gate) admitting 100k+ nodes for broad node coverage.
+    #[arg(long, default_value_t = 500_000)]
     pub max_nodes: usize,
 
     /// Disable irontide's one-node-per-IP routing restriction. Off by default;
@@ -246,21 +247,18 @@ impl RunArgs {
     }
 
     /// Effective sampler QPS after applying the aggressive preset and `--scale`.
-    /// Capped at 800: the sampler can only usefully query distinct nodes
-    /// (bounded by table size / re-query interval), but a ceiling below the
-    /// real query demand starved discovery after the leak fixes. 800 lets the
-    /// backoff-inversion + rotating-cursor spread reach more of the table.
+    /// 8000 lets the high-velocity sampling match Bitmagnet's throughput across all instances.
     pub fn effective_sampler_qps(&self) -> usize {
         let base = if self.aggressive { 1000 } else { self.sampler_qps };
-        base.saturating_mul(self.scale()).min(800)
+        base.saturating_mul(self.scale()).min(8000)
     }
 
     /// Effective sampler loops after applying the aggressive preset and `--scale`.
-    /// Capped at 64: enough loops to spread sampling across the routing table
-    /// (with the rotating cursor) without per-loop overhead dominating.
+    /// Capped at 1024: the sampler is node-limited (not QPS-limited) at ~5k
+    /// nodes, so more loops directly raise the unique-hash emission rate.
     pub fn effective_sampler_loops(&self) -> usize {
         let base = if self.aggressive { 64 } else { self.sampler_loops };
-        base.saturating_mul(self.scale()).min(64)
+        base.saturating_mul(self.scale()).min(1024)
     }
 
     /// Effective concurrency after applying the aggressive preset and `--scale`.
@@ -270,23 +268,19 @@ impl RunArgs {
     }
 
     /// Effective lookup concurrency after applying the aggressive preset and `--scale`.
-    /// Capped at 384 (was 96): the 96 ceiling starved concurrent get_peers
-    /// lookups, capping discovery. 384 is ample for the fetch pool while the
-    /// leak fixes (64-node lookups, fast-exit, bounded announce_tokens) keep
-    /// active_lookups memory controlled.
     pub fn effective_lookup_concurrency(&self) -> usize {
         let base = if self.aggressive { 256 } else { self.lookup_concurrency };
-        base.saturating_mul(self.scale()).min(384)
+        base.saturating_mul(self.scale()).min(1024)
     }
 
     /// Effective DHT QPS after applying the aggressive preset.
     pub fn effective_qps(&self) -> usize {
-        if self.aggressive { 4000 } else { self.qps }
+        if self.aggressive { 8000 } else { self.qps }
     }
 
     /// Effective max routing nodes after applying the aggressive preset.
     pub fn effective_max_nodes(&self) -> usize {
-        if self.aggressive { 8192 } else { self.max_nodes }
+        if self.aggressive { 500_000 } else { self.max_nodes }
     }
 
     /// Effective query timeout after applying the aggressive preset.

@@ -1,0 +1,26 @@
+# Dev overlay: run the crawler from a host-built release binary mounted into
+# the runtime image, skipping the multi-minute `docker compose build` image
+# rebuild. Iteration loop:
+#
+#   cargo build --release -p crawler        # in crawler/
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d crawler
+#
+# The crawler still shares gluetun's netns (real egress IP, inbound DHT) and
+# reaches postgres/redis by compose hostname.
+services:
+  crawler:
+    image: gaia-crawler:latest
+    # Mount the host-built binary over the image's /usr/local/bin/crawler so
+    # docker-entrypoint.sh (resolv.conf fix + gosu) still runs and execs the
+    # freshly-built binary from PATH.
+    volumes:
+      - crawler-dev-bin:/opt/crawler
+    entrypoint:
+      - /bin/sh
+      - -c
+      - "ln -sf /opt/crawler/bin/crawler /usr/local/bin/crawler && exec docker-entrypoint.sh run --pg postgres://crawler:${POSTGRES_PASSWORD}@postgres:5432/crawler_bench5 --port 6881 --health-port 9777 --instances 2 --min-seen 1 --min-seen-shadow 0 --min-sightings 1 --scale 10 --concurrency 200 --lookup-concurrency 64 --sampler-qps 1600 --sampler-loops 256 --sampler-max-interval 30 --max-nodes 65536 --max-attempts 4 --no-restrict-ips --qps 16000 --redis-url redis://redis:6379 --redis-prefix dhtbench5 --log crawler=info"
+    command: []
+
+volumes:
+  crawler-dev-bin:
+    name: crawler-dev-bin

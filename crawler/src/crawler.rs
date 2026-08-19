@@ -73,6 +73,28 @@ pub async fn run(args: RunArgs) -> Result<()> {
     let blocklist = Arc::new(Blocklist::load(args.blocklist.as_deref())?);
     let shared = crate::redis::init_shared(args.redis_url.clone(), Some(args.redis_prefix.clone())).await;
 
+    let shutdown = CancellationToken::new();
+
+    // Built-in HTTP health endpoint (--health-port). Start early so container
+    // health checks pass during startup and routing seeding.
+    if args.health_port > 0 {
+        let hp = args.health_port;
+        let health_shutdown = shutdown.clone();
+        let health_storage = storage.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::health::serve(
+                hp,
+                process_start_ts,
+                health_storage,
+                health_shutdown,
+            )
+            .await
+            {
+                tracing::error!(port = hp, error = %e, "health server failed");
+            }
+        });
+    }
+
     let instances = args.instances.max(1);
     info!(
         port = args.port,
@@ -98,7 +120,25 @@ pub async fn run(args: RunArgs) -> Result<()> {
         handles.push(handle);
     }
 
-    let shutdown = CancellationToken::new();
+    // Shared rotating `soughtNodeID` for the grower and every sampler loop
+    // (bitmagnet's single shared target): both find_node and sample_infohashes
+    // aim at ONE keyspace region per window, and the region rotates every 10s.
+    // This makes the routing table concentrate near the region being sampled,
+    // so found_node nodes are sampling-relevant and new-hash yield stays high.
+    let (sought_tx, sought_rx0) = tokio::sync::watch::channel(discovery::random_id20());
+    {
+        let sought_tx = sought_tx.clone();
+        let shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => return,
+                    _ = tokio::time::sleep(Duration::from_secs(10)) => {}
+                }
+                let _ = sought_tx.send(discovery::random_id20());
+            }
+        });
+    }
 
     // Spawn one continuous routing grower per instance so each routing table
     // climbs toward --max-nodes throughout the crawl (not just at startup).
@@ -109,8 +149,15 @@ pub async fn run(args: RunArgs) -> Result<()> {
     for handle in &handles {
         let handle = handle.clone();
         let shutdown = shutdown.clone();
+        let sought_rx = sought_rx0.clone();
         growers.spawn(async move {
-            discovery::grow_routing(handle, Duration::from_millis(250), shutdown).await;
+            discovery::grow_routing(
+                handle,
+                Duration::from_millis(100),
+                shutdown,
+                sought_rx,
+            )
+            .await;
         });
     }
 
@@ -219,6 +266,7 @@ pub async fn run(args: RunArgs) -> Result<()> {
             shared.clone(),
             seen_bloom.clone(),
             liveness.clone(),
+            sought_rx0.clone(),
         );
         samplers.spawn(async move { sampler.run().await });
     }
@@ -293,20 +341,9 @@ pub async fn run(args: RunArgs) -> Result<()> {
         stats.clone(),
         liveness.clone(),
         storage.clone(),
+        shared.clone(),
         process_start_ts,
     ));
-
-    // Optional built-in HTTP health endpoint (--health-port, default off). The
-    // DHT UDP path has no HTTP surface; this gives the container healthcheck and
-    // external monitoring a real endpoint plus a Postgres liveness probe.
-    if args.health_port > 0 {
-        tokio::spawn(crate::health::serve(
-            args.health_port,
-            process_start_ts,
-            storage.clone(),
-            shutdown.clone(),
-        ));
-    }
 
     wait_for_shutdown().await;
 
@@ -392,11 +429,17 @@ async fn stats_loop(
     stats: Arc<CrawlStats>,
     liveness: Arc<discovery::LivenessCounter>,
     storage: Storage,
+    shared: crate::redis::SharedState,
     process_start_ts: u64,
 ) {
     let mut tick = tokio::time::interval(STATS_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_unique: u64 = 0;
+    // Persist the union of every instance's routing table to the shared Redis
+    // node pool every tick (30s) so the discovered neighborhood survives
+    // crashes/restarts — otherwise the pool is only written on graceful
+    // shutdown and the table re-grows from scratch after every restart.
+    let mut last_persist: std::time::Instant = std::time::Instant::now();
     // System resource sampling for the monitoring snapshot (tun0 = tunnel iface).
     let mut sysmetrics = crate::sysmetrics::SysMetricSampler::new("tun0", std::path::Path::new("/data"));
     // Heap profiling: when GAIA_PROF_DUMP_EVERY_TICKS is set, dump a jemalloc
@@ -412,6 +455,19 @@ async fn stats_loop(
             if every > 0 && tick_count.is_multiple_of(every) {
                 jemalloc_prof_dump();
             }
+        }
+        // Persist the routing-table union to the shared Redis pool every tick
+        // (30s). `node_pool_put` is a DEL+SADD replace, so this is idempotent.
+        if last_persist.elapsed() >= Duration::from_secs(30) {
+            last_persist = std::time::Instant::now();
+            let mut pool_nodes: Vec<String> = Vec::new();
+            for handle in &handles {
+                for (_, addr) in handle.get_routing_nodes().await {
+                    pool_nodes.push(addr.to_string());
+                }
+            }
+            shared.node_pool_put(&pool_nodes).await;
+            tracing::info!(pool_size = pool_nodes.len(), "persisted shared node pool to redis");
         }
         // Per-instance + fleet-wide aggregate routing/actor stats. The
         // per-instance breakdown identifies redundant instances; the aggregate
@@ -527,6 +583,10 @@ async fn stats_loop(
             fetch_deadline = s.fetch_deadline.load(r),
             early_abort = s.early_abort.load(r),
             peer_errors_other = s.peer_errors_other.load(r),
+            direct_peers_found = s.direct_peers_found.load(r),
+            direct_peers_empty = s.direct_peers_empty.load(r),
+            direct_peers_error = s.direct_peers_error.load(r),
+            direct_peers_timeout = s.direct_peers_timeout.load(r),
             "peer failure breakdown"
         );
 

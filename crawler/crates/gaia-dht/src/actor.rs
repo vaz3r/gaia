@@ -146,8 +146,9 @@ pub struct DhtConfig {
     pub dht_max_items: usize,
     /// BEP 44: Lifetime of DHT items in seconds before expiry.
     pub dht_item_lifetime_secs: u64,
-    /// Maximum number of nodes in the routing table. Prevents unbounded growth
-    /// from adversarial node injection. Default: 512 (matches rqbit).
+    /// Maximum number of nodes in the routing table. High safety ceiling (not
+    /// a per-region gate) that admits 100k+ nodes for broad distinct-node
+    /// sampling while bounding memory via LRU eviction. Default: 500,000.
     pub max_routing_nodes: usize,
     /// Directory for persisting DHT routing table state as JSON.
     /// When set, the actor saves/loads `dht_state.json` (V4) or
@@ -179,7 +180,7 @@ impl Default for DhtConfig {
             restrict_routing_ips: true,
             dht_max_items: 700,
             dht_item_lifetime_secs: 7200,
-            max_routing_nodes: 512,
+            max_routing_nodes: 500_000,
             state_dir: None,
             read_only_mode: false,
             enable_multi_address: true,
@@ -205,7 +206,7 @@ impl DhtConfig {
             restrict_routing_ips: true,
             dht_max_items: 700,
             dht_item_lifetime_secs: 7200,
-            max_routing_nodes: 512,
+            max_routing_nodes: 500_000,
             state_dir: None,
             read_only_mode: false,
             enable_multi_address: true,
@@ -347,6 +348,28 @@ enum DhtCommand {
         target: Id20,
         reply: oneshot::Sender<Result<SampleInfohashesResult>>,
     },
+    /// BEP 51 sample against a SPECIFIC node address with a caller-supplied
+    /// target (bitmagnet's `SampleInfoHashes(n.Addr(), soughtNodeID)`). The
+    /// rotating target spreads sampling across the node's keyspace regions so
+    /// the same node yields different hashes on successive queries — the
+    /// default `SampleInfohashes` always resolves to the keyspace-closest node
+    /// and re-samples the same region, causing the ~77% repeat rate.
+    SampleInfohashesFrom {
+        addr: SocketAddr,
+        target: Id20,
+        reply: oneshot::Sender<Result<SampleInfohashesResult>>,
+    },
+    /// One-shot BEP 5 `find_node` to a specific node (bitmagnet's
+    /// `getNodesForFindNode` / `runFindNode` node-discovery loop). The response
+    /// nodes are already injected into the routing table by the actor; this
+    /// method exists so the grower can drive table growth via the same oldest-
+    /// node re-query cadence bitmagnet uses, rather than only blind
+    /// `get_peers(random)` walks.
+    FindNode {
+        addr: SocketAddr,
+        target: Id20,
+        reply: oneshot::Sender<Result<()>>,
+    },
     DirectGetPeers {
         target: SocketAddr,
         info_hash: Id20,
@@ -354,6 +377,17 @@ enum DhtCommand {
     },
     GetRoutingNodes {
         reply: oneshot::Sender<Vec<(Id20, SocketAddr)>>,
+    },
+    GetOldestNodes {
+        count: usize,
+        reply: oneshot::Sender<Vec<(Id20, SocketAddr)>>,
+    },
+    /// Bitmagnet's `DropNode`: remove a node from the routing table. Used on
+    /// query errors so failing/unresponsive nodes don't keep consuming the
+    /// sampler's candidate budget.
+    RemoveNode {
+        addr: SocketAddr,
+        reply: oneshot::Sender<()>,
     },
     /// M173 Lane B (B7): synchronously persist the routing table to
     /// `dht_state.json` and reply when the rename has completed.
@@ -699,6 +733,51 @@ impl DhtHandle {
         reply_rx.await.map_err(|_| Error::Shutdown)?
     }
 
+    /// BEP 51 `sample_infohashes` against a specific node address with a
+    /// caller-supplied target (bitmagnet's rotating `soughtNodeID`). Spreads
+    /// sampling across a node's keyspace so repeated queries yield new hashes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Shutdown`] if the actor has stopped.
+    pub async fn sample_infohashes_from(
+        &self,
+        addr: SocketAddr,
+        target: Id20,
+    ) -> Result<SampleInfohashesResult> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(DhtCommand::SampleInfohashesFrom {
+                addr,
+                target,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| Error::Shutdown)?;
+        reply_rx.await.map_err(|_| Error::Shutdown)?
+    }
+
+    /// One-shot `find_node` to a specific node (bitmagnet node-discovery loop).
+    /// Response nodes are injected into the routing table by the actor; this
+    /// returns once the query is sent (the response arrives asynchronously and
+    /// is processed by the actor's response handler).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Shutdown`] if the actor has stopped.
+    pub async fn find_node(&self, addr: SocketAddr, target: Id20) -> Result<()> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(DhtCommand::FindNode {
+                addr,
+                target,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| Error::Shutdown)?;
+        reply_rx.await.map_err(|_| Error::Shutdown)?
+    }
+
     /// Query a specific remote DHT node directly for peers of an infohash in a single
     /// 1-shot KRPC `get_peers` request (Bitmagnet pattern).
     ///
@@ -750,6 +829,34 @@ impl DhtHandle {
             .send(DhtCommand::GetRoutingNodes { reply: reply_tx })
             .await;
         reply_rx.await.unwrap_or_default()
+    }
+
+    /// Return up to `count` least-recently-seen nodes (bitmagnet's
+    /// `GetOldestNodes`), for the grower's oldest-node `find_node` refresh loop.
+    pub async fn get_oldest_nodes(&self, count: usize) -> Vec<(Id20, SocketAddr)> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let _ = self
+            .tx
+            .send(DhtCommand::GetOldestNodes {
+                count,
+                reply: reply_tx,
+            })
+            .await;
+        reply_rx.await.unwrap_or_default()
+    }
+
+    /// Remove a node from the routing table by address (bitmagnet's DropNode).
+    /// Fire-and-forget: the actor finds the entry by addr and drops it.
+    pub async fn remove_node(&self, addr: SocketAddr) {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let _ = self
+            .tx
+            .send(DhtCommand::RemoveNode {
+                addr,
+                reply: reply_tx,
+            })
+            .await;
+        let _ = reply_rx.await;
     }
 }
 
@@ -1110,12 +1217,26 @@ impl DhtActor {
                         Some(DhtCommand::SampleInfohashes { target, reply }) => {
                             self.handle_sample_infohashes(target, reply).await;
                         }
+                        Some(DhtCommand::SampleInfohashesFrom { addr, target, reply }) => {
+                            self.handle_sample_infohashes_from(addr, target, reply).await;
+                        }
+                        Some(DhtCommand::FindNode { addr, target, reply }) => {
+                            self.handle_find_node(addr, target, reply).await;
+                        }
                         Some(DhtCommand::DirectGetPeers { target, info_hash, reply }) => {
                             self.handle_direct_get_peers(target, info_hash, reply).await;
                         }
                         Some(DhtCommand::GetRoutingNodes { reply }) => {
                             let nodes = self.routing_table.read().all_nodes();
                             let _ = reply.send(nodes);
+                        }
+                        Some(DhtCommand::GetOldestNodes { count, reply }) => {
+                            let nodes = self.routing_table.read().oldest_nodes(count);
+                            let _ = reply.send(nodes);
+                        }
+                        Some(DhtCommand::RemoveNode { addr, reply }) => {
+                            self.handle_remove_node(addr);
+                            let _ = reply.send(());
                         }
                         Some(DhtCommand::SaveRoutingTable { reply }) => {
                             // M173 Lane B (B7): synchronous persist
@@ -1161,7 +1282,7 @@ impl DhtActor {
 
                 // Periodic maintenance (routing table housekeeping)
                 _ = maintenance_tick.tick() => {
-                    self.maintenance().await;
+                    self.maintenance();
                 }
 
                 // Peer store and item store cleanup
@@ -1368,6 +1489,9 @@ impl DhtActor {
                 if let Some((_, pending)) = self.pending.remove(&txn)
                     && let Some(nid) = pending.node_id
                 {
+                    // Bitmagnet's responderNodeDiscovery: harvest every inbound sender,
+                    // including error responders — an error proves the node is reachable.
+                    self.checked_insert(nid, addr, false);
                     self.routing_table.write().mark_failed(&nid);
                 }
             }
@@ -1401,10 +1525,18 @@ impl DhtActor {
             return; // Reject wrong address family
         }
         let sender_id = *query.sender_id();
-        self.checked_insert(sender_id, addr, msg.read_only);
+        let is_new = self.checked_insert(sender_id, addr, msg.read_only);
         self.routing_table.write().mark_query(&sender_id);
 
         let own_id = *self.routing_table.read().own_id();
+
+        // Bitmagnet's discoveredNodes → find_node sweep: a newly-seen inbound sender
+        // gets an immediate find_node targeting our own ID so we harvest its neighbors.
+        // This breaks the single-IP routing-table ceiling (2,240 nodes → 50k+).
+        if is_new && !msg.read_only {
+            self.send_find_node(addr, own_id, None).await;
+        }
+
         let response = match query {
             KrpcQuery::Ping { id: _ } => KrpcResponse::NodeId { id: own_id },
             KrpcQuery::FindNode {
@@ -1986,6 +2118,26 @@ impl DhtActor {
                     let _ = reply.send(Ok(gp.peers.clone()));
                 }
             }
+            (PendingQueryKind::DirectGetPeers, KrpcResponse::FindNode { nodes, nodes6, .. }) => {
+                for node in nodes {
+                    if self.matches_family(&node.addr) {
+                        self.checked_insert(node.id, node.addr, false);
+                    }
+                }
+                for node in nodes6 {
+                    if self.matches_family(&node.addr) {
+                        self.checked_insert(node.id, node.addr, false);
+                    }
+                }
+                if let Some(reply) = self.direct_peer_replies.remove(&txn) {
+                    let _ = reply.send(Ok(Vec::new()));
+                }
+            }
+            (PendingQueryKind::DirectGetPeers, _) => {
+                if let Some(reply) = self.direct_peer_replies.remove(&txn) {
+                    let _ = reply.send(Ok(Vec::new()));
+                }
+            }
             (
                 PendingQueryKind::GetItem { target },
                 KrpcResponse::GetItem {
@@ -2216,13 +2368,14 @@ impl DhtActor {
         let lookup = crate::dht_lookup::DhtLookup::new(
             info_hash,
             crate::dht_lookup::LookupConfig {
-                max_depth: 4,
-                // 64-node walks instead of 256: a crawler's get_peers lookups
-                // (routing growth + fetch peer discovery) only need a few peers
-                // / nodes, and 256-node walks hold ~4x the in-flight query state
-                // per lookup. At high lookup churn that 4x was the dominant
-                // memory growth source.
-                max_nodes: 64,
+                max_depth: 6,
+                // 256-node walks: the crawler's get_peers walks (routing growth
+                // + fetch peer discovery) need to reach far into untouched
+                // keyspace so the routing table can grow past the bootstrap
+                // pool. Shallow 64-node/4-deep walks fast-exit before finding
+                // distant nodes, which caps the samplable-node supply and
+                // starves unique-hash discovery.
+                max_nodes: 256,
             },
             self.address_family,
             self.socket.clone(),
@@ -2569,7 +2722,7 @@ impl DhtActor {
         }
     }
 
-    async fn maintenance(&mut self) {
+    fn maintenance(&mut self) {
         // Query timeouts are now handled by expire_queries_and_advance_lookups()
 
         // Clean up completed DhtLookup tasks (where the JoinHandle has finished)
@@ -2621,20 +2774,9 @@ impl DhtActor {
             }
         });
 
-        // Refresh stale buckets
-        let stale = self
-            .routing_table
-            .read()
-            .stale_buckets(Duration::from_mins(15));
-        for bucket_idx in stale {
-            let target = self.routing_table.read().random_id_in_bucket(bucket_idx);
-            let closest = self.routing_table.read().closest(&target, 3);
-            for node in closest {
-                self.send_find_node(node.addr, target, Some(node.id)).await;
-            }
-        }
-
-        // Persist routing table to JSON (atomic write)
+        // Persist routing table to JSON (atomic write). (The per-bucket-target
+        // staleness refresh was removed: the grower's continuous whole-table
+        // find_node cycling already keeps nodes live across the whole keyspace.)
         self.save_routing_table();
     }
 
@@ -3055,11 +3197,13 @@ impl DhtActor {
         self.sample_replies.insert(txn, reply);
     }
 
-    async fn handle_direct_get_peers(
+    /// BEP 51 `sample_infohashes` sent directly to a specific node address with
+    /// a caller-supplied target (bitmagnet's rotating `soughtNodeID` pattern).
+    async fn handle_sample_infohashes_from(
         &mut self,
-        target: SocketAddr,
-        info_hash: Id20,
-        reply: oneshot::Sender<Result<Vec<SocketAddr>>>,
+        addr: SocketAddr,
+        target: Id20,
+        reply: oneshot::Sender<Result<SampleInfohashesResult>>,
     ) {
         if !self.rate_limiter.try_acquire() {
             let _ = reply.send(Err(Error::Timeout));
@@ -3069,11 +3213,96 @@ impl DhtActor {
         let own_id = *self.routing_table.read().own_id();
         let msg = KrpcMessage {
             transaction_id: TransactionId::from_u16(txn),
+            body: KrpcBody::Query(KrpcQuery::SampleInfohashes { id: own_id, target }),
+            sender_ip: None,
+            read_only: self.config.read_only_mode,
+        };
+        if let Ok(bytes) = msg.to_bytes() {
+            let _ = self.socket.send_to(&bytes, addr).await;
+            self.pending.insert(
+                txn,
+                PendingQuery {
+                    sent_at: Instant::now(),
+                    addr,
+                    kind: PendingQueryKind::SampleInfohashes,
+                    node_id: None,
+                    response_tx: None,
+                },
+            );
+            self.stats.total_queries_sent += 1;
+        }
+        self.sample_replies.insert(txn, reply);
+    }
+
+    /// One-shot `find_node` to a specific node; the response is handled by the
+    /// actor's `(FindNode, FindNode)` arm which injects returned nodes into the
+    /// routing table. The reply fires once the query is on the wire.
+    async fn handle_find_node(
+        &mut self,
+        addr: SocketAddr,
+        target: Id20,
+        reply: oneshot::Sender<Result<()>>,
+    ) {
+        if !self.rate_limiter.try_acquire() {
+            let _ = reply.send(Err(Error::Timeout));
+            return;
+        }
+        let txn = self.next_transaction_id();
+        let own_id = *self.routing_table.read().own_id();
+        let msg = KrpcMessage {
+            transaction_id: TransactionId::from_u16(txn),
+            body: KrpcBody::Query(KrpcQuery::FindNode {
+                id: own_id,
+                target,
+                want: self.outgoing_want(),
+            }),
+            sender_ip: None,
+            read_only: self.config.read_only_mode,
+        };
+        if let Ok(bytes) = msg.to_bytes() {
+            let _ = self.socket.send_to(&bytes, addr).await;
+            self.pending.insert(
+                txn,
+                PendingQuery {
+                    sent_at: Instant::now(),
+                    addr,
+                    kind: PendingQueryKind::FindNode,
+                    node_id: None,
+                    response_tx: None,
+                },
+            );
+            self.stats.total_queries_sent += 1;
+        }
+        let _ = reply.send(Ok(()));
+    }
+
+    async fn handle_direct_get_peers(
+        &mut self,
+        target: SocketAddr,
+        info_hash: Id20,
+        reply: oneshot::Sender<Result<Vec<SocketAddr>>>,
+    ) {
+        // Direct get_peers is the ONLY peer-resolution path for sampled hashes.
+        // It must NOT share the actor's grower/sampler rate limiter: the grower's
+        // continuous find_node burst drains the bucket, so `try_acquire` rejects
+        // most direct queries with an immediate fake "timeout" — a primary cause
+        // of the 0% conversion. Bitmagnet gives the peer-resolution stage its own
+        // budget; here the fetch pipeline already bounds concurrency via
+        // `lookup_concurrency`, so direct queries skip the shared limiter.
+        let txn = self.next_transaction_id();
+        let own_id = *self.routing_table.read().own_id();
+        let msg = KrpcMessage {
+            transaction_id: TransactionId::from_u16(txn),
             body: KrpcBody::Query(KrpcQuery::GetPeers {
                 id: own_id,
                 info_hash,
                 noseed: None,
-                scrape: Some(1),
+                // Bitmagnet's crawler get_peers sends NO scrape flag — BEP 33
+                // nodes that see `scrape: 1` respond with seed/peer bloom
+                // filters instead of (or in addition to) peer values, starving
+                // direct peer resolution. Match bitmagnet: no scrape, so nodes
+                // return their peer `values` list directly.
+                scrape: None,
                 want: self.outgoing_want(),
             }),
             sender_ip: None,
@@ -3125,6 +3354,27 @@ impl DhtActor {
             return false;
         }
         self.routing_table.write().insert(id, addr)
+    }
+
+    /// Bitmagnet's `DropNode`: remove a node from the routing table by address.
+    /// Used on query errors so unresponsive/failing nodes stop consuming the
+    /// sampler's candidate budget and the table keeps room for fresh discoveries.
+    fn handle_remove_node(&mut self, addr: SocketAddr) {
+        let removed = {
+            let mut table = self.routing_table.write();
+            let id = table
+                .all_nodes()
+                .into_iter()
+                .find(|(_, a)| *a == addr)
+                .map(|(id, _)| id);
+            match id {
+                Some(id) => table.remove(&id),
+                None => false,
+            }
+        };
+        if removed {
+            trace!(%addr, "dropped node after query failure");
+        }
     }
 
     /// Regenerate our node ID to be BEP 42-compliant for the given external IP.
@@ -3379,7 +3629,7 @@ mod tests {
         let (handle, _ip_rx) = DhtHandle::start(config).await.unwrap();
         let stats = handle.stats().await.unwrap();
         assert_eq!(stats.routing_table_size, 0);
-        assert_eq!(stats.bucket_count, 160);
+        assert_eq!(stats.bucket_count, 0);
         assert_eq!(stats.pending_queries, 0);
         handle.shutdown().await.unwrap();
     }
@@ -3509,7 +3759,7 @@ mod tests {
         let (handle, _ip_rx) = DhtHandle::start(config).await.unwrap();
         let stats = handle.stats().await.unwrap();
         assert_eq!(stats.routing_table_size, 0);
-        assert_eq!(stats.bucket_count, 160);
+        assert_eq!(stats.bucket_count, 0);
         assert_eq!(stats.pending_queries, 0);
         assert_eq!(stats.total_queries_sent, 0);
         handle.shutdown().await.unwrap();
