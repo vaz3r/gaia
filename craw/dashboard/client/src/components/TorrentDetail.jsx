@@ -77,13 +77,30 @@ export default function TorrentDetail({ infohash, onClose }) {
                 </div>
               </div>
 
-              {Array.isArray(tor.files) && tor.files.length > 0 && (
+              {Array.isArray(tor.files) && tor.files.length > 0 ? (
                 <div>
                   <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">
                     Files ({tor.files.length})
                   </div>
                   <FileTree files={tor.files} />
                 </div>
+              ) : tor.file_count === 1 ? (
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500 mb-2">
+                    Files (1)
+                  </div>
+                  <div className="rounded-lg border border-ink-800 bg-ink-950 px-2 py-2 max-h-72 overflow-y-auto font-mono text-xs">
+                    <div className="flex items-center gap-1.5 py-0.5 text-slate-400">
+                      <span className="text-slate-600 w-4">·</span>
+                      <span className="truncate">{tor.name || '(unnamed)'}</span>
+                      <span className="text-[11px] text-slate-500 ml-auto pl-3">
+                        {formatBytes(tor.total_size)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-xs text-slate-500">No file list in metadata.</div>
               )}
             </div>
           )}
