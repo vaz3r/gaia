@@ -1,3 +1,5 @@
 .env
 session-*.md
 target/
+node_modules/
+dist/
