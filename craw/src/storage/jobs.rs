@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
+pub const MAX_RETRIES: i32 = 4;
+
 pub struct VerifyStore {
     pool: PgPool,
     backoffs: Vec<Duration>,
@@ -42,26 +44,42 @@ impl VerifyStore {
             Some(r) => r.get(0),
             None => 0,
         };
-        let idx = retry_count.max(0) as usize;
-        let delay = self
-            .backoffs
-            .get(idx)
-            .copied()
-            .unwrap_or(Duration::from_secs(365 * 86400));
-        let next = now_secs() + delay.as_secs();
-        sqlx::query(
-            "INSERT INTO verification_jobs (infohash, status, retry_count, next_retry_at, last_error, updated_at) \
-             VALUES ($1, 'failed', $2, to_timestamp($3), $4, now()) \
-             ON CONFLICT (infohash) DO UPDATE SET \
-             status = 'failed', retry_count = $2, next_retry_at = to_timestamp($3), \
-             last_error = $4, updated_at = now()",
-        )
-        .bind(ih.as_slice())
-        .bind(retry_count + 1)
-        .bind(next as f64)
-        .bind(error)
-        .execute(&self.pool)
-        .await?;
+        let new_count = retry_count + 1;
+        if new_count >= MAX_RETRIES {
+            sqlx::query(
+                "INSERT INTO verification_jobs (infohash, status, retry_count, next_retry_at, last_error, updated_at) \
+                 VALUES ($1, 'dead', $2, NULL, $4, now()) \
+                 ON CONFLICT (infohash) DO UPDATE SET \
+                 status = 'dead', retry_count = $2, next_retry_at = NULL, \
+                 last_error = $4, updated_at = now()",
+            )
+            .bind(ih.as_slice())
+            .bind(new_count)
+            .bind(error)
+            .execute(&self.pool)
+            .await?;
+        } else {
+            let idx = retry_count.max(0) as usize;
+            let delay = self
+                .backoffs
+                .get(idx)
+                .copied()
+                .unwrap_or(Duration::from_secs(365 * 86400));
+            let next = now_secs() + delay.as_secs();
+            sqlx::query(
+                "INSERT INTO verification_jobs (infohash, status, retry_count, next_retry_at, last_error, updated_at) \
+                 VALUES ($1, 'failed', $2, to_timestamp($3), $4, now()) \
+                 ON CONFLICT (infohash) DO UPDATE SET \
+                 status = 'failed', retry_count = $2, next_retry_at = to_timestamp($3), \
+                 last_error = $4, updated_at = now()",
+            )
+            .bind(ih.as_slice())
+            .bind(new_count)
+            .bind(next as f64)
+            .bind(error)
+            .execute(&self.pool)
+            .await?;
+        }
         Ok(())
     }
 
@@ -72,11 +90,13 @@ impl VerifyStore {
                  SELECT infohash FROM verification_jobs \
                  WHERE status IN ('pending', 'failed') \
                    AND (next_retry_at IS NULL OR next_retry_at <= now()) \
+                   AND (status = 'pending' OR retry_count < $2) \
                  ORDER BY next_retry_at NULLS FIRST \
                  LIMIT $1 FOR UPDATE SKIP LOCKED) \
              RETURNING infohash",
         )
         .bind(limit)
+        .bind(MAX_RETRIES)
         .fetch_all(&self.pool)
         .await?;
         let mut out = Vec::with_capacity(rows.len());
