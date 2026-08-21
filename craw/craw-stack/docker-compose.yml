@@ -1,0 +1,27 @@
+services:
+  db:
+    image: postgres:16
+    container_name: craw-db
+    environment:
+      POSTGRES_USER: crawler
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: craw
+    shm_size: 1g
+    ports:
+      - "0.0.0.0:5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    command: >
+      postgres
+        -c shared_buffers=1GB
+        -c effective_cache_size=3GB
+        -c work_mem=16MB
+        -c maintenance_work_mem=256MB
+        -c max_connections=200
+        -c wal_compression=on
+        -c max_wal_size=2GB
+        -c log_min_duration_statement=1000
+
+volumes:
+  pg-data:
