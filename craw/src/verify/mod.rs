@@ -7,8 +7,7 @@ pub mod wire;
 use crate::krpc::Infohash;
 use crate::metrics::{Add1, Metrics};
 use crate::router::Router;
-use crate::storage::jobs::VerifyStore;
-use crate::storage::torrents::TorrentStore;
+use crate::storage::batch_writer::BatchWriter;
 use crate::verify::fetch_pool::verify_infohash;
 use crate::verify::verify::check;
 use librqbit_utp::UtpSocketUdp;
@@ -25,8 +24,7 @@ pub async fn run_pipeline(
     router: Arc<Router>,
     utp: Option<Arc<UtpSocketUdp>>,
     metrics: Arc<Metrics>,
-    torrents: Arc<TorrentStore>,
-    jobs: Arc<VerifyStore>,
+    batch_writer: Arc<BatchWriter>,
     config: VerifyConfig,
 ) {
     let global = Arc::new(Semaphore::new(config.global_limit.max(1)));
@@ -38,8 +36,7 @@ pub async fn run_pipeline(
         let router = router.clone();
         let utp = utp.clone();
         let metrics = metrics.clone();
-        let torrents = torrents.clone();
-        let jobs = jobs.clone();
+        let batch_writer = batch_writer.clone();
         let race = config.race_peers.max(1);
         tokio::spawn(async move {
             let _permit = permit;
@@ -47,14 +44,12 @@ pub async fn run_pipeline(
             match verify_infohash(router, utp, ih, race, metrics.clone()).await {
                 Some(meta) if check(&ih, &meta) => {
                     metrics.verify_success.add(1);
-                    if let Err(e) = torrents.store(ih, &meta).await {
-                        tracing::warn!(error = %e, "torrent store insert failed");
-                    }
-                    let _ = jobs.mark_verified(ih).await;
+                    batch_writer.push_torrent(ih, &meta);
+                    batch_writer.push_verified(ih);
                 }
                 _ => {
                     metrics.verify_fail.add(1);
-                    let _ = jobs.mark_failed(ih, "fetch failed").await;
+                    batch_writer.push_failed(ih, "fetch failed");
                 }
             }
         });

@@ -1,4 +1,5 @@
 pub mod backfill;
+pub mod batch_writer;
 pub mod identity;
 pub mod jobs;
 pub mod metrics_writer;

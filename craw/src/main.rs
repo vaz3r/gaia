@@ -18,15 +18,15 @@ use crate::krpc::tx_state::TxTable;
 use crate::metrics::Metrics;
 use crate::net::rate_limit::RateLimiter;
 use crate::router::Router;
+use crate::storage::batch_writer::BatchWriter;
 use crate::storage::jobs::VerifyStore;
 use crate::storage::sightings::SightingWriter;
-use crate::storage::torrents::TorrentStore;
 use crate::verify::VerifyConfig;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 const CHANNEL_CAPACITY: usize = 65536;
 const ROUTING_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(60);
@@ -137,8 +137,6 @@ async fn main() {
     let sightings_run = sightings.clone().run(Duration::from_millis(500));
     let sightings_flush = flush_sightings(sightings.clone(), discovery_rx);
 
-    let torrents = Arc::new(TorrentStore::new(pool.clone()));
-
     let verify_store = Arc::new(VerifyStore::new(
         pool.clone(),
         vec![
@@ -153,6 +151,22 @@ async fn main() {
         .clone()
         .run_scheduler(verify_tx.clone(), Duration::from_secs(30));
 
+    let batch_writer = Arc::new(BatchWriter::new(
+        pool.clone(),
+        vec![
+            Duration::from_secs(60),
+            Duration::from_secs(300),
+            Duration::from_secs(1800),
+            Duration::from_secs(7200),
+            Duration::from_secs(43200),
+        ],
+    ));
+
+    let (shutdown_tx, _shutdown_rx) = broadcast::channel(1);
+    let batch_run = batch_writer
+        .clone()
+        .run(Duration::from_secs(1), shutdown_tx.subscribe());
+
     let metrics_writer = Arc::new(storage::metrics_writer::MetricsWriter::new(
         pool,
         metrics.clone(),
@@ -164,8 +178,7 @@ async fn main() {
         router.clone(),
         utp_socket().await,
         metrics.clone(),
-        torrents.clone(),
-        verify_store.clone(),
+        batch_writer.clone(),
         VerifyConfig {
             global_limit: config.global_fetch_limit,
             race_peers: config.race_peers,
@@ -181,23 +194,31 @@ async fn main() {
     let report = report_loop(
         metrics.clone(),
         sightings.clone(),
-        torrents.clone(),
+        batch_writer.clone(),
         Duration::from_secs(15),
     );
     let cleanup = tx_cleanup(router.clone());
     let token_rotate = token_rotation(token, Duration::from_secs(config.token_window_secs.max(60)));
+
+    let shutdown_signal = async {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("shutdown signal received, draining batch writer");
+        let _ = shutdown_tx.send(());
+    };
 
     tokio::select! {
         _ = walker.run() => {}
         _ = sightings_run => {}
         _ = sightings_flush => {}
         _ = retry_run => {}
+        _ = batch_run => {}
         _ = metrics_run => {}
         _ = pipeline => {}
         _ = routing_snapshot => {}
         _ = report => {}
         _ = cleanup => {}
         _ = token_rotate => {}
+        _ = shutdown_signal => {}
     }
 }
 
@@ -275,7 +296,7 @@ async fn resolve_bootstrap(hosts: &[String]) -> Vec<SocketAddr> {
 async fn report_loop(
     metrics: Arc<Metrics>,
     sightings: Arc<SightingWriter>,
-    torrents: Arc<TorrentStore>,
+    batch_writer: Arc<BatchWriter>,
     interval: Duration,
 ) {
     let mut prev = metrics.snapshot();
@@ -298,7 +319,7 @@ async fn report_loop(
             verified_per_hour = vph,
             unique_per_hour = uph,
             discovered_written = sightings.written(),
-            metadata_written = torrents.written(),
+            metadata_written = batch_writer.torrents_written(),
             inbound_ping = cur.inbound_ping,
             inbound_find_node = cur.inbound_find_node,
             inbound_get_peers = cur.inbound_get_peers,
