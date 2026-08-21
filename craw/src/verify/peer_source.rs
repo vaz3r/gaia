@@ -4,14 +4,15 @@ use crate::krpc::codec::BValue;
 use crate::krpc::message::{GET_PEERS, Kind};
 use crate::metrics::{Add1, Metrics};
 use crate::router::Router;
+use crate::verify::peer_cache::PeerCache;
 use bytes::Bytes;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
-const K: usize = 8;
+const QUERY_TIMEOUT: Duration = Duration::from_secs(8);
+const K: usize = 12;
 const ALPHA: usize = 3;
 const MAX_ROUNDS: usize = 8;
 
@@ -20,6 +21,7 @@ pub async fn source_peers(
     info_hash: Infohash,
     count: usize,
     metrics: Arc<Metrics>,
+    peer_cache: Arc<PeerCache>,
 ) -> Vec<SocketAddr> {
     let mut candidates: Vec<NodeInfo> = router.closest_nodes(&info_hash, K);
     if candidates.is_empty() {
@@ -29,6 +31,7 @@ pub async fn source_peers(
     let mut queried: HashSet<SocketAddr> = HashSet::new();
     let mut seen: HashSet<SocketAddr> = HashSet::new();
     let mut peers: Vec<SocketAddr> = Vec::new();
+    let mut succeeded: u64 = 0;
 
     for _ in 0..MAX_ROUNDS {
         let batch: Vec<NodeInfo> = candidates
@@ -67,35 +70,40 @@ pub async fn source_peers(
 
         let mut new_nodes: Vec<NodeInfo> = Vec::new();
         for task in tasks {
-            let Ok(Ok(msg)) = task.await else {
-                continue;
-            };
-            let Kind::Response { r } = &msg.kind else {
-                continue;
-            };
-            metrics.source_responses.add(1);
-            if let Some(values) = r.get(b"values").and_then(BValue::as_list) {
-                for v in values {
-                    if let Some(b) = v.as_bytes()
-                        && b.len() == 6
-                    {
-                        let ip = Ipv4Addr::new(b[0], b[1], b[2], b[3]);
-                        if !is_routable(ip) {
-                            continue;
-                        }
-                        let addr = SocketAddr::new(
-                            std::net::IpAddr::V4(ip),
-                            u16::from_be_bytes([b[4], b[5]]),
-                        );
-                        if seen.insert(addr) {
-                            peers.push(addr);
-                            metrics.source_peers_returned.add(1);
+            match task.await {
+                Ok(Ok(msg)) => {
+                    let Kind::Response { r } = &msg.kind else {
+                        continue;
+                    };
+                    metrics.source_responses.add(1);
+                    succeeded += 1;
+                    if let Some(values) = r.get(b"values").and_then(BValue::as_list) {
+                        for v in values {
+                            if let Some(b) = v.as_bytes()
+                                && b.len() == 6
+                            {
+                                let ip = Ipv4Addr::new(b[0], b[1], b[2], b[3]);
+                                if !is_routable(ip) {
+                                    continue;
+                                }
+                                let addr = SocketAddr::new(
+                                    std::net::IpAddr::V4(ip),
+                                    u16::from_be_bytes([b[4], b[5]]),
+                                );
+                                if seen.insert(addr) {
+                                    peers.push(addr);
+                                    metrics.source_peers_returned.add(1);
+                                }
+                            }
                         }
                     }
+                    if let Some(nodes) = r.get_bytes(b"nodes") {
+                        new_nodes.extend(decode_compact(nodes));
+                    }
                 }
-            }
-            if let Some(nodes) = r.get_bytes(b"nodes") {
-                new_nodes.extend(decode_compact(nodes));
+                Ok(Err(_)) | Err(_) => {
+                    metrics.source_timeout.add(1);
+                }
             }
             if peers.len() >= count {
                 break;
@@ -114,7 +122,30 @@ pub async fn source_peers(
     }
 
     peers.truncate(count);
-    peers
+    // Track total peers returned before cache filtering
+    metrics.source_returned_peers.add(peers.len() as u64);
+    // Filter out cached-bad peers
+    let filtered: Vec<SocketAddr> = peers
+        .into_iter()
+        .filter(|addr| {
+            if peer_cache.is_bad(addr) {
+                metrics.peer_cache_hits.add(1);
+                metrics.source_filtered_by_cache.add(1);
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+    // Infohash-level source failure classification
+    if succeeded == 0 {
+        metrics.source_all_timeout.add(1);
+        metrics.verify_fail.add(1);
+    } else if filtered.is_empty() {
+        metrics.source_no_peers.add(1);
+        metrics.verify_fail.add(1);
+    }
+    filtered
 }
 
 fn is_routable(ip: Ipv4Addr) -> bool {

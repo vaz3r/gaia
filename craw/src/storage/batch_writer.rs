@@ -1,24 +1,18 @@
 use crate::krpc::Infohash;
 use crate::storage::jobs::MAX_RETRIES;
 use crate::storage::torrents::parse_info_dict;
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use sqlx::Row;
 use sqlx::query_builder::QueryBuilder;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tokio::sync::broadcast;
 
 const FLUSH_CHUNK: usize = 5000;
 const BUFFER_MAX: usize = 8192;
-
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
 
 pub enum JobUpdate {
     Verified(Infohash),
@@ -31,14 +25,14 @@ pub struct TorrentEntry {
     pub piece_length: Option<i64>,
     pub total_size: Option<i64>,
     pub file_count: Option<i64>,
-    pub files: Option<String>,
+    pub files: Option<serde_json::Value>,
 }
 
 struct ResolvedJob<'a> {
     ih: &'a [u8],
     status: &'static str,
     retry_count: Option<i32>,
-    next_retry_at: Option<f64>,
+    next_retry_at: Option<DateTime<Utc>>,
     last_error: Option<&'a str>,
 }
 
@@ -77,7 +71,6 @@ impl BatchWriter {
 
     pub fn push_torrent(&self, ih: Infohash, metadata: &[u8]) {
         let p = parse_info_dict(metadata);
-        let files = p.files.as_ref().map(serde_json::Value::to_string);
         let mut buf = self.torrents.lock().expect("batch writer torrents poisoned");
         buf.push(TorrentEntry {
             ih,
@@ -85,7 +78,7 @@ impl BatchWriter {
             piece_length: p.piece_length,
             total_size: p.total_size,
             file_count: p.file_count,
-            files,
+            files: p.files,
         });
     }
 
@@ -116,14 +109,16 @@ impl BatchWriter {
         };
 
         if !job_batch.is_empty() {
-            flush_jobs(&self.pool, &job_batch).await;
-            self.jobs_written
-                .fetch_add(job_batch.len() as u64, Ordering::Relaxed);
+            if flush_jobs(&self.pool, &job_batch).await {
+                self.jobs_written
+                    .fetch_add(job_batch.len() as u64, Ordering::Relaxed);
+            }
         }
         if !torrent_batch.is_empty() {
-            flush_torrents(&self.pool, &torrent_batch).await;
-            self.torrents_written
-                .fetch_add(torrent_batch.len() as u64, Ordering::Relaxed);
+            if flush_torrents(&self.pool, &torrent_batch).await {
+                self.torrents_written
+                    .fetch_add(torrent_batch.len() as u64, Ordering::Relaxed);
+            }
         }
 
         self.flushing.store(false, Ordering::Release);
@@ -143,7 +138,7 @@ impl BatchWriter {
     }
 }
 
-async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) {
+async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> bool {
     let failed_ihs: Vec<&[u8]> = batch
         .iter()
         .filter_map(|u| match u {
@@ -188,7 +183,7 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) {
                     resolved.push(ResolvedJob {
                         ih: ih.as_slice(),
                         status: "verified",
-                        retry_count: None,
+                        retry_count: Some(0),
                         next_retry_at: None,
                         last_error: None,
                     });
@@ -210,12 +205,12 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) {
                         let delay = Duration::from_secs(60)
                             .checked_mul(1u32.checked_shl(idx as u32).unwrap_or(u32::MAX))
                             .unwrap_or(Duration::from_secs(43200));
-                        let next = now_secs() + delay.as_secs();
+                        let next = Utc::now() + chrono::Duration::from_std(delay).unwrap();
                         resolved.push(ResolvedJob {
                             ih: ih.as_slice(),
                             status: "failed",
                             retry_count: Some(new_count),
-                            next_retry_at: Some(next as f64),
+                            next_retry_at: Some(next),
                             last_error: Some(error),
                         });
                     }
@@ -251,12 +246,14 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) {
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!(error = %e, "batch: upsert verification_jobs failed");
+                return false;
             }
         }
     }
+    true
 }
 
-async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) {
+async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) -> bool {
     for chunk in batch.chunks(FLUSH_CHUNK) {
         let mut qb: QueryBuilder<'_, sqlx::Postgres> = QueryBuilder::new(
             "INSERT INTO torrents (infohash, name, piece_length, total_size, file_count, files, verified_at) ",
@@ -267,7 +264,7 @@ async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) {
             b.push_bind(e.piece_length);
             b.push_bind(e.total_size);
             b.push_bind(e.file_count);
-            b.push_bind(e.files.as_deref());
+            b.push_bind(e.files.as_ref());
             b.push("now()");
         });
         qb.push(
@@ -281,7 +278,9 @@ async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) {
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!(error = %e, "batch: upsert torrents failed");
+                return false;
             }
         }
     }
+    true
 }

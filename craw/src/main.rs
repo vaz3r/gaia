@@ -22,6 +22,7 @@ use crate::storage::batch_writer::BatchWriter;
 use crate::storage::jobs::VerifyStore;
 use crate::storage::sightings::SightingWriter;
 use crate::verify::VerifyConfig;
+use crate::verify::peer_cache::PeerCache;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -51,6 +52,13 @@ async fn main() {
         .run(&pool)
         .await
         .expect("run migrations");
+
+    sqlx::query(
+        "INSERT INTO metrics (ts, metric_name, metric_value) VALUES (now(), '_session_start', 0)",
+    )
+    .execute(&pool)
+    .await
+    .expect("write session start marker");
 
     if std::env::args().any(|a| a == "--backfill") {
         storage::backfill::run(&pool, &config.data_dir)
@@ -162,6 +170,9 @@ async fn main() {
         ],
     ));
 
+    let peer_cache = Arc::new(PeerCache::new(Duration::from_secs(600)));
+    let peer_cache_cleanup = peer_cache.clone();
+
     let (shutdown_tx, _shutdown_rx) = broadcast::channel(1);
     let batch_run = batch_writer
         .clone()
@@ -179,6 +190,7 @@ async fn main() {
         utp_socket().await,
         metrics.clone(),
         batch_writer.clone(),
+        peer_cache.clone(),
         VerifyConfig {
             global_limit: config.global_fetch_limit,
             race_peers: config.race_peers,
@@ -199,6 +211,7 @@ async fn main() {
     );
     let cleanup = tx_cleanup(router.clone());
     let token_rotate = token_rotation(token, Duration::from_secs(config.token_window_secs.max(60)));
+    let cache_cleanup = cache_cleanup_loop(peer_cache_cleanup, metrics.clone(), Duration::from_secs(60));
 
     let shutdown_signal = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -218,6 +231,7 @@ async fn main() {
         _ = report => {}
         _ = cleanup => {}
         _ = token_rotate => {}
+        _ = cache_cleanup => {}
         _ = shutdown_signal => {}
     }
 }
@@ -349,6 +363,17 @@ async fn report_loop(
             source_queries = cur.source_queries,
             source_responses = cur.source_responses,
             source_peers = cur.source_peers_returned,
+            source_timeout = cur.source_timeout,
+            source_all_timeout = cur.source_all_timeout,
+            source_no_peers = cur.source_no_peers,
+            tcp_attempts = cur.tcp_attempts,
+            utp_attempts = cur.utp_attempts,
+            tcp_connect_ok = cur.tcp_connect_ok,
+            utp_connect_ok = cur.utp_connect_ok,
+            tcp_metadata_ok = cur.tcp_metadata_ok,
+            utp_metadata_ok = cur.utp_metadata_ok,
+            source_returned_peers = cur.source_returned_peers,
+            source_filtered_by_cache = cur.source_filtered_by_cache,
         );
         prev = cur;
     }
@@ -370,5 +395,17 @@ async fn token_rotation(token: Arc<Mutex<TokenGenerator>>, window: Duration) {
             .lock()
             .expect("token generator poisoned")
             .rotate(rand::random::<[u8; 32]>());
+    }
+}
+
+async fn cache_cleanup_loop(cache: Arc<PeerCache>, metrics: Arc<Metrics>, interval: Duration) {
+    let mut tick = tokio::time::interval(interval);
+    loop {
+        tick.tick().await;
+        let evicted = cache.evict_expired();
+        metrics.peer_cache_size.store(cache.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        if evicted > 0 {
+            metrics.peer_cache_evictions.fetch_add(evicted as u64, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 }

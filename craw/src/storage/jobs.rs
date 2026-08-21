@@ -84,18 +84,31 @@ impl VerifyStore {
     }
 
     pub async fn claim_due(&self, limit: i64) -> Result<Vec<Infohash>, sqlx::Error> {
+        let fresh_limit = (limit * 7 / 10).max(1);
+        let retry_limit = (limit - fresh_limit).max(1);
         let rows = sqlx::query(
-            "UPDATE verification_jobs SET status = 'verifying', updated_at = now() \
-             WHERE infohash IN ( \
-                 SELECT infohash FROM verification_jobs \
-                 WHERE status IN ('pending', 'failed') \
-                   AND (next_retry_at IS NULL OR next_retry_at <= now()) \
-                   AND (status = 'pending' OR retry_count < $2) \
-                 ORDER BY next_retry_at NULLS FIRST \
-                 LIMIT $1 FOR UPDATE SKIP LOCKED) \
-             RETURNING infohash",
+            "WITH fresh AS (
+                SELECT infohash FROM verification_jobs
+                WHERE status = 'pending'
+                ORDER BY next_retry_at NULLS FIRST
+                LIMIT $1
+                FOR UPDATE SKIP LOCKED
+            ),
+            retries AS (
+                SELECT infohash FROM verification_jobs
+                WHERE status = 'failed'
+                  AND (next_retry_at IS NULL OR next_retry_at <= now())
+                  AND retry_count < $3
+                ORDER BY retry_count ASC, next_retry_at ASC
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE verification_jobs SET status = 'verifying', updated_at = now()
+            WHERE infohash IN (SELECT infohash FROM fresh UNION SELECT infohash FROM retries)
+            RETURNING infohash",
         )
-        .bind(limit)
+        .bind(fresh_limit)
+        .bind(retry_limit)
         .bind(MAX_RETRIES)
         .fetch_all(&self.pool)
         .await?;

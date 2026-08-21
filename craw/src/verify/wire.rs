@@ -119,6 +119,10 @@ pub struct WireSession {
 }
 
 impl WireSession {
+    pub fn is_tcp(&self) -> bool {
+        matches!(self.stream, Transport::Tcp(_))
+    }
+
     pub async fn connect_tcp(
         addr: SocketAddr,
         info_hash: &[u8; 20],

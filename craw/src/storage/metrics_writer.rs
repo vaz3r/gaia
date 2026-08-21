@@ -75,5 +75,31 @@ fn snapshot_rows(s: &Snapshot) -> Vec<(&'static str, u64)> {
         ("source_responses", s.source_responses),
         ("source_peers_returned", s.source_peers_returned),
         ("send_dropped", s.send_dropped),
+        // Granular failure counters
+        ("source_timeout", s.source_timeout),
+        ("source_no_peers", s.source_no_peers),
+        ("source_all_timeout", s.source_all_timeout),
+        ("fetch_connect_timeout", s.fetch_connect_timeout),
+        ("fetch_connect_io", s.fetch_connect_io),
+        ("fetch_handshake", s.fetch_handshake),
+        ("fetch_no_extension", s.fetch_no_extension),
+        ("fetch_reject", s.fetch_reject),
+        ("fetch_bad_piece", s.fetch_bad_piece),
+        ("fetch_io", s.fetch_io),
+        ("sha1_mismatch", s.sha1_mismatch),
+        // Peer cache metrics
+        ("peer_cache_size", s.peer_cache_size),
+        ("peer_cache_hits", s.peer_cache_hits),
+        ("peer_cache_evictions", s.peer_cache_evictions),
+        // Source peer quality metrics
+        ("source_returned_peers", s.source_returned_peers),
+        ("source_filtered_by_cache", s.source_filtered_by_cache),
+        // Transport metrics
+        ("tcp_attempts", s.tcp_attempts),
+        ("utp_attempts", s.utp_attempts),
+        ("tcp_connect_ok", s.tcp_connect_ok),
+        ("utp_connect_ok", s.utp_connect_ok),
+        ("tcp_metadata_ok", s.tcp_metadata_ok),
+        ("utp_metadata_ok", s.utp_metadata_ok),
     ]
 }

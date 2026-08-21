@@ -134,9 +134,16 @@ app.get('/api/metrics/current', async (req, res) => {
   }
   try {
     const r = await query(
-      `WITH cur AS (
+       `WITH session_start AS (
+         SELECT ts FROM metrics WHERE metric_name = '_session_start'
+         ORDER BY ts DESC LIMIT 1
+       ),
+       cur AS (
          SELECT DISTINCT ON (metric_name) metric_name, metric_value, ts
-         FROM metrics ORDER BY metric_name, ts DESC
+         FROM metrics
+         WHERE metric_name != '_session_start'
+           AND ts >= (SELECT ts FROM session_start)
+         ORDER BY metric_name, ts DESC
        )
        SELECT c.metric_name,
               c.metric_value AS current_value,
@@ -144,9 +151,11 @@ app.get('/api/metrics/current', async (req, res) => {
               COALESCE(prev.metric_value, 0) AS value_1h_ago,
               EXTRACT(EPOCH FROM (c.ts - prev.ts)) / 3600.0 AS hours_elapsed
        FROM cur c
-LEFT JOIN LATERAL (
+       LEFT JOIN LATERAL (
            SELECT metric_value, ts FROM metrics m
-           WHERE m.metric_name = c.metric_name AND m.ts <= c.ts - interval '1 hour'
+           WHERE m.metric_name = c.metric_name
+             AND m.ts <= c.ts - interval '1 hour'
+             AND m.ts >= (SELECT ts FROM session_start)
            ORDER BY m.ts DESC LIMIT 1
          ) prev ON true
        ORDER BY c.metric_name`
@@ -155,10 +164,16 @@ LEFT JOIN LATERAL (
     const rates = {};
     r.rows.forEach((row) => {
       snapshot[row.metric_name] = Number(row.current_value);
-      if (row.hours_elapsed && row.hours_elapsed > 0) {
+      if (
+        row.hours_elapsed &&
+        row.hours_elapsed > 0 &&
+        row.current_value >= row.value_1h_ago
+      ) {
         rates[row.metric_name] = Number(
           (row.current_value - row.value_1h_ago) / row.hours_elapsed
         );
+      } else {
+        rates[row.metric_name] = null;
       }
     });
     metricsCache = {
@@ -174,7 +189,7 @@ LEFT JOIN LATERAL (
 // GET /api/metrics/history?metric=&from=&to=&interval=
 app.get('/api/metrics/history', async (req, res) => {
   const metric = String(req.query.metric || '');
-  if (!metric) return res.status(400).json({ error: 'metric is required' });
+  if (!metric || metric.startsWith('_')) return res.status(400).json({ error: 'metric is required' });
   const interval = INTERVALS.includes(req.query.interval) ? req.query.interval : 'minute';
   const to = req.query.to ? new Date(req.query.to) : new Date();
   const from = req.query.from
@@ -182,10 +197,15 @@ app.get('/api/metrics/history', async (req, res) => {
     : new Date(to.getTime() - 3600 * 1000);
   try {
     const r = await query(
-      `SELECT extract(epoch FROM date_trunc('${interval}', ts)) * 1000 AS t,
-              (array_agg(metric_value ORDER BY ts DESC))[1] AS value
-       FROM metrics
-       WHERE metric_name = $1 AND ts >= $2 AND ts <= $3
+      `WITH session_start AS (
+         SELECT ts FROM metrics WHERE metric_name = '_session_start'
+         ORDER BY ts DESC LIMIT 1
+       )
+       SELECT extract(epoch FROM date_trunc('${interval}', m.ts)) * 1000 AS t,
+              (array_agg(m.metric_value ORDER BY m.ts DESC))[1] AS value
+       FROM metrics m
+       JOIN session_start s ON m.ts >= s.ts
+       WHERE m.metric_name = $1 AND m.ts >= $2 AND m.ts <= $3
        GROUP BY 1 ORDER BY 1`,
       [metric, from, to]
     );

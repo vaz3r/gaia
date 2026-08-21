@@ -40,6 +40,7 @@ function Card({ label, value, sub, accent }) {
 }
 
 const fmt = (v) => {
+  if (v === null || v === undefined) return '—'
   const n = Number(v)
   return Number.isFinite(n) ? formatNum(Math.round(n)) : '—'
 }
@@ -95,7 +96,10 @@ export default function MetricsPanel() {
 
   const rates = cur?.rates ?? {}
   const snap = cur?.snapshot ?? {}
-  const failRate = (rates.verify_fail ?? 0) + (rates.verify_timeouts ?? 0)
+  const failRate =
+    rates.verify_fail != null && rates.verify_timeouts != null
+      ? rates.verify_fail + rates.verify_timeouts
+      : null
 
   const stats = [
     { label: 'Verified /hr', value: rates.verify_success, sub: 'success rate', accent: true },
@@ -106,6 +110,25 @@ export default function MetricsPanel() {
     { label: 'Fetch attempts /hr', value: rates.fetch_attempts, sub: 'outbound fetches', accent: true },
     { label: 'Fail + timeout /hr', value: failRate, sub: 'failed verification', accent: false },
     { label: 'Verified stored', value: snap.verify_success, sub: 'metadata stored', accent: false },
+  ]
+
+  const failBreakdown = [
+    { label: 'Source timeout', value: snap.source_timeout },
+    { label: 'Source no peers', value: snap.source_no_peers },
+    { label: 'Connect timeout', value: snap.fetch_connect_timeout },
+    { label: 'Connect I/O', value: snap.fetch_connect_io },
+    { label: 'Handshake', value: snap.fetch_handshake },
+    { label: 'No extension', value: snap.fetch_no_extension },
+    { label: 'Reject', value: snap.fetch_reject },
+    { label: 'Bad piece', value: snap.fetch_bad_piece },
+    { label: 'Transfer I/O', value: snap.fetch_io },
+    { label: 'SHA1 mismatch', value: snap.sha1_mismatch },
+  ]
+
+  const cacheStats = [
+    { label: 'Cache size', value: snap.peer_cache_size },
+    { label: 'Cache hits', value: snap.peer_cache_hits },
+    { label: 'Cache evictions', value: snap.peer_cache_evictions },
   ]
 
   const chartT = (t) => {
@@ -121,6 +144,31 @@ export default function MetricsPanel() {
         {stats.map((s) => (
           <Stat key={s.label} {...s} />
         ))}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <div className="rounded-lg bg-ink-800 px-4 py-3 border border-ink-700">
+          <div className="text-xs uppercase tracking-wide text-slate-400 mb-2">Failure Breakdown (cumulative)</div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+            {failBreakdown.map((f) => (
+              <div key={f.label} className="flex justify-between">
+                <span className="text-slate-400">{f.label}</span>
+                <span className="text-slate-200 tabular-nums">{fmt(f.value)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-lg bg-ink-800 px-4 py-3 border border-ink-700">
+          <div className="text-xs uppercase tracking-wide text-slate-400 mb-2">Peer Cache</div>
+          <div className="grid grid-cols-1 gap-y-1 text-sm">
+            {cacheStats.map((c) => (
+              <div key={c.label} className="flex justify-between">
+                <span className="text-slate-400">{c.label}</span>
+                <span className="text-slate-200 tabular-nums">{fmt(c.value)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="flex items-center justify-between mb-3">

@@ -1,0 +1,28 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ~/gguf:/models:ro
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+
+  classifier:
+    image: python:3.13-slim
+    depends_on:
+      - ollama
+    volumes:
+      - ~/classify:/data
+      - ~/classify/results:/results
+      - ./infer.py:/app/infer.py:ro
+      - ./evaluate.py:/app/evaluate.py:ro
+      - ./setup-model.sh:/app/setup-model.sh:ro
+    working_dir: /app
+    entrypoint: ["bash", "/app/setup-model.sh"]
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - MODEL_NAME=gemma4-e2b-q4km
+
+volumes:
+  ollama-data:

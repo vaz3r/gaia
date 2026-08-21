@@ -1,0 +1,9 @@
+{
+ "total": 1000,
+ "train": 700,
+ "eval": 300,
+ "split_seed": 42,
+ "id_col": "hex infohash",
+ "explicit_train": 128,
+ "explicit_eval": 58
+}

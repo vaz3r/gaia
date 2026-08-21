@@ -33,7 +33,8 @@ export function toRates(data) {
     const cur = data[i]
     const hours = ((cur.t - prev.t) / 3600000)
     if (hours > 0) {
-      out.push({ t: cur.t, value: (cur.value - prev.value) / hours })
+      const delta = cur.value - prev.value
+      out.push({ t: cur.t, value: delta >= 0 ? delta / hours : null })
     }
   }
   return out

@@ -1,16 +1,25 @@
 use crate::krpc::Infohash;
 use crate::metrics::{Add1, Metrics};
 use crate::router::Router;
+use crate::verify::peer_cache::PeerCache;
 use crate::verify::peer_source::source_peers;
 use crate::verify::wire::{WireError, WireSession, gen_peer_id};
 use librqbit_utp::UtpSocketUdp;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const TCP_TIMEOUT: Duration = Duration::from_secs(3);
+const UTP_TIMEOUT: Duration = Duration::from_secs(5);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(25);
+
+enum FetchOutcome {
+    ConnectFailed(SocketAddr, WireError),
+    MetadataFailed(WireError),
+    Success(Vec<u8>),
+}
 
 pub async fn verify_infohash(
     router: Arc<Router>,
@@ -18,8 +27,9 @@ pub async fn verify_infohash(
     info_hash: Infohash,
     race_peers: usize,
     metrics: Arc<Metrics>,
+    peer_cache: Arc<PeerCache>,
 ) -> Option<Vec<u8>> {
-    let peers = source_peers(router, info_hash, race_peers.max(1), metrics.clone()).await;
+    let peers = source_peers(router, info_hash, race_peers.max(1), metrics.clone(), peer_cache.clone()).await;
     if peers.is_empty() {
         return None;
     }
@@ -33,46 +43,152 @@ pub async fn verify_infohash(
         let utp = utp.clone();
         let ih = info_hash;
         let pid = peer_id;
+        let cache = peer_cache.clone();
+        let metrics = metrics.clone();
         set.spawn(async move {
             let _permit = per
                 .try_acquire()
                 .expect("local semaphore is sized to the race");
-            let mut session = match WireSession::connect_tcp(addr, &ih, &pid, CONNECT_TIMEOUT).await
-            {
-                Ok(s) => s,
-                Err(tcp_err) => match &utp {
-                    Some(sock) => {
-                        match WireSession::connect_utp(
-                            sock.clone(),
-                            addr,
-                            &ih,
-                            &pid,
-                            CONNECT_TIMEOUT,
-                        )
-                        .await
-                        {
-                            Ok(s) => s,
-                            Err(_) => return Err(tcp_err),
+
+            metrics.tcp_attempts.add(1);
+            if utp.is_some() {
+                metrics.utp_attempts.add(1);
+            }
+
+            let mut tcp_task = tokio::spawn({
+                let ih = ih;
+                let pid = pid;
+                async move { WireSession::connect_tcp(addr, &ih, &pid, TCP_TIMEOUT).await }
+            });
+            let mut utp_task = tokio::spawn({
+                let ih = ih;
+                let pid = pid;
+                let utp = utp.clone();
+                async move {
+                    match utp {
+                        Some(sock) => {
+                            WireSession::connect_utp(sock, addr, &ih, &pid, UTP_TIMEOUT).await
+                        }
+                        None => Err(WireError::Io(std::io::Error::other("no uTP socket"))),
+                    }
+                }
+            });
+
+            let session_result: Result<WireSession, WireError> = tokio::select! {
+                res = &mut tcp_task => {
+                    match res {
+                        Ok(Ok(s)) => {
+                            metrics.tcp_connect_ok.add(1);
+                            utp_task.abort();
+                            Ok(s)
+                        }
+                        Ok(Err(tcp_err)) => {
+                            match utp_task.await {
+                                Ok(Ok(s)) => { metrics.utp_connect_ok.add(1); Ok(s) }
+                                Ok(Err(utp_err)) => Err(utp_err),
+                                Err(_) => Err(tcp_err),
+                            }
+                        }
+                        Err(_) => {
+                            match utp_task.await {
+                                Ok(Ok(s)) => { metrics.utp_connect_ok.add(1); Ok(s) }
+                                Ok(Err(e)) => Err(e),
+                                Err(_) => Err(WireError::Io(std::io::Error::other("both tasks failed"))),
+                            }
                         }
                     }
-                    None => return Err(tcp_err),
-                },
+                }
+                res = &mut utp_task => {
+                    match res {
+                        Ok(Ok(s)) => {
+                            metrics.utp_connect_ok.add(1);
+                            tcp_task.abort();
+                            Ok(s)
+                        }
+                        Ok(Err(utp_err)) => {
+                            match tcp_task.await {
+                                Ok(Ok(s)) => { metrics.tcp_connect_ok.add(1); Ok(s) }
+                                Ok(Err(tcp_err)) => Err(tcp_err),
+                                Err(_) => Err(utp_err),
+                            }
+                        }
+                        Err(_) => {
+                            match tcp_task.await {
+                                Ok(Ok(s)) => { metrics.tcp_connect_ok.add(1); Ok(s) }
+                                Ok(Err(e)) => Err(e),
+                                Err(_) => Err(WireError::Io(std::io::Error::other("both tasks failed"))),
+                            }
+                        }
+                    }
+                }
             };
-            session.fetch_metadata(FETCH_TIMEOUT).await
+
+            let mut session = match session_result {
+                Ok(s) => s,
+                Err(e) => {
+                    cache.mark_bad(addr);
+                    return FetchOutcome::ConnectFailed(addr, e);
+                }
+            };
+
+            let is_tcp = session.is_tcp();
+            match session.fetch_metadata(FETCH_TIMEOUT).await {
+                Ok(meta) => {
+                    if is_tcp {
+                        metrics.tcp_metadata_ok.add(1);
+                    } else {
+                        metrics.utp_metadata_ok.add(1);
+                    }
+                    FetchOutcome::Success(meta)
+                }
+                Err(e) => FetchOutcome::MetadataFailed(e),
+            }
         });
     }
 
     let mut result = None;
     while let Some(res) = set.join_next().await {
         match res {
-            Ok(Ok(meta)) => {
+            Ok(FetchOutcome::Success(meta)) => {
                 result = Some(meta);
                 break;
             }
-            Ok(Err(WireError::Timeout)) => metrics.verify_timeouts.add(1),
-            _ => {}
+            Ok(FetchOutcome::ConnectFailed(_addr, WireError::Timeout)) => {
+                metrics.fetch_connect_timeout.add(1);
+                metrics.verify_timeouts.add(1);
+            }
+            Ok(FetchOutcome::ConnectFailed(_addr, WireError::Io(_))) => {
+                metrics.fetch_connect_io.add(1);
+            }
+            Ok(FetchOutcome::ConnectFailed(_, _)) => {
+                metrics.fetch_connect_io.add(1);
+            }
+            Ok(FetchOutcome::MetadataFailed(WireError::Timeout)) => {
+                metrics.fetch_io.add(1);
+                metrics.verify_timeouts.add(1);
+            }
+            Ok(FetchOutcome::MetadataFailed(WireError::Handshake)) => {
+                metrics.fetch_handshake.add(1);
+            }
+            Ok(FetchOutcome::MetadataFailed(WireError::NoExtension)) => {
+                metrics.fetch_no_extension.add(1);
+            }
+            Ok(FetchOutcome::MetadataFailed(WireError::Reject)) => {
+                metrics.fetch_reject.add(1);
+            }
+            Ok(FetchOutcome::MetadataFailed(WireError::BadPiece)) => {
+                metrics.fetch_bad_piece.add(1);
+            }
+            Ok(FetchOutcome::MetadataFailed(WireError::Io(_))) => {
+                metrics.fetch_io.add(1);
+            }
+            Ok(FetchOutcome::MetadataFailed(WireError::NoMetadata)) => {}
+            Err(_) => {}
         }
     }
     set.abort_all();
+    if result.is_none() {
+        metrics.verify_fail.add(1);
+    }
     result
 }

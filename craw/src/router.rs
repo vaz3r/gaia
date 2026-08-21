@@ -310,7 +310,7 @@ impl Router {
         for n in nodes {
             table.insert(n);
         }
-        self.metrics.routing_table_len.add(table.len() as u64);
+        self.metrics.routing_table_len.store(table.len() as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn routing_nodes(&self) -> Vec<NodeInfo> {
