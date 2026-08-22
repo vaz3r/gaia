@@ -1,6 +1,7 @@
 use crate::dht::routing_table::{NodeInfo, decode_compact};
 use crate::krpc::codec::BValue;
-use crate::krpc::message::{FIND_NODE, Kind};
+use crate::krpc::message::{FIND_NODE, Kind, Message};
+use crate::metrics::Add1;
 use crate::net::rate_limit::RateLimiter;
 use crate::router::Router;
 use bytes::Bytes;
@@ -9,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::MissedTickBehavior;
 
-const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+const QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct Walker {
     router: Arc<Router>,
@@ -17,6 +18,7 @@ pub struct Walker {
     bootstrap: Vec<SocketAddr>,
     alpha: usize,
     interval: Duration,
+    parse_nodes6: bool,
 }
 
 impl Walker {
@@ -26,6 +28,7 @@ impl Walker {
         bootstrap: Vec<SocketAddr>,
         alpha: usize,
         interval: Duration,
+        parse_nodes6: bool,
     ) -> Self {
         Walker {
             router,
@@ -33,6 +36,7 @@ impl Walker {
             bootstrap,
             alpha,
             interval,
+            parse_nodes6,
         }
     }
 
@@ -51,7 +55,7 @@ impl Walker {
         }
         while let Some(res) = set.join_next().await {
             if let Ok(Ok((msg, addr))) = res {
-                ingest(&self.router, &msg, addr);
+                ingest(&self.router, &msg, addr, self.parse_nodes6);
             }
         }
     }
@@ -59,21 +63,46 @@ impl Walker {
     pub async fn run(&self) {
         let mut interval = tokio::time::interval(self.interval);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut set = tokio::task::JoinSet::new();
         loop {
             interval.tick().await;
-            self.step().await;
+            self.reap(&mut set).await;
+            if !self.spawn_step(&mut set) {
+                tracing::warn!("routing table empty, re-bootstrapping");
+                self.bootstrap(&self.bootstrap).await;
+                continue;
+            }
         }
     }
 
-    async fn step(&self) {
+    fn handle(&self, res: Result<(Result<Message, crate::router::QueryError>, SocketAddr), tokio::task::JoinError>) {
+        if let Ok((Ok(msg), addr)) = res {
+            ingest(&self.router, &msg, addr, self.parse_nodes6);
+        }
+    }
+
+    async fn reap(
+        &self,
+        set: &mut tokio::task::JoinSet<(Result<Message, crate::router::QueryError>, SocketAddr)>,
+    ) {
+        loop {
+            match set.try_join_next() {
+                Some(res) => self.handle(res),
+                None => break,
+            }
+        }
+    }
+
+    fn spawn_step(
+        &self,
+        set: &mut tokio::task::JoinSet<(Result<Message, crate::router::QueryError>, SocketAddr)>,
+    ) -> bool {
+        self.router.metrics().walker_steps.add(1);
         let nodes = self.router.random_routing_nodes(self.alpha);
         if nodes.is_empty() {
-            tracing::warn!("routing table empty, re-bootstrapping");
-            self.bootstrap(&self.bootstrap).await;
-            return;
+            return false;
         }
         let (our_id, target) = self.pick_target();
-        let mut tasks = Vec::new();
         for node in nodes {
             if !self.limiter.allow(node.addr.ip()) {
                 continue;
@@ -81,29 +110,29 @@ impl Walker {
             let router = self.router.clone();
             let args = self.find_node_args(&our_id, target);
             let addr = node.addr;
-            tasks.push(tokio::spawn(async move {
+            self.router.metrics().walker_queries.add(1);
+            set.spawn(async move {
                 let res = router
                     .send_query(FIND_NODE, addr, args, QUERY_TIMEOUT)
                     .await;
                 (res, addr)
-            }));
+            });
         }
-        for task in tasks {
-            if let Ok((Ok(msg), addr)) = task.await {
-                ingest(&self.router, &msg, addr);
-            }
-        }
+        true
     }
 
     fn pick_target(&self) -> ([u8; 20], [u8; 20]) {
         let r = rand::random::<f64>();
         if r < 0.10 {
+            self.router.metrics().walker_self_target.add(1);
             return (self.router.self_id, self.router.self_id);
         }
         if r < 0.45 {
+            self.router.metrics().walker_random_target.add(1);
             let target = crate::dht::node_id::random_node_id();
             return (self.router.self_id, target);
         }
+        self.router.metrics().walker_sybil_target.add(1);
         if self.router.sybils.is_empty() {
             return (
                 self.router.self_id,
@@ -133,13 +162,23 @@ fn find_node_args(id: &[u8; 20], target: [u8; 20]) -> BValue {
     ])
 }
 
-fn ingest(router: &Router, msg: &crate::krpc::message::Message, addr: SocketAddr) {
+fn ingest(router: &Router, msg: &crate::krpc::message::Message, addr: SocketAddr, parse_nodes6: bool) {
     if let Kind::Response { r } = &msg.kind {
+        router.metrics().walker_ok.add(1);
         if let Some(id) = extract_id20(r, b"id") {
             router.insert_nodes(vec![NodeInfo { id, addr }]);
         }
         if let Some(nodes) = r.get_bytes(b"nodes") {
-            router.insert_nodes(decode_compact(nodes));
+            let decoded = decode_compact(nodes);
+            router.metrics().walker_nodes_returned.add(decoded.len() as u64);
+            router.insert_nodes(decoded);
+        }
+        if parse_nodes6
+            && let Some(nodes) = r.get_bytes(b"nodes6")
+        {
+            let decoded = crate::dht::routing_table::decode_compact6(nodes);
+            router.metrics().walker_nodes_returned.add(decoded.len() as u64);
+            router.insert_nodes(decoded);
         }
     }
 }

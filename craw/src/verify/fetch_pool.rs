@@ -11,9 +11,9 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-const TCP_TIMEOUT: Duration = Duration::from_secs(3);
-const UTP_TIMEOUT: Duration = Duration::from_secs(5);
-const FETCH_TIMEOUT: Duration = Duration::from_secs(25);
+const TCP_TIMEOUT: Duration = Duration::from_secs(2);
+const UTP_TIMEOUT: Duration = Duration::from_secs(4);
+const FETCH_TIMEOUT: Duration = Duration::from_secs(8);
 
 enum FetchOutcome {
     ConnectFailed(SocketAddr, WireError),
@@ -28,6 +28,12 @@ pub enum VerifyResult {
     MetadataFailed,
 }
 
+enum SourceState {
+    Peers,
+    NoPeers,
+    Timeout,
+}
+
 pub async fn verify_infohash(
     router: Arc<Router>,
     utp: Option<Arc<UtpSocketUdp>>,
@@ -35,14 +41,32 @@ pub async fn verify_infohash(
     race_peers: usize,
     metrics: Arc<Metrics>,
     peer_cache: Arc<PeerCache>,
+    direct: Option<SocketAddr>,
 ) -> VerifyResult {
-    let peers = match source_peers(router, info_hash, race_peers.max(1), metrics.clone(), peer_cache.clone()).await {
-        SourceResult::Peers(p) => p,
-        SourceResult::NoPeers => return VerifyResult::NoPeers,
-        SourceResult::AllTimeout => return VerifyResult::SourceTimeout,
+    let (mut peers, state) = match source_peers(
+        router,
+        info_hash,
+        race_peers.max(1),
+        metrics.clone(),
+        peer_cache.clone(),
+    )
+    .await
+    {
+        SourceResult::Peers(p) => (p, SourceState::Peers),
+        SourceResult::NoPeers => (Vec::new(), SourceState::NoPeers),
+        SourceResult::AllTimeout => (Vec::new(), SourceState::Timeout),
     };
+    if let Some(d) = direct {
+        if !peers.contains(&d) {
+            peers.insert(0, d);
+        }
+    }
+    peers.truncate(race_peers.max(1));
     if peers.is_empty() {
-        return VerifyResult::NoPeers;
+        return match state {
+            SourceState::NoPeers => VerifyResult::NoPeers,
+            _ => VerifyResult::SourceTimeout,
+        };
     }
 
     metrics.fetch_attempts.add(peers.len() as u64);
@@ -50,16 +74,16 @@ pub async fn verify_infohash(
     let local = Arc::new(Semaphore::new(race_peers.max(1)));
     let mut set = JoinSet::new();
     for addr in peers {
-        let per = local.clone();
+        let Ok(_permit) = local.clone().try_acquire_owned() else {
+            break;
+        };
         let utp = utp.clone();
         let ih = info_hash;
         let pid = peer_id;
         let cache = peer_cache.clone();
         let metrics = metrics.clone();
         set.spawn(async move {
-            let _permit = per
-                .try_acquire()
-                .expect("local semaphore is sized to the race");
+            let _permit = _permit;
 
             metrics.tcp_attempts.add(1);
             if utp.is_some() {

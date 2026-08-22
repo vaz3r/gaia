@@ -32,7 +32,7 @@ The content is organized as follows:
 <notes>
 - Some files may have been excluded based on .gitignore rules and Repomix's configuration
 - Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
-- Files matching these patterns are excluded: **/data/**, **/*.jsonl, **/*.sql, **/dashboard/**, **/classifier/**
+- Files matching these patterns are excluded: **/data/**, **/*.jsonl, **/*.sql, **/dashboard/**, **/classifier/**, **/craw-stack/**, **/pg/**, docker-compose*.yml, Dockerfile*, deploy.sh, Makefile, .env*, *.md, .cargo/**
 - Files matching patterns in .gitignore are excluded
 - Files matching default ignore patterns are excluded
 - Files are sorted by Git change count (files with more changes are at the bottom)
@@ -41,12 +41,6 @@ The content is organized as follows:
 </file_summary>
 
 <directory_structure>
-.cargo/
-  config.toml
-craw-stack/
-  docker-compose.yml
-pg/
-  postgresql.conf
 src/
   dht/
     mod.rs
@@ -89,95 +83,14 @@ src/
   router.rs
   trace.rs
 .dockerignore
-.env.example
 .gitignore
 build.rs
 Cargo.toml
-deploy.sh
-docker-compose.yml
-Dockerfile
-Makefile
-OpenSpec.md
 zerone
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
-
-<file path=".cargo/config.toml">
-[target.aarch64-unknown-linux-gnu]
-linker = "aarch64-linux-gnu-gcc"
-</file>
-
-<file path="craw-stack/docker-compose.yml">
-services:
-  db:
-    image: postgres:16
-    container_name: craw-db
-    environment:
-      POSTGRES_USER: crawler
-      POSTGRES_PASSWORD: ${PG_PASSWORD}
-      POSTGRES_DB: craw
-    shm_size: 1g
-    ports:
-      - "0.0.0.0:5432:5432"
-    volumes:
-      - pg-data:/var/lib/postgresql/data
-    restart: unless-stopped
-    command: >
-      postgres
-        -c shared_buffers=2GB
-        -c effective_cache_size=6GB
-        -c work_mem=16MB
-        -c maintenance_work_mem=512MB
-        -c max_connections=200
-        -c superuser_reserved_connections=5
-        -c wal_buffers=64MB
-        -c wal_compression=on
-        -c max_wal_size=8GB
-        -c min_wal_size=2GB
-        -c checkpoint_timeout=15min
-        -c checkpoint_completion_target=0.9
-        -c synchronous_commit=off
-        -c random_page_cost=1.1
-        -c effective_io_concurrency=200
-        -c bgwriter_delay=200ms
-        -c bgwriter_lru_maxpages=1000
-        -c autovacuum_vacuum_scale_factor=0.05
-        -c autovacuum_analyze_scale_factor=0.02
-        -c autovacuum_vacuum_cost_limit=2000
-        -c autovacuum_vacuum_cost_delay=2
-        -c log_min_duration_statement=1000
-
-volumes:
-  pg-data:
-</file>
-
-<file path="pg/postgresql.conf">
-shared_buffers = 4GB
-effective_cache_size = 14GB
-work_mem = 16MB
-maintenance_work_mem = 256MB
-
-checkpoint_timeout = 15min
-max_wal_size = 2GB
-min_wal_size = 1GB
-wal_compression = on
-wal_buffers = 16MB
-
-bgwriter_delay = 200ms
-bgwriter_lru_maxpages = 1000
-
-random_page_cost = 1.1
-effective_io_concurrency = 200
-
-max_connections = 50
-
-listen_addresses = '*'
-
-logging_collector = on
-log_min_duration_statement = 1000
-</file>
 
 <file path="src/dht/mod.rs">
 pub mod node_id;
@@ -358,7 +271,11 @@ fn leading_zeros(x: &NodeId) -> usize {
 fn bucket_index(self_id: &NodeId, id: &NodeId) -> usize {
     let d = xor(self_id, id);
     let lz = leading_zeros(&d);
-    (159 - lz).min(159)
+    if lz >= 160 {
+        0
+    } else {
+        159 - lz
+    }
 }
 
 pub struct RoutingTable {
@@ -385,8 +302,8 @@ impl RoutingTable {
         }
         let idx = bucket_index(&self.self_id, &node.id);
         let bucket = &mut self.buckets[idx];
-        if let Some(existing) = bucket.iter_mut().find(|n| n.addr == node.addr) {
-            existing.id = node.id;
+        if let Some(existing) = bucket.iter_mut().find(|n| n.id == node.id) {
+            existing.addr = node.addr;
             return true;
         }
         if bucket.len() >= K {
@@ -397,15 +314,14 @@ impl RoutingTable {
     }
 
     pub fn closest(&self, target: &NodeId, n: usize) -> Vec<NodeInfo> {
-        let mut all: Vec<NodeInfo> = self
+        let mut all: Vec<(NodeInfo, NodeId)> = self
             .buckets
             .iter()
             .flat_map(|b| b.iter())
-            .cloned()
+            .map(|node| (node.clone(), xor(target, &node.id)))
             .collect();
-        all.sort_by_key(|node| xor(target, &node.id));
-        all.truncate(n);
-        all
+        all.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+        all.into_iter().map(|(node, _)| node).take(n).collect()
     }
 
     pub fn all(&self) -> Vec<NodeInfo> {
@@ -420,19 +336,46 @@ impl RoutingTable {
         self.buckets.iter().map(|b| b.len()).sum()
     }
 
+    pub fn buckets_used(&self) -> usize {
+        self.buckets.iter().filter(|b| !b.is_empty()).count()
+    }
+
+    pub fn contains_id(&self, id: &NodeId) -> bool {
+        self.buckets.iter().any(|b| b.iter().any(|n| &n.id == id))
+    }
+
+    #[cfg(test)]
+    fn bucket_fill(&self, idx: usize) -> usize {
+        self.buckets.get(idx).map(|b| b.len()).unwrap_or(0)
+    }
+
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     pub fn random_nodes(&self, n: usize) -> Vec<NodeInfo> {
-        let mut all = self.all();
-        for i in (1..all.len()).rev() {
-            let j = rand::random::<u64>() as usize % (i + 1);
-            all.swap(i, j);
+        let non_empty: Vec<usize> = (0..160)
+            .filter(|&i| !self.buckets[i].is_empty())
+            .collect();
+        if non_empty.is_empty() {
+            return Vec::new();
         }
-        all.truncate(n);
-        all
+        let mut result = Vec::with_capacity(n);
+        let mut seen = std::collections::HashSet::new();
+        let mut attempts = 0usize;
+        let max_attempts = n * 32 + 8;
+        while result.len() < n && attempts < max_attempts {
+            attempts += 1;
+            let bidx = non_empty[rand::random::<u64>() as usize % non_empty.len()];
+            let bucket = &self.buckets[bidx];
+            let nidx = rand::random::<u64>() as usize % bucket.len();
+            let node = bucket[nidx].clone();
+            if seen.insert(node.id) {
+                result.push(node);
+            }
+        }
+        result
     }
 }
 
@@ -466,6 +409,24 @@ pub fn decode_compact(bytes: &[u8]) -> Vec<NodeInfo> {
     nodes
 }
 
+pub fn decode_compact6(bytes: &[u8]) -> Vec<NodeInfo> {
+    let mut nodes = Vec::new();
+    let mut i = 0;
+    while i + 38 <= bytes.len() {
+        let mut id = [0u8; 20];
+        id.copy_from_slice(&bytes[i..i + 20]);
+        let mut v6 = [0u8; 16];
+        v6.copy_from_slice(&bytes[i + 20..i + 36]);
+        let port = u16::from_be_bytes([bytes[i + 36], bytes[i + 37]]);
+        nodes.push(NodeInfo {
+            id,
+            addr: SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::from(v6)), port),
+        });
+        i += 38;
+    }
+    nodes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,13 +450,61 @@ mod tests {
         assert_eq!(closest.len(), 4);
         assert_eq!(closest[0].id, target);
     }
+
+    #[test]
+    fn random_nodes_populated_table() {
+        let mut rt = RoutingTable::new([0u8; 20]);
+        for i in 0..400u16 {
+            let mut id = [0u8; 20];
+            id[0] = (i >> 8) as u8;
+            id[1] = (i & 0xff) as u8;
+            let addr: SocketAddr = format!("10.{}.{}.{}:6881", i % 200, (i / 200) % 200, i % 250)
+                .parse()
+                .unwrap();
+            rt.insert(NodeInfo { id, addr });
+        }
+        assert!(rt.len() > 0);
+        for _ in 0..100 {
+            let nodes = rt.random_nodes(3);
+            assert!(!nodes.is_empty());
+            assert!(nodes.len() <= 3);
+        }
+    }
+
+    #[test]
+    fn flood_of_new_ids_reaches_kademlia_equilibrium() {
+        // Kademlia XOR buckets concentrate node ids exponentially in the most
+        // distant buckets: bucket 159 holds ~50% of uniform ids, 158 ~25%, ...
+        // So a flood of distinct ids saturates only the far buckets (K=8 each)
+        // and the total length plateaus well below 160*K. This documents the
+        // intrinsic property: a healthy table is ~100-400 nodes, not 1280.
+        let mut rt = RoutingTable::new([0u8; 20]);
+        let mut new_at_insert = 0u64;
+        for i in 0..500_000u64 {
+            let id = rand::random::<[u8; 20]>();
+            if !rt.contains_id(&id) {
+                new_at_insert += 1;
+            }
+            rt.insert(NodeInfo {
+                id,
+                addr: format!("1.2.3.{}:6881", (i % 250) as u8 + 1).parse().unwrap(),
+            });
+        }
+        assert_eq!(new_at_insert, 500_000);
+        let top = rt.bucket_fill(159) + rt.bucket_fill(158) + rt.bucket_fill(157);
+        let total = rt.buckets_used();
+        assert!(rt.len() > 50 && rt.len() < 512, "len={}", rt.len());
+        assert!(total < 40, "only far buckets fill under uniform ids, used={total}");
+        let _ = top;
+    }
 }
 </file>
 
 <file path="src/dht/walker.rs">
 use crate::dht::routing_table::{NodeInfo, decode_compact};
 use crate::krpc::codec::BValue;
-use crate::krpc::message::{FIND_NODE, Kind};
+use crate::krpc::message::{FIND_NODE, Kind, Message};
+use crate::metrics::Add1;
 use crate::net::rate_limit::RateLimiter;
 use crate::router::Router;
 use bytes::Bytes;
@@ -504,40 +513,52 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::MissedTickBehavior;
 
-const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+const QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct Walker {
     router: Arc<Router>,
     limiter: Arc<RateLimiter>,
+    bootstrap: Vec<SocketAddr>,
     alpha: usize,
     interval: Duration,
+    parse_nodes6: bool,
 }
 
 impl Walker {
     pub fn new(
         router: Arc<Router>,
         limiter: Arc<RateLimiter>,
+        bootstrap: Vec<SocketAddr>,
         alpha: usize,
         interval: Duration,
+        parse_nodes6: bool,
     ) -> Self {
         Walker {
             router,
             limiter,
+            bootstrap,
             alpha,
             interval,
+            parse_nodes6,
         }
     }
 
-    pub async fn bootstrap(&self, nodes: Vec<SocketAddr>) {
-        for addr in nodes {
+    pub async fn bootstrap(&self, nodes: &[SocketAddr]) {
+        let mut set = tokio::task::JoinSet::new();
+        for &addr in nodes {
+            let router = self.router.clone();
             let target = crate::dht::node_id::random_node_id();
-            let args = self.find_node_args(&self.router.self_id, target);
-            if let Ok(msg) = self
-                .router
-                .send_query(FIND_NODE, addr, args, QUERY_TIMEOUT)
-                .await
-            {
-                self.ingest(&msg, addr);
+            set.spawn(async move {
+                let args = find_node_args(&router.self_id, target);
+                router
+                    .send_query(FIND_NODE, addr, args, QUERY_TIMEOUT)
+                    .await
+                    .map(|msg| (msg, addr))
+            });
+        }
+        while let Some(res) = set.join_next().await {
+            if let Ok(Ok((msg, addr))) = res {
+                ingest(&self.router, &msg, addr, self.parse_nodes6);
             }
         }
     }
@@ -545,19 +566,46 @@ impl Walker {
     pub async fn run(&self) {
         let mut interval = tokio::time::interval(self.interval);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut set = tokio::task::JoinSet::new();
         loop {
             interval.tick().await;
-            self.step().await;
+            self.reap(&mut set).await;
+            if !self.spawn_step(&mut set) {
+                tracing::warn!("routing table empty, re-bootstrapping");
+                self.bootstrap(&self.bootstrap).await;
+                continue;
+            }
         }
     }
 
-    async fn step(&self) {
-        let (our_id, target) = self.pick_target();
+    fn handle(&self, res: Result<(Result<Message, crate::router::QueryError>, SocketAddr), tokio::task::JoinError>) {
+        if let Ok((Ok(msg), addr)) = res {
+            ingest(&self.router, &msg, addr, self.parse_nodes6);
+        }
+    }
+
+    async fn reap(
+        &self,
+        set: &mut tokio::task::JoinSet<(Result<Message, crate::router::QueryError>, SocketAddr)>,
+    ) {
+        loop {
+            match set.try_join_next() {
+                Some(res) => self.handle(res),
+                None => break,
+            }
+        }
+    }
+
+    fn spawn_step(
+        &self,
+        set: &mut tokio::task::JoinSet<(Result<Message, crate::router::QueryError>, SocketAddr)>,
+    ) -> bool {
+        self.router.metrics().walker_steps.add(1);
         let nodes = self.router.random_routing_nodes(self.alpha);
         if nodes.is_empty() {
-            return;
+            return false;
         }
-        let mut tasks = Vec::new();
+        let (our_id, target) = self.pick_target();
         for node in nodes {
             if !self.limiter.allow(node.addr.ip()) {
                 continue;
@@ -565,57 +613,75 @@ impl Walker {
             let router = self.router.clone();
             let args = self.find_node_args(&our_id, target);
             let addr = node.addr;
-            tasks.push(tokio::spawn(async move {
+            self.router.metrics().walker_queries.add(1);
+            set.spawn(async move {
                 let res = router
                     .send_query(FIND_NODE, addr, args, QUERY_TIMEOUT)
                     .await;
                 (res, addr)
-            }));
+            });
         }
-        for task in tasks {
-            if let Ok((Ok(msg), addr)) = task.await {
-                self.ingest(&msg, addr);
-            }
-        }
+        true
     }
 
     fn pick_target(&self) -> ([u8; 20], [u8; 20]) {
         let r = rand::random::<f64>();
-        if r < 0.25 {
+        if r < 0.10 {
+            self.router.metrics().walker_self_target.add(1);
             return (self.router.self_id, self.router.self_id);
         }
-        if r < 0.40 {
-            return (self.router.self_id, crate::dht::node_id::random_node_id());
+        if r < 0.45 {
+            self.router.metrics().walker_random_target.add(1);
+            let target = crate::dht::node_id::random_node_id();
+            return (self.router.self_id, target);
         }
+        self.router.metrics().walker_sybil_target.add(1);
         if self.router.sybils.is_empty() {
-            return (self.router.self_id, self.router.self_id);
+            return (
+                self.router.self_id,
+                crate::dht::node_id::random_node_id(),
+            );
         }
         let idx = rand::random::<u64>() as usize % self.router.sybils.len();
-        let sybil = self.router.sybils[idx].0;
+        let (sybil, _) = self.router.sybils[idx];
         (sybil, sybil)
     }
 
     fn find_node_args(&self, id: &[u8; 20], target: [u8; 20]) -> BValue {
-        BValue::dict(vec![
-            (
-                Bytes::from_static(b"id"),
-                BValue::Bytes(Bytes::copy_from_slice(id)),
-            ),
-            (
-                Bytes::from_static(b"target"),
-                BValue::Bytes(Bytes::copy_from_slice(&target)),
-            ),
-        ])
+        find_node_args(id, target)
     }
+}
 
-    fn ingest(&self, msg: &crate::krpc::message::Message, addr: SocketAddr) {
-        if let Kind::Response { r } = &msg.kind {
-            if let Some(id) = extract_id20(r, b"id") {
-                self.router.insert_nodes(vec![NodeInfo { id, addr }]);
-            }
-            if let Some(nodes) = r.get_bytes(b"nodes") {
-                self.router.insert_nodes(decode_compact(nodes));
-            }
+fn find_node_args(id: &[u8; 20], target: [u8; 20]) -> BValue {
+    BValue::dict(vec![
+        (
+            Bytes::from_static(b"id"),
+            BValue::Bytes(Bytes::copy_from_slice(id)),
+        ),
+        (
+            Bytes::from_static(b"target"),
+            BValue::Bytes(Bytes::copy_from_slice(&target)),
+        ),
+    ])
+}
+
+fn ingest(router: &Router, msg: &crate::krpc::message::Message, addr: SocketAddr, parse_nodes6: bool) {
+    if let Kind::Response { r } = &msg.kind {
+        router.metrics().walker_ok.add(1);
+        if let Some(id) = extract_id20(r, b"id") {
+            router.insert_nodes(vec![NodeInfo { id, addr }]);
+        }
+        if let Some(nodes) = r.get_bytes(b"nodes") {
+            let decoded = decode_compact(nodes);
+            router.metrics().walker_nodes_returned.add(decoded.len() as u64);
+            router.insert_nodes(decoded);
+        }
+        if parse_nodes6
+            && let Some(nodes) = r.get_bytes(b"nodes6")
+        {
+            let decoded = crate::dht::routing_table::decode_compact6(nodes);
+            router.metrics().walker_nodes_returned.add(decoded.len() as u64);
+            router.insert_nodes(decoded);
         }
     }
 }
@@ -748,6 +814,7 @@ pub mod bloom;
 use crate::harvest::bloom::BloomFilter;
 use crate::krpc::Infohash;
 use crate::metrics::{Add1, Metrics};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -769,9 +836,11 @@ impl Source {
 pub struct Harvester {
     current: BloomFilter,
     previous: BloomFilter,
+    announce_seen: BloomFilter,
     rotate_at: usize,
     discovery_tx: mpsc::Sender<(Infohash, Source)>,
     verify_tx: mpsc::Sender<Infohash>,
+    announce_tx: mpsc::Sender<(Infohash, SocketAddr)>,
     metrics: Arc<Metrics>,
 }
 
@@ -780,29 +849,56 @@ impl Harvester {
         capacity: usize,
         discovery_tx: mpsc::Sender<(Infohash, Source)>,
         verify_tx: mpsc::Sender<Infohash>,
+        announce_tx: mpsc::Sender<(Infohash, SocketAddr)>,
         metrics: Arc<Metrics>,
     ) -> Self {
         Harvester {
             current: BloomFilter::new(capacity, 0.001),
             previous: BloomFilter::new(capacity, 0.001),
+            announce_seen: BloomFilter::new((capacity / 4).max(64), 0.001),
             rotate_at: capacity,
             discovery_tx,
             verify_tx,
+            announce_tx,
             metrics,
         }
     }
 
-    pub fn harvest(&mut self, ih: Infohash, source: Source) -> bool {
+    pub fn harvest(&mut self, ih: Infohash, source: Source, direct: Option<SocketAddr>) -> bool {
+        if source == Source::AnnouncePeer && let Some(peer) = direct {
+            // Announce sightings get a dedicated bloom so a prior get_peers
+            // first-sighting does not suppress the high-value direct fetch.
+            if self.announce_seen.contains(&ih) {
+                return false;
+            }
+            self.announce_seen.insert(&ih);
+            if self.announce_tx.try_send((ih, peer)).is_err() {
+                if self.verify_tx.try_send(ih).is_err() {
+                    return false;
+                }
+            }
+            self.current.insert(&ih);
+            if self.current.inserted() >= self.rotate_at {
+                std::mem::swap(&mut self.current, &mut self.previous);
+                self.current.clear();
+            }
+            self.metrics.unique_infohashes.add(1);
+            crate::trace_lifecycle!(&ih, "discovered", source = source.tag());
+            return true;
+        }
+
         if self.current.contains(&ih) || self.previous.contains(&ih) {
             return false;
         }
+        if self.verify_tx.try_send(ih).is_err() {
+            return false;
+        }
+        let _ = self.discovery_tx.try_send((ih, source));
         self.current.insert(&ih);
         if self.current.inserted() >= self.rotate_at {
             std::mem::swap(&mut self.current, &mut self.previous);
             self.current.clear();
         }
-        let _ = self.discovery_tx.try_send((ih, source));
-        let _ = self.verify_tx.try_send(ih);
         self.metrics.unique_infohashes.add(1);
         crate::trace_lifecycle!(&ih, "discovered", source = source.tag());
         true
@@ -1586,7 +1682,14 @@ impl TxTable {
     }
 
     pub fn insert(&self, t: Bytes, entry: TxEntry) -> bool {
-        self.map.insert(t, entry).is_none()
+        use dashmap::mapref::entry::Entry;
+        match self.map.entry(t) {
+            Entry::Vacant(v) => {
+                v.insert(entry);
+                true
+            }
+            Entry::Occupied(_) => false,
+        }
     }
 
     pub fn take(&self, t: &Bytes) -> Option<TxEntry> {
@@ -1761,15 +1864,37 @@ impl RateLimiter {
 
     pub fn allow(&self, ip: IpAddr) -> bool {
         let now = Instant::now();
-        let mut bucket = self
-            .buckets
-            .entry(ip)
-            .or_insert_with(|| TokenBucket::new(self.capacity, self.rate_per_sec, now));
-        let allowed = bucket.try_take(now);
-        if now.duration_since(bucket.last) > self.ttl {
-            self.buckets.remove(&ip);
+        match self.buckets.entry(ip) {
+            dashmap::mapref::entry::Entry::Occupied(mut e) => {
+                if now.duration_since(e.get().last) > self.ttl {
+                    e.remove();
+                    let mut b = TokenBucket::new(self.capacity, self.rate_per_sec, now);
+                    b.try_take(now)
+                } else {
+                    e.get_mut().try_take(now)
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(v) => {
+                let mut b = TokenBucket::new(self.capacity, self.rate_per_sec, now);
+                let allowed = b.try_take(now);
+                v.insert(b);
+                allowed
+            }
         }
-        allowed
+    }
+
+    pub fn sweep_expired(&self) -> usize {
+        let now = Instant::now();
+        let mut expired = 0;
+        self.buckets.retain(|_, b| {
+            if now.duration_since(b.last) > self.ttl {
+                expired += 1;
+                false
+            } else {
+                true
+            }
+        });
+        expired
     }
 
     #[allow(dead_code)]
@@ -2052,14 +2177,21 @@ impl BatchWriter {
 
         let mut verified_ihs: Vec<Vec<u8>> = Vec::new();
         if !job_batch.is_empty() {
-            match flush_jobs(&self.pool, &job_batch).await {
-                Some(v) => {
-                    self.jobs_written
-                        .fetch_add(job_batch.len() as u64, Ordering::Relaxed);
-                    verified_ihs = v;
-                }
-                None => {}
+            let failed_updates: Vec<&JobUpdate> = job_batch
+                .iter()
+                .filter(|u| matches!(u, JobUpdate::Failed(_, _)))
+                .collect();
+            if !failed_updates.is_empty() && flush_jobs(&self.pool, &failed_updates).await {
+                self.jobs_written
+                    .fetch_add(failed_updates.len() as u64, Ordering::Relaxed);
             }
+            verified_ihs = job_batch
+                .iter()
+                .filter_map(|u| match u {
+                    JobUpdate::Verified(ih) => Some(ih.as_slice().to_vec()),
+                    _ => None,
+                })
+                .collect();
         }
         if !torrent_batch.is_empty() {
             if flush_torrents(&self.pool, &torrent_batch).await {
@@ -2088,9 +2220,7 @@ impl BatchWriter {
     }
 }
 
-async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> Option<Vec<Vec<u8>>> {
-    let mut verified_ihs: Vec<Vec<u8>> = Vec::new();
-
+async fn flush_jobs(pool: &PgPool, batch: &[&JobUpdate]) -> bool {
     let failed_ihs: Vec<&[u8]> = batch
         .iter()
         .filter_map(|u| match u {
@@ -2102,10 +2232,11 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> Option<Vec<Vec<u8>>> 
     let retry_map: HashMap<Vec<u8>, i32> = if !failed_ihs.is_empty() {
         let mut map = HashMap::new();
         for chunk in failed_ihs.chunks(FLUSH_CHUNK) {
+            let chunk_vec: Vec<Vec<u8>> = chunk.iter().map(|b| b.to_vec()).collect();
             let rows = sqlx::query(
                 "SELECT infohash, retry_count FROM verification_jobs WHERE infohash = ANY($1)",
             )
-            .bind(chunk)
+            .bind(&chunk_vec)
             .fetch_all(pool)
             .await;
             match rows {
@@ -2117,8 +2248,9 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> Option<Vec<Vec<u8>>> 
                     }
                 }
                 Err(e) => {
-                tracing::warn!(error = %e, "batch: select retry_counts failed");
-            }
+                    tracing::warn!(error = %e, "batch: select retry_counts failed");
+                    return false;
+                }
             }
         }
         map
@@ -2131,15 +2263,6 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> Option<Vec<Vec<u8>>> 
 
         for update in chunk {
             match update {
-                JobUpdate::Verified(ih) => {
-                    resolved.push(ResolvedJob {
-                        ih: ih.as_slice(),
-                        status: "verified",
-                        retry_count: Some(0),
-                        next_retry_at: None,
-                        last_error: None,
-                    });
-                }
                 JobUpdate::Failed(ih, error) => {
                     let raw = ih.as_slice().to_vec();
                     let current_rc = retry_map.get(&raw).copied().unwrap_or(0);
@@ -2169,6 +2292,7 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> Option<Vec<Vec<u8>>> 
                         });
                     }
                 }
+                JobUpdate::Verified(_) => {}
             }
         }
 
@@ -2224,17 +2348,11 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> Option<Vec<Vec<u8>>> 
                     chunk_size = chunk.len(),
                     "batch: upsert verification_jobs failed"
                 );
-                return None;
-            }
-        }
-
-        for update in chunk {
-            if let JobUpdate::Verified(ih) = update {
-                verified_ihs.push(ih.as_slice().to_vec());
+                return false;
             }
         }
     }
-    Some(verified_ihs)
+    true
 }
 
 async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) -> bool {
@@ -2292,7 +2410,7 @@ async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) -> bool {
 
 async fn delete_verified(pool: &PgPool, infohashes: &[Vec<u8>]) {
     for chunk in infohashes.chunks(FLUSH_CHUNK) {
-        match sqlx::query("DELETE FROM verification_jobs WHERE infohash = ANY($1) AND status = 'verified'")
+        match sqlx::query("DELETE FROM verification_jobs WHERE infohash = ANY($1)")
             .bind(chunk)
             .execute(pool)
             .await
@@ -2622,7 +2740,7 @@ impl VerifyStore {
     async fn reset_stale_verifying(&self) -> Result<u64, sqlx::Error> {
         Ok(sqlx::query(
             "UPDATE verification_jobs SET status = 'pending', next_retry_at = now(), updated_at = now() \
-             WHERE status = 'verifying'",
+             WHERE status = 'verifying' AND updated_at < now() - interval '5 minutes'",
         )
         .execute(&self.pool)
         .await?
@@ -2638,21 +2756,32 @@ impl VerifyStore {
             Err(e) => tracing::warn!(error = %e, "verification scheduler: recovery failed"),
         }
         let mut tick = tokio::time::interval(interval);
+        let mut stale_tick = tokio::time::interval(Duration::from_secs(300));
         loop {
-            tick.tick().await;
-            match self.claim_due(500).await {
-                Ok(due) => {
-                    if !due.is_empty() {
-                        tracing::info!(
-                            due = due.len(),
-                            "verification scheduler: re-injecting jobs"
-                        );
-                        for ih in due {
-                            let _ = tx.send(ih).await;
+            tokio::select! {
+                _ = tick.tick() => {
+                    match self.claim_due(1000).await {
+                        Ok(due) => {
+                            if !due.is_empty() {
+                                tracing::info!(
+                                    due = due.len(),
+                                    "verification scheduler: re-injecting jobs"
+                                );
+                                for ih in due {
+                                    let _ = tx.send(ih).await;
+                                }
+                            }
                         }
+                        Err(e) => tracing::warn!(error = %e, "verification scheduler: claim failed"),
                     }
                 }
-                Err(e) => tracing::warn!(error = %e, "verification scheduler: claim failed"),
+                _ = stale_tick.tick() => {
+                    match self.reset_stale_verifying().await {
+                        Ok(0) => {}
+                        Ok(n) => tracing::info!(recovered = n, "scheduler: reset stale verifying jobs"),
+                        Err(e) => tracing::warn!(error = %e, "scheduler: stale recovery failed"),
+                    }
+                }
             }
         }
     }
@@ -2844,20 +2973,22 @@ impl SightingWriter {
                     continue;
                 }
             };
-            for (ih, source) in chunk {
-                let tag = source.tag();
-                let json = format!("{{\"{tag}\":1}}");
-                let _ = sqlx::query(
-                    "INSERT INTO infohash_sightings (infohash, source_counts) VALUES ($1, $2::jsonb) \
-                     ON CONFLICT (infohash) DO UPDATE SET \
-                     last_seen = now(), total_seen = infohash_sightings.total_seen + 1, \
-                     source_counts = infohash_sightings.source_counts || $2::jsonb",
-                )
-                .bind(ih.as_slice())
-                .bind(&json)
-                .execute(&mut *tx)
-                .await;
-            }
+            let ihs: Vec<&[u8]> = chunk.iter().map(|(ih, _)| ih.as_slice()).collect();
+            let sources: Vec<String> = chunk
+                .iter()
+                .map(|(_, s)| format!("{{\"{}\":1}}", s.tag()))
+                .collect();
+            let _ = sqlx::query(
+                "INSERT INTO infohash_sightings (infohash, source_counts) \
+                 SELECT u.ih, u.sc::jsonb FROM UNNEST($1::bytea[], $2::text[]) AS u(ih, sc) \
+                 ON CONFLICT (infohash) DO UPDATE SET \
+                 last_seen = now(), total_seen = infohash_sightings.total_seen + 1, \
+                 source_counts = infohash_sightings.source_counts || EXCLUDED.source_counts",
+            )
+            .bind(&ihs)
+            .bind(&sources)
+            .execute(&mut *tx)
+            .await;
             if let Err(e) = tx.commit().await {
                 tracing::warn!(error = %e, "sightings: commit failed");
             }
@@ -3051,9 +3182,9 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-const TCP_TIMEOUT: Duration = Duration::from_secs(3);
-const UTP_TIMEOUT: Duration = Duration::from_secs(5);
-const FETCH_TIMEOUT: Duration = Duration::from_secs(25);
+const TCP_TIMEOUT: Duration = Duration::from_secs(2);
+const UTP_TIMEOUT: Duration = Duration::from_secs(4);
+const FETCH_TIMEOUT: Duration = Duration::from_secs(8);
 
 enum FetchOutcome {
     ConnectFailed(SocketAddr, WireError),
@@ -3068,6 +3199,12 @@ pub enum VerifyResult {
     MetadataFailed,
 }
 
+enum SourceState {
+    Peers,
+    NoPeers,
+    Timeout,
+}
+
 pub async fn verify_infohash(
     router: Arc<Router>,
     utp: Option<Arc<UtpSocketUdp>>,
@@ -3075,14 +3212,32 @@ pub async fn verify_infohash(
     race_peers: usize,
     metrics: Arc<Metrics>,
     peer_cache: Arc<PeerCache>,
+    direct: Option<SocketAddr>,
 ) -> VerifyResult {
-    let peers = match source_peers(router, info_hash, race_peers.max(1), metrics.clone(), peer_cache.clone()).await {
-        SourceResult::Peers(p) => p,
-        SourceResult::NoPeers => return VerifyResult::NoPeers,
-        SourceResult::AllTimeout => return VerifyResult::SourceTimeout,
+    let (mut peers, state) = match source_peers(
+        router,
+        info_hash,
+        race_peers.max(1),
+        metrics.clone(),
+        peer_cache.clone(),
+    )
+    .await
+    {
+        SourceResult::Peers(p) => (p, SourceState::Peers),
+        SourceResult::NoPeers => (Vec::new(), SourceState::NoPeers),
+        SourceResult::AllTimeout => (Vec::new(), SourceState::Timeout),
     };
+    if let Some(d) = direct {
+        if !peers.contains(&d) {
+            peers.insert(0, d);
+        }
+    }
+    peers.truncate(race_peers.max(1));
     if peers.is_empty() {
-        return VerifyResult::NoPeers;
+        return match state {
+            SourceState::NoPeers => VerifyResult::NoPeers,
+            _ => VerifyResult::SourceTimeout,
+        };
     }
 
     metrics.fetch_attempts.add(peers.len() as u64);
@@ -3090,16 +3245,16 @@ pub async fn verify_infohash(
     let local = Arc::new(Semaphore::new(race_peers.max(1)));
     let mut set = JoinSet::new();
     for addr in peers {
-        let per = local.clone();
+        let Ok(_permit) = local.clone().try_acquire_owned() else {
+            break;
+        };
         let utp = utp.clone();
         let ih = info_hash;
         let pid = peer_id;
         let cache = peer_cache.clone();
         let metrics = metrics.clone();
         set.spawn(async move {
-            let _permit = per
-                .try_acquire()
-                .expect("local semaphore is sized to the race");
+            let _permit = _permit;
 
             metrics.tcp_attempts.add(1);
             if utp.is_some() {
@@ -3283,7 +3438,9 @@ use crate::verify::fetch_pool::{VerifyResult, verify_infohash};
 use crate::verify::peer_cache::PeerCache;
 use crate::verify::verify::check;
 use librqbit_utp::UtpSocketUdp;
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Semaphore, mpsc};
 
 pub struct VerifyConfig {
@@ -3293,7 +3450,8 @@ pub struct VerifyConfig {
 
 pub async fn run_pipeline(
     mut rx: mpsc::Receiver<Infohash>,
-    router: Arc<Router>,
+    mut announce_rx: mpsc::Receiver<(Infohash, SocketAddr)>,
+    node_routers: Arc<Vec<Arc<Router>>>,
     utp: Option<Arc<UtpSocketUdp>>,
     metrics: Arc<Metrics>,
     batch_writer: Arc<BatchWriter>,
@@ -3301,24 +3459,77 @@ pub async fn run_pipeline(
     config: VerifyConfig,
 ) {
     let global = Arc::new(Semaphore::new(config.global_limit.max(1)));
-    while let Some(ih) = rx.recv().await {
-        let permit = match global.clone().acquire_owned().await {
-            Ok(p) => p,
-            Err(_) => break,
+    let next_router = AtomicUsize::new(0);
+    let race = config.race_peers.max(1);
+    loop {
+        // Prefer announce sightings, but with a bounded burst so a continuous
+        // announce flood can never starve newly discovered get_peers infohashes.
+        for _ in 0..ANNOUNCE_BUDGET {
+            match announce_rx.try_recv() {
+                Ok((ih, addr)) => {
+                    if !spawn_verify(
+                        ih,
+                        Some(addr),
+                        &global,
+                        &next_router,
+                        &node_routers,
+                        &utp,
+                        metrics.clone(),
+                        batch_writer.clone(),
+                        peer_cache.clone(),
+                        race,
+                    )
+                    .await
+                    {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+
+        let (ih, direct) = tokio::select! {
+            item = announce_rx.recv() => {
+                match item {
+                    Some((ih, addr)) => (ih, Some(addr)),
+                    None => match rx.recv().await {
+                        Some(ih) => (ih, None),
+                        None => break,
+                    },
+                }
+            }
+            item = rx.recv() => {
+                match item {
+                    Some(ih) => (ih, None),
+                    None => match announce_rx.recv().await {
+                        Some((ih, addr)) => (ih, Some(addr)),
+                        None => break,
+                    },
+                }
+            }
         };
-        let router = router.clone();
+        let Ok(_permit) = global.clone().acquire_owned().await else {
+            break;
+        };
+        let router = node_routers[next_router.fetch_add(1, Ordering::Relaxed) % node_routers.len()].clone();
+        let is_direct = direct.is_some();
         let utp = utp.clone();
         let metrics = metrics.clone();
         let batch_writer = batch_writer.clone();
         let peer_cache = peer_cache.clone();
-        let race = config.race_peers.max(1);
         tokio::spawn(async move {
-            let _permit = permit;
+            let _permit = _permit;
+            if is_direct {
+                metrics.announce_attempts.add(1);
+            }
             metrics.verify_attempts.add(1);
-            match verify_infohash(router, utp, ih, race, metrics.clone(), peer_cache).await {
+            match verify_infohash(router, utp, ih, race, metrics.clone(), peer_cache, direct).await {
                 VerifyResult::Success(meta) if check(&ih, &meta) => {
                     crate::trace_lifecycle!(&ih, "sha1_check", result = "pass");
                     metrics.verify_success.add(1);
+                    if is_direct {
+                        metrics.announce_success.add(1);
+                    }
                     batch_writer.push_torrent(ih, &meta);
                     crate::trace_lifecycle!(&ih, "persist_torrents", status = "ok");
                     batch_writer.push_verified(ih);
@@ -3348,6 +3559,71 @@ pub async fn run_pipeline(
             }
         });
     }
+}
+
+const ANNOUNCE_BUDGET: usize = 8;
+
+#[allow(clippy::too_many_arguments)]
+async fn spawn_verify(
+    ih: Infohash,
+    direct: Option<SocketAddr>,
+    global: &Arc<Semaphore>,
+    next_router: &AtomicUsize,
+    node_routers: &Arc<Vec<Arc<Router>>>,
+    utp: &Option<Arc<UtpSocketUdp>>,
+    metrics: Arc<Metrics>,
+    batch_writer: Arc<BatchWriter>,
+    peer_cache: Arc<PeerCache>,
+    race: usize,
+) -> bool {
+    let Ok(_permit) = global.clone().acquire_owned().await else {
+        return false;
+    };
+    let router = node_routers[next_router.fetch_add(1, Ordering::Relaxed) % node_routers.len()].clone();
+    let utp = utp.clone();
+    let is_direct = direct.is_some();
+    tokio::spawn(async move {
+        let _permit = _permit;
+        if is_direct {
+            metrics.announce_attempts.add(1);
+        }
+        metrics.verify_attempts.add(1);
+        match verify_infohash(router, utp, ih, race, metrics.clone(), peer_cache, direct).await {
+            VerifyResult::Success(meta) if check(&ih, &meta) => {
+                crate::trace_lifecycle!(&ih, "sha1_check", result = "pass");
+                metrics.verify_success.add(1);
+                if is_direct {
+                    metrics.announce_success.add(1);
+                }
+                batch_writer.push_torrent(ih, &meta);
+                crate::trace_lifecycle!(&ih, "persist_torrents", status = "ok");
+                batch_writer.push_verified(ih);
+            }
+            VerifyResult::Success(_) => {
+                crate::trace_lifecycle!(&ih, "sha1_check", result = "fail");
+                metrics.sha1_mismatch.add(1);
+                metrics.verify_fail.add(1);
+                batch_writer.push_failed(ih, "sha1_mismatch");
+            }
+            VerifyResult::NoPeers => {
+                crate::trace_lifecycle!(&ih, "verify_fail", result = "no_peers");
+                metrics.source_no_peers.add(1);
+                metrics.verify_fail.add(1);
+                batch_writer.push_failed(ih, "no_peers");
+            }
+            VerifyResult::SourceTimeout => {
+                crate::trace_lifecycle!(&ih, "verify_fail", result = "source_timeout");
+                metrics.verify_fail.add(1);
+                batch_writer.push_failed(ih, "source_timeout");
+            }
+            VerifyResult::MetadataFailed => {
+                crate::trace_lifecycle!(&ih, "verify_fail", result = "no_metadata");
+                metrics.verify_fail.add(1);
+                batch_writer.push_failed(ih, "no_metadata");
+            }
+        }
+    });
+    true
 }
 </file>
 
@@ -3413,15 +3689,21 @@ impl PeerCache {
         if self.bad.len() <= MAX_ENTRIES {
             return;
         }
-        let mut entries: Vec<(SocketAddr, Instant)> = self
-            .bad
-            .iter()
-            .map(|entry| (*entry.key(), *entry.value()))
-            .collect();
-        entries.sort_by_key(|(_, t)| *t);
-        let to_remove = entries.len() - MAX_ENTRIES;
-        for (addr, _) in entries.into_iter().take(to_remove) {
-            self.bad.remove(&addr);
+        let _ = self.evict_expired();
+        if self.bad.len() <= MAX_ENTRIES {
+            return;
+        }
+        let excess = self.bad.len() - MAX_ENTRIES;
+        let target_remove = (excess / 8).max(1);
+        let mut to_remove = Vec::with_capacity(target_remove);
+        for entry in self.bad.iter() {
+            if to_remove.len() >= target_remove {
+                break;
+            }
+            to_remove.push(*entry.key());
+        }
+        for key in to_remove {
+            self.bad.remove(&key);
         }
     }
 }
@@ -3486,7 +3768,7 @@ pub async fn source_peers(
             queried.insert(n.addr);
         }
 
-        let mut tasks = Vec::with_capacity(batch.len());
+        let mut set = tokio::task::JoinSet::new();
         for node in batch {
             let router = router.clone();
             let ih_clone = info_hash;
@@ -3502,19 +3784,19 @@ pub async fn source_peers(
                 ),
             ]);
             metrics.source_queries.add(1);
-            tasks.push(tokio::spawn(async move {
+            set.spawn(async move {
                 let node_str = node_addr.to_string();
                 crate::trace_lifecycle!(&ih_clone, "source_query", node = node_str);
                 let res = router
                     .send_query(GET_PEERS, node_addr, args, QUERY_TIMEOUT)
                     .await;
                 (node_addr, res)
-            }));
+            });
         }
 
         let mut new_nodes: Vec<NodeInfo> = Vec::new();
-        for task in tasks {
-            match task.await {
+        while let Some(res) = set.join_next().await {
+            match res {
                 Ok((node_addr, Ok(msg))) => {
                     let Kind::Response { r } = &msg.kind else {
                         continue;
@@ -3558,6 +3840,7 @@ pub async fn source_peers(
                 }
             }
             if peers.len() >= count {
+                set.abort_all();
                 break;
             }
         }
@@ -3566,9 +3849,9 @@ pub async fn source_peers(
             break;
         }
         if !new_nodes.is_empty() {
-            candidates.extend(new_nodes);
+            candidates.extend(new_nodes.iter().cloned());
             candidates.sort_by_key(|n| xor(&info_hash, &n.id));
-            candidates.dedup_by(|a, b| a.addr == b.addr);
+            candidates.dedup_by(|a, b| a.id == b.id);
             candidates.truncate(K);
         }
     }
@@ -3577,6 +3860,9 @@ pub async fn source_peers(
     // Track total peers returned before cache filtering
     metrics.source_returned_peers.add(peers.len() as u64);
     let original_peers_len = peers.len();
+    if original_peers_len == 0 {
+        metrics.source_no_values.add(1);
+    }
     // Filter out cached-bad peers
     let filtered: Vec<SocketAddr> = peers
         .into_iter()
@@ -3959,7 +4245,10 @@ impl WireSession {
 
         loop {
             let piece_start = std::time::Instant::now();
-            let (_, payload) = self.read_message(timeout).await?;
+            let (ext_id, payload) = self.read_message(timeout).await?;
+            if ext_id != self.ut_metadata {
+                continue;
+            }
             let (dict, consumed) = decode_prefix(&payload).map_err(|_| WireError::BadPiece)?;
             let msg_type = dict.get_int(b"msg_type").ok_or(WireError::BadPiece)?;
             match msg_type {
@@ -4041,6 +4330,9 @@ pub struct Config {
     pub rate_limit_per_sec: f64,
     pub trace_sample_rate: f64,
     pub debug_ih: Option<String>,
+    pub parse_nodes6: bool,
+    pub nodes: usize,
+    pub port_base: u16,
 }
 
 impl Default for Config {
@@ -4069,6 +4361,9 @@ impl Default for Config {
             rate_limit_per_sec: 8.0,
             trace_sample_rate: 0.0,
             debug_ih: None,
+            parse_nodes6: false,
+            nodes: 1,
+            port_base: 6881,
         }
     }
 }
@@ -4126,6 +4421,15 @@ impl Config {
             c.trace_sample_rate = v;
         }
         c.debug_ih = std::env::var("CRAW_DEBUG_IH").ok();
+        c.parse_nodes6 = std::env::var("CRAW_PARSE_NODES6")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        c.nodes = env_usize("CRAW_NODES", c.nodes).max(1);
+        c.port_base = env_u64("CRAW_PORT_BASE", 0).max(0) as u16;
+        if c.port_base == 0 {
+            c.port_base = c.bind_addr.port();
+        }
         c
     }
 }
@@ -4163,6 +4467,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, mpsc};
 
 const CHANNEL_CAPACITY: usize = 65536;
@@ -4213,83 +4518,52 @@ async fn main() {
     }
 
     let metrics = Arc::new(Metrics::new());
-    crate::trace::TRACE_CONFIG.set(TraceConfig::new(config.trace_sample_rate, config.debug_ih)).unwrap_or(());
+    crate::trace::TRACE_CONFIG
+        .set(TraceConfig::new(config.trace_sample_rate, config.debug_ih.clone()))
+        .unwrap_or(());
 
-    let identity = storage::identity::IdentityStore::load_or_create(
-        &config.data_dir.join("identity.json"),
-        config.external_ip,
-        config.sybil_count,
-    );
-    let self_id = identity.self_id;
-    let sybils = identity.sybils;
+    let (discovery_tx, discovery_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let (verify_tx, verify_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let (announce_tx, announce_rx) = mpsc::channel(CHANNEL_CAPACITY);
 
-    let token_secret = load_or_create_secret(&config.data_dir.join("token_secret.bin"));
-    let token = Arc::new(Mutex::new(TokenGenerator::new(
-        token_secret,
-        Duration::from_secs(config.token_window_secs),
+    let harvester = Arc::new(Mutex::new(Harvester::new(
+        config.bloom_capacity,
+        discovery_tx,
+        verify_tx.clone(),
+        announce_tx,
+        metrics.clone(),
     )));
 
-    let mut sockets = net::bind_reuseport(config.bind_addr, config.worker_threads)
-        .expect("bind udp sockets")
-        .into_iter()
-        .map(Arc::new)
-        .collect::<Vec<_>>();
-    let send_sock = sockets.swap_remove(0);
-    let self_addr = send_sock.local_addr().expect("local addr");
+    let peer_cache = Arc::new(PeerCache::new(Duration::from_secs(600)));
+    let peer_cache_cleanup = peer_cache.clone();
+
+    let (shutdown_tx, _shutdown_rx): (tokio::sync::broadcast::Sender<()>, _) =
+        broadcast::channel(1);
 
     tracing::info!(
-        self_addr = %self_addr,
-        workers = config.worker_threads,
-        sybils = sybils.len(),
-        arch = env!("CRAW_TARGET_ARCH"),
-        os = env!("CRAW_TARGET_OS"),
-        git = env!("CRAW_GIT_HASH"),
+        nodes = config.nodes,
+        port_base = config.port_base,
+        workers_per_node = config.worker_threads,
+        sybils_per_node = config.sybil_count,
         fetch_limit = config.global_fetch_limit,
         race_peers = config.race_peers,
         "crawler starting"
     );
 
-    let (discovery_tx, discovery_rx) = mpsc::channel(CHANNEL_CAPACITY);
-    let (verify_tx, verify_rx) = mpsc::channel(CHANNEL_CAPACITY);
-
-    let table = Arc::new(Mutex::new(RoutingTable::new(self_id)));
-    load_routing_snapshot(&table, &config.data_dir.join("routing_table.bin"));
-
-    let tx_table = Arc::new(TxTable::new());
-    let harvester = Arc::new(Mutex::new(Harvester::new(
-        config.bloom_capacity,
-        discovery_tx,
-        verify_tx.clone(),
-        metrics.clone(),
-    )));
-
-    let router = Router::new(
-        self_id,
-        self_addr,
-        sybils,
-        send_sock.clone(),
-        tx_table,
-        token.clone(),
-        table.clone(),
-        harvester,
-        metrics.clone(),
-    );
-
-    for sock in sockets {
-        tokio::spawn(net::worker(sock, router.clone()));
-    }
-    tokio::spawn(net::worker(send_sock, router.clone()));
-
-    let limiter = Arc::new(RateLimiter::new(config.rate_limit_per_sec, 64.0));
-    let walker = Walker::new(
-        router.clone(),
-        limiter,
-        config.walker_alpha,
-        Duration::from_millis(config.walker_interval_ms),
-    );
-
     let bootstrap = resolve_bootstrap(&config.bootstrap).await;
-    walker.bootstrap(bootstrap).await;
+    let mut node_routers = Vec::with_capacity(config.nodes);
+    for i in 0..config.nodes {
+        spawn_node(
+            &config,
+            i,
+            &bootstrap,
+            metrics.clone(),
+            harvester.clone(),
+            &mut node_routers,
+        ).await;
+        tracing::info!(node = i, "dht node started");
+    }
+    let node_routers: Arc<Vec<Arc<Router>>> = Arc::new(node_routers);
 
     let sightings = Arc::new(SightingWriter::new(pool.clone()));
     let sightings_run = sightings.clone().run(Duration::from_millis(500));
@@ -4307,7 +4581,7 @@ async fn main() {
     ));
     let retry_run = verify_store
         .clone()
-        .run_scheduler(verify_tx.clone(), Duration::from_secs(30));
+        .run_scheduler(verify_tx.clone(), Duration::from_secs(15));
 
     let batch_writer = Arc::new(BatchWriter::new(
         pool.clone(),
@@ -4319,9 +4593,6 @@ async fn main() {
             Duration::from_secs(43200),
         ],
     ));
-
-    let peer_cache = Arc::new(PeerCache::new(Duration::from_secs(600)));
-    let peer_cache_cleanup = peer_cache.clone();
 
     let (shutdown_tx, _shutdown_rx) = broadcast::channel(1);
     let batch_run = batch_writer
@@ -4346,7 +4617,8 @@ async fn main() {
 
     let pipeline = verify::run_pipeline(
         verify_rx,
-        router.clone(),
+        announce_rx,
+        node_routers,
         utp_socket().await,
         metrics.clone(),
         batch_writer.clone(),
@@ -4357,20 +4629,12 @@ async fn main() {
         },
     );
 
-    let routing_snapshot = routing_snapshot_loop(
-        table.clone(),
-        config.data_dir.join("routing_table.bin"),
-        ROUTING_SNAPSHOT_INTERVAL,
-    );
-
     let report = report_loop(
         metrics.clone(),
         sightings.clone(),
         batch_writer.clone(),
         Duration::from_secs(15),
     );
-    let cleanup = tx_cleanup(router.clone());
-    let token_rotate = token_rotation(token, Duration::from_secs(config.token_window_secs.max(60)));
     let cache_cleanup = cache_cleanup_loop(peer_cache_cleanup, metrics.clone(), Duration::from_secs(60));
 
     let shutdown_signal = async {
@@ -4380,20 +4644,21 @@ async fn main() {
     };
 
     tokio::select! {
-        _ = walker.run() => {}
         _ = sightings_run => {}
         _ = sightings_flush => {}
         _ = retry_run => {}
         _ = batch_run => {}
         _ = metrics_run => {}
         _ = pipeline => {}
-        _ = routing_snapshot => {}
         _ = report => {}
-        _ = cleanup => {}
-        _ = token_rotate => {}
         _ = cache_cleanup => {}
         _ = shutdown_signal => {}
     }
+
+    tracing::info!("shutdown: draining pending writes");
+    batch_writer.flush().await;
+    sightings.flush().await;
+    tracing::info!("shutdown complete");
 }
 
 async fn utp_socket() -> Option<Arc<librqbit_utp::UtpSocketUdp>> {
@@ -4404,6 +4669,87 @@ async fn utp_socket() -> Option<Arc<librqbit_utp::UtpSocketUdp>> {
             None
         }
     }
+}
+
+async fn spawn_node(
+    config: &Config,
+    node_index: usize,
+    bootstrap: &[SocketAddr],
+    metrics: Arc<Metrics>,
+    harvester: Arc<Mutex<Harvester>>,
+    node_routers: &mut Vec<Arc<Router>>,
+) {
+    let data_dir = config.data_dir.join(format!("node_{node_index}"));
+    std::fs::create_dir_all(&data_dir).expect("create node data dir");
+
+    let identity = storage::identity::IdentityStore::load_or_create(
+        &data_dir.join("identity.json"),
+        config.external_ip,
+        config.sybil_count,
+    );
+    let self_id = identity.self_id;
+    let sybils = identity.sybils;
+
+    let token_secret = load_or_create_secret(&data_dir.join("token_secret.bin"));
+    let token = Arc::new(std::sync::RwLock::new(TokenGenerator::new(
+        token_secret,
+        Duration::from_secs(config.token_window_secs),
+    )));
+
+    let bind = SocketAddr::new(
+        config.bind_addr.ip(),
+        config.port_base + node_index as u16,
+    );
+    let sockets = net::bind_reuseport(bind, config.worker_threads)
+        .expect("bind udp sockets")
+        .into_iter()
+        .map(Arc::new)
+        .collect::<Vec<_>>();
+    let self_addr = sockets[0].local_addr().expect("local addr");
+    let send_socks: Arc<Vec<Arc<UdpSocket>>> = Arc::new(sockets.clone());
+
+    let table = Arc::new(Mutex::new(RoutingTable::new(self_id)));
+    load_routing_snapshot(&table, &data_dir.join("routing_table.bin"));
+
+    let tx_table = Arc::new(TxTable::new());
+    let router = Router::new(
+        self_id,
+        self_addr,
+        sybils,
+        config.external_ip,
+        send_socks.clone(),
+        tx_table.clone(),
+        token.clone(),
+        table.clone(),
+        harvester.clone(),
+        metrics.clone(),
+    );
+
+    for sock in sockets {
+        tokio::spawn(net::worker(sock, router.clone()));
+    }
+
+    let limiter = Arc::new(RateLimiter::new(config.rate_limit_per_sec, 64.0));
+    let walker = Walker::new(
+        router.clone(),
+        limiter.clone(),
+        bootstrap.to_vec(),
+        config.walker_alpha,
+        Duration::from_millis(config.walker_interval_ms),
+        config.parse_nodes6,
+    );
+    walker.bootstrap(bootstrap).await;
+
+    tokio::spawn(async move {
+        walker.run().await;
+    });
+    tokio::spawn(limiter_sweep_loop(limiter.clone()));
+    let snap_path = data_dir.join("routing_table.bin");
+    tokio::spawn(routing_snapshot_loop(table.clone(), snap_path, ROUTING_SNAPSHOT_INTERVAL));
+    tokio::spawn(tx_cleanup(router.clone()));
+    tokio::spawn(token_rotation(token, Duration::from_secs(config.token_window_secs.max(60))));
+
+    node_routers.push(router);
 }
 
 fn load_or_create_secret(path: &std::path::Path) -> [u8; 32] {
@@ -4452,8 +4798,26 @@ async fn routing_snapshot_loop(table: Arc<Mutex<RoutingTable>>, path: PathBuf, i
 }
 
 async fn flush_sightings(writer: Arc<SightingWriter>, mut rx: mpsc::Receiver<(NodeId, Source)>) {
-    while let Some((ih, source)) = rx.recv().await {
-        writer.push(ih, source);
+    loop {
+        match rx.recv().await {
+            Some((ih, source)) => writer.push(ih, source),
+            None => {
+                tracing::warn!("discovery channel closed, flushing remaining sightings");
+                writer.flush().await;
+                std::future::pending::<()>().await;
+            }
+        }
+    }
+}
+
+async fn limiter_sweep_loop(limiter: Arc<RateLimiter>) {
+    let mut tick = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        tick.tick().await;
+        let expired = limiter.sweep_expired();
+        if expired > 0 {
+            tracing::debug!(expired, "rate limiter: swept expired buckets");
+        }
     }
 }
 
@@ -4534,6 +4898,23 @@ async fn report_loop(
             utp_metadata_ok = cur.utp_metadata_ok,
             source_returned_peers = cur.source_returned_peers,
             source_filtered_by_cache = cur.source_filtered_by_cache,
+            source_no_values = cur.source_no_values,
+            announce_attempts = cur.announce_attempts,
+            announce_success = cur.announce_success,
+            inbound_announce_valid = cur.inbound_announce_valid,
+            inbound_announce_invalid_token = cur.inbound_announce_invalid_token,
+            walker_steps = cur.walker_steps,
+            walker_queries = cur.walker_queries,
+            walker_ok = cur.walker_ok,
+            walker_nodes_returned = cur.walker_nodes_returned,
+            walker_self_target = cur.walker_self_target,
+            walker_random_target = cur.walker_random_target,
+            walker_sybil_target = cur.walker_sybil_target,
+            routing_insert_calls = cur.routing_insert_calls,
+            routing_nodes_added = cur.routing_nodes_added,
+            routing_buckets_used = cur.routing_buckets_used,
+            routing_new_ids = cur.routing_new_ids,
+            routing_rejected = cur.routing_rejected,
         );
         prev = cur;
     }
@@ -4547,12 +4928,12 @@ async fn tx_cleanup(router: Arc<Router>) {
     }
 }
 
-async fn token_rotation(token: Arc<Mutex<TokenGenerator>>, window: Duration) {
+async fn token_rotation(token: Arc<std::sync::RwLock<TokenGenerator>>, window: Duration) {
     let mut tick = tokio::time::interval(window);
     loop {
         tick.tick().await;
         token
-            .lock()
+            .write()
             .expect("token generator poisoned")
             .rotate(rand::random::<[u8; 32]>());
     }
@@ -4588,6 +4969,7 @@ pub struct Metrics {
     pub inbound_announce_bep42: AtomicU64,
     pub inbound_announce_random: AtomicU64,
     pub inbound_announce_invalid_token: AtomicU64,
+    pub inbound_announce_valid: AtomicU64,
     pub tokens_issued: AtomicU64,
     pub infohashes_harvested: AtomicU64,
     pub unique_infohashes: AtomicU64,
@@ -4623,6 +5005,10 @@ pub struct Metrics {
     // Source peer quality metrics
     pub source_returned_peers: AtomicU64,
     pub source_filtered_by_cache: AtomicU64,
+    pub source_no_values: AtomicU64,
+    // Announce direct-fetch metrics
+    pub announce_attempts: AtomicU64,
+    pub announce_success: AtomicU64,
     // Transport metrics
     pub tcp_attempts: AtomicU64,
     pub utp_attempts: AtomicU64,
@@ -4630,6 +5016,20 @@ pub struct Metrics {
     pub utp_connect_ok: AtomicU64,
     pub tcp_metadata_ok: AtomicU64,
     pub utp_metadata_ok: AtomicU64,
+    // Walker metrics
+    pub walker_steps: AtomicU64,
+    pub walker_queries: AtomicU64,
+    pub walker_ok: AtomicU64,
+    pub walker_nodes_returned: AtomicU64,
+    pub walker_self_target: AtomicU64,
+    pub walker_random_target: AtomicU64,
+    pub walker_sybil_target: AtomicU64,
+    // Routing insert metrics
+    pub routing_insert_calls: AtomicU64,
+    pub routing_nodes_added: AtomicU64,
+    pub routing_buckets_used: AtomicU64,
+    pub routing_new_ids: AtomicU64,
+    pub routing_rejected: AtomicU64,
 }
 
 impl Metrics {
@@ -4662,6 +5062,7 @@ pub struct Snapshot {
     pub inbound_announce_bep42: u64,
     pub inbound_announce_random: u64,
     pub inbound_announce_invalid_token: u64,
+    pub inbound_announce_valid: u64,
     pub tokens_issued: u64,
     pub infohashes_harvested: u64,
     pub unique_infohashes: u64,
@@ -4694,12 +5095,27 @@ pub struct Snapshot {
     pub peer_cache_evictions: u64,
     pub source_returned_peers: u64,
     pub source_filtered_by_cache: u64,
+    pub source_no_values: u64,
+    pub announce_attempts: u64,
+    pub announce_success: u64,
     pub tcp_attempts: u64,
     pub utp_attempts: u64,
     pub tcp_connect_ok: u64,
     pub utp_connect_ok: u64,
     pub tcp_metadata_ok: u64,
     pub utp_metadata_ok: u64,
+    pub walker_steps: u64,
+    pub walker_queries: u64,
+    pub walker_ok: u64,
+    pub walker_nodes_returned: u64,
+    pub walker_self_target: u64,
+    pub walker_random_target: u64,
+    pub walker_sybil_target: u64,
+    pub routing_insert_calls: u64,
+    pub routing_nodes_added: u64,
+    pub routing_buckets_used: u64,
+    pub routing_new_ids: u64,
+    pub routing_rejected: u64,
 }
 
 impl Metrics {
@@ -4719,6 +5135,7 @@ impl Metrics {
             inbound_announce_invalid_token: self
                 .inbound_announce_invalid_token
                 .load(Ordering::Relaxed),
+            inbound_announce_valid: self.inbound_announce_valid.load(Ordering::Relaxed),
             tokens_issued: self.tokens_issued.load(Ordering::Relaxed),
             infohashes_harvested: self.infohashes_harvested.load(Ordering::Relaxed),
             unique_infohashes: self.unique_infohashes.load(Ordering::Relaxed),
@@ -4751,12 +5168,27 @@ impl Metrics {
             peer_cache_evictions: self.peer_cache_evictions.load(Ordering::Relaxed),
             source_returned_peers: self.source_returned_peers.load(Ordering::Relaxed),
             source_filtered_by_cache: self.source_filtered_by_cache.load(Ordering::Relaxed),
+            source_no_values: self.source_no_values.load(Ordering::Relaxed),
+            announce_attempts: self.announce_attempts.load(Ordering::Relaxed),
+            announce_success: self.announce_success.load(Ordering::Relaxed),
             tcp_attempts: self.tcp_attempts.load(Ordering::Relaxed),
             utp_attempts: self.utp_attempts.load(Ordering::Relaxed),
             tcp_connect_ok: self.tcp_connect_ok.load(Ordering::Relaxed),
             utp_connect_ok: self.utp_connect_ok.load(Ordering::Relaxed),
             tcp_metadata_ok: self.tcp_metadata_ok.load(Ordering::Relaxed),
             utp_metadata_ok: self.utp_metadata_ok.load(Ordering::Relaxed),
+            walker_steps: self.walker_steps.load(Ordering::Relaxed),
+            walker_queries: self.walker_queries.load(Ordering::Relaxed),
+            walker_ok: self.walker_ok.load(Ordering::Relaxed),
+            walker_nodes_returned: self.walker_nodes_returned.load(Ordering::Relaxed),
+            walker_self_target: self.walker_self_target.load(Ordering::Relaxed),
+            walker_random_target: self.walker_random_target.load(Ordering::Relaxed),
+            walker_sybil_target: self.walker_sybil_target.load(Ordering::Relaxed),
+            routing_insert_calls: self.routing_insert_calls.load(Ordering::Relaxed),
+            routing_nodes_added: self.routing_nodes_added.load(Ordering::Relaxed),
+            routing_buckets_used: self.routing_buckets_used.load(Ordering::Relaxed),
+            routing_new_ids: self.routing_new_ids.load(Ordering::Relaxed),
+            routing_rejected: self.routing_rejected.load(Ordering::Relaxed),
         }
     }
 }
@@ -4774,7 +5206,8 @@ use crate::krpc::{Infohash, NodeId};
 use crate::metrics::{Add1, Metrics};
 use bytes::Bytes;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
@@ -4802,9 +5235,11 @@ pub struct Router {
     pub self_id: NodeId,
     pub self_addr: SocketAddr,
     pub sybils: Vec<(NodeId, SybilPool)>,
-    send_sock: Arc<UdpSocket>,
+    pub external_ip: Option<std::net::IpAddr>,
+    send_socks: Arc<Vec<Arc<UdpSocket>>>,
+    send_idx: AtomicUsize,
     tx: Arc<TxTable>,
-    token: Arc<Mutex<TokenGenerator>>,
+    token: Arc<RwLock<TokenGenerator>>,
     table: Arc<Mutex<RoutingTable>>,
     harvest: Arc<Mutex<Harvester>>,
     metrics: Arc<Metrics>,
@@ -4816,9 +5251,10 @@ impl Router {
         self_id: NodeId,
         self_addr: SocketAddr,
         sybils: Vec<(NodeId, SybilPool)>,
-        send_sock: Arc<UdpSocket>,
+        external_ip: Option<std::net::IpAddr>,
+        send_socks: Arc<Vec<Arc<UdpSocket>>>,
         tx: Arc<TxTable>,
-        token: Arc<Mutex<TokenGenerator>>,
+        token: Arc<RwLock<TokenGenerator>>,
         table: Arc<Mutex<RoutingTable>>,
         harvest: Arc<Mutex<Harvester>>,
         metrics: Arc<Metrics>,
@@ -4827,7 +5263,9 @@ impl Router {
             self_id,
             self_addr,
             sybils,
-            send_sock,
+            external_ip,
+            send_socks,
+            send_idx: AtomicUsize::new(0),
             tx,
             token,
             table,
@@ -4884,12 +5322,16 @@ impl Router {
     }
 
     fn closest_phantom(&self, target: &[u8; 20], count: usize) -> Vec<NodeInfo> {
+        let public_addr = SocketAddr::new(
+            self.external_ip.unwrap_or(self.self_addr.ip()),
+            self.self_addr.port(),
+        );
         let mut sybils: Vec<NodeInfo> = self
             .sybils
             .iter()
             .map(|(id, _)| NodeInfo {
                 id: *id,
-                addr: self.self_addr,
+                addr: public_addr,
             })
             .collect();
         sybils.sort_by_key(|n| xor(target, &n.id));
@@ -4945,10 +5387,10 @@ impl Router {
             SybilPool::Bep42 => self.metrics.inbound_get_peers_bep42.add(1),
             SybilPool::Random => self.metrics.inbound_get_peers_random.add(1),
         }
-        self.do_harvest(ih, crate::harvest::Source::GetPeers);
+        self.do_harvest(ih, crate::harvest::Source::GetPeers, None);
         let token = self
             .token
-            .lock()
+            .read()
             .expect("token generator poisoned")
             .generate(from.ip());
         self.metrics.tokens_issued.add(1);
@@ -4973,7 +5415,7 @@ impl Router {
     fn respond_announce_peer(&self, t: &Bytes, a: &BValue, from: SocketAddr) {
         let valid = a
             .get_bytes(b"token")
-            .map(|tok| self.token.lock().expect("token").verify(from.ip(), tok))
+            .map(|tok| self.token.read().expect("token").verify(from.ip(), tok))
             .unwrap_or(false);
         if let Some(ih) = extract_id20(a, b"info_hash") {
             match self.classify_pool(&ih) {
@@ -4981,7 +5423,18 @@ impl Router {
                 SybilPool::Random => self.metrics.inbound_announce_random.add(1),
             }
             if valid {
-                self.do_harvest(ih, crate::harvest::Source::AnnouncePeer);
+                self.metrics.inbound_announce_valid.add(1);
+                let implied = a.get_int(b"implied_port").unwrap_or(0) != 0;
+                let target_port = if implied {
+                    from.port()
+                } else {
+                    a.get_int(b"port")
+                        .and_then(|p| u16::try_from(p).ok())
+                        .filter(|&p| p != 0)
+                        .unwrap_or(from.port())
+                };
+                let peer_addr = SocketAddr::new(from.ip(), target_port);
+                self.do_harvest(ih, crate::harvest::Source::AnnouncePeer, Some(peer_addr));
             } else {
                 self.metrics.inbound_announce_invalid_token.add(1);
             }
@@ -4990,12 +5443,12 @@ impl Router {
         self.send_response(t, from, r);
     }
 
-    fn do_harvest(&self, ih: Infohash, source: crate::harvest::Source) {
+    fn do_harvest(&self, ih: Infohash, source: crate::harvest::Source, direct: Option<SocketAddr>) {
         self.metrics.infohashes_harvested.add(1);
         self.harvest
             .lock()
             .expect("harvester poisoned")
-            .harvest(ih, source);
+            .harvest(ih, source, direct);
     }
 
     fn handle_reply(&self, msg: Message) {
@@ -5012,12 +5465,14 @@ impl Router {
         self.try_send(&enc, from);
     }
 
+    fn next_socket(&self) -> &UdpSocket {
+        let idx = self.send_idx.fetch_add(1, AtomicOrdering::Relaxed) % self.send_socks.len();
+        &self.send_socks[idx]
+    }
+
     fn try_send(&self, buf: &[u8], addr: SocketAddr) {
-        match self.send_sock.try_send_to(buf, addr) {
+        match self.next_socket().try_send_to(buf, addr) {
             Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                self.metrics.send_dropped.add(1);
-            }
             Err(_) => {
                 self.metrics.send_dropped.add(1);
             }
@@ -5035,7 +5490,7 @@ impl Router {
         let msg = Message::query(txid.clone(), method, args);
         let enc = msg.encode();
         self.metrics.outbound_queries.add(1);
-        if let Err(e) = self.send_sock.send_to(&enc, addr).await {
+        if let Err(e) = self.next_socket().send_to(&enc, addr).await {
             self.tx.take(&txid);
             return Err(QueryError::Io(e));
         }
@@ -5075,14 +5530,31 @@ impl Router {
 
     pub fn insert_nodes(&self, nodes: Vec<NodeInfo>) {
         let mut table = self.table.lock().expect("routing table poisoned");
+        self.metrics.routing_insert_calls.add(nodes.len() as u64);
+        let mut new_ids = 0u64;
+        let mut rejected = 0u64;
         for n in nodes {
+            if n.id == self.self_id || self.sybils.iter().any(|(sid, _)| sid == &n.id) {
+                rejected += 1;
+                continue;
+            }
+            if !table.contains_id(&n.id) {
+                new_ids += 1;
+            }
             table.insert(n);
         }
+        self.metrics.routing_new_ids.add(new_ids);
+        self.metrics.routing_rejected.add(rejected);
         self.metrics.routing_table_len.store(table.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.metrics.routing_buckets_used.store(table.buckets_used() as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn routing_nodes(&self) -> Vec<NodeInfo> {
         self.table.lock().expect("routing table poisoned").all()
+    }
+
+    pub fn metrics(&self) -> &Arc<Metrics> {
+        &self.metrics
     }
 
     pub fn random_routing_nodes(&self, n: usize) -> Vec<NodeInfo> {
@@ -5101,7 +5573,9 @@ impl Router {
 
     pub fn cleanup_tx(&self, ttl: Duration) {
         let removed = self.tx.cleanup(Instant::now(), ttl);
-        self.metrics.tx_table_len.add(self.tx.len() as u64);
+        self.metrics
+            .tx_table_len
+            .store(self.tx.len() as u64, std::sync::atomic::Ordering::Relaxed);
         let _ = removed;
     }
 }
@@ -5200,23 +5674,6 @@ zerone
 *.md
 </file>
 
-<file path=".env.example">
-# Copy to .env and fill in real values (never commit .env).
-# Required:
-PG_PASSWORD=change-me
-CRAW_EXTERNAL_IP=YOUR_VM_PUBLIC_IP
-
-# Optional (defaults shown):
-POSTGRES_USER=crawler
-POSTGRES_DB=craw
-DB_HOST=workspace-production.tailfe0c2.ts.net  # Tailscale MagicDNS hostname
-PG_PORT=5432
-CRAW_FETCH_LIMIT=40      # Must be <= pg max_connections (48 pool)
-CRAW_RACE_PEERS=12
-CRAW_WORKERS=8
-RUST_LOG=info
-</file>
-
 <file path=".gitignore">
 .env
 session-*.md
@@ -5270,340 +5727,6 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "json"
 tokio = { version = "1.53.1", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-</file>
-
-<file path="deploy.sh">
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Deploy crawler to zerone (ARM aarch64)
-# Usage: ./deploy.sh [zerone-host]
-#
-# This script:
-# 1. Cross-compiles for aarch64 (or builds Docker image on target)
-# 2. Deploys the binary to the target host
-# 3. Restarts the container
-#
-# For Docker-based deployment (recommended):
-#   docker buildx build --platform linux/arm64 -t dht-crawler .
-#   docker compose up -d
-
-HOST="${1:-zerone}"
-BUILD_DIR="target/aarch64-unknown-linux-gnu/release"
-
-echo "=== Deploying crawler to $HOST ==="
-
-# Step 1: Cross-compile for aarch64
-echo "[1/4] Building for aarch64..."
-cd "$(dirname "$0")"
-cargo build --release --target aarch64-unknown-linux-gnu
-
-# Step 2: Verify binary architecture
-echo "[2/4] Verifying binary..."
-file "$BUILD_DIR/craw"
-
-# Step 3: Deploy to remote
-echo "[3/4] Copying to $HOST..."
-ssh "$HOST" "docker stop craw-crawler 2>/dev/null || true"
-scp "$BUILD_DIR/craw" "$HOST:/tmp/craw-new"
-ssh "$HOST" "sudo cp /tmp/craw-new /home/ubuntu/craw-stack/craw && sudo chmod 755 /home/ubuntu/craw-stack/craw"
-
-# Step 4: Restart
-echo "[4/4] Starting container..."
-ssh "$HOST" "docker start craw-crawler"
-
-# Step 5: Verify
-sleep 5
-echo "=== Verifying deployment ==="
-ssh "$HOST" "docker logs --tail 3 craw-crawler 2>&1"
-
-echo ""
-echo "=== Deployment complete ==="
-echo "Binary: aarch64-unknown-linux-gnu"
-echo "Note: For full Docker build, run on target:"
-echo "  docker buildx build --platform linux/arm64 -t dht-crawler ."
-echo "  docker compose up -d"
-</file>
-
-<file path="docker-compose.yml">
-name: craw
-
-x-crawler-common: &crawler-common
-  build:
-    context: .
-    dockerfile: Dockerfile
-  image: dht-crawler
-  init: true
-  restart: unless-stopped
-  network_mode: host
-  depends_on:
-    db:
-      condition: service_healthy
-  volumes:
-    - crawler-data:/home/crawler/data
-
-services:
-  db:
-    image: postgres:16
-    container_name: craw-db
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-crawler}
-      POSTGRES_PASSWORD: ${PG_PASSWORD:?PG_PASSWORD is required (see .env.example)}
-      POSTGRES_DB: ${POSTGRES_DB:-craw}
-    command: ["-c", "config_file=/etc/postgresql.conf"]
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./pg/postgresql.conf:/etc/postgresql.conf:ro
-    ports:
-      - "0.0.0.0:${PG_PORT:-55432}:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crawler} -d ${POSTGRES_DB:-craw}"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 5s
-    networks:
-      - internal
-
-  crawler:
-    <<: *crawler-common
-    container_name: craw-crawler
-    environment:
-      CRAW_EXTERNAL_IP: ${CRAW_EXTERNAL_IP:?set your VM public IP in .env}
-      CRAW_FETCH_LIMIT: ${CRAW_FETCH_LIMIT:-1200}
-      CRAW_RACE_PEERS: ${CRAW_RACE_PEERS:-12}
-      CRAW_WORKERS: ${CRAW_WORKERS:-8}
-      RUST_LOG: ${RUST_LOG:-info}
-      DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@${DB_HOST:-127.0.0.1}:${PG_PORT:-55432}/${POSTGRES_DB:-craw}?sslmode=disable
-
-  dashboard:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile
-    image: craw-dashboard
-    container_name: craw-dashboard
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@db:5432/${POSTGRES_DB:-craw}?sslmode=disable
-      PORT: "3000"
-    ports:
-      - "0.0.0.0:${DASH_PORT:-3000}:3000"
-    networks:
-      - internal
-
-networks:
-  internal:
-    driver: bridge
-
-volumes:
-  pgdata:
-    external: true
-    name: craw-pg-data
-  crawler-data:
-    external: true
-    name: dht-crawler-data
-</file>
-
-<file path="Dockerfile">
-FROM --platform=linux/arm64 rust:1.97-slim AS builder
-WORKDIR /app
-ARG CRAW_GIT_HASH=unknown
-ENV CRAW_GIT_HASH=${CRAW_GIT_HASH}
-RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
-COPY . .
-RUN cargo build --release
-
-FROM --platform=linux/arm64 debian:bookworm-slim
-RUN useradd -m -u 10001 crawler && mkdir -p /home/crawler/data && chown -R crawler:crawler /home/crawler
-COPY --from=builder /app/target/release/craw /usr/local/bin/craw
-USER crawler
-WORKDIR /home/crawler
-ENV CRAW_DATA_DIR=/home/crawler/data
-ENTRYPOINT ["craw"]
-</file>
-
-<file path="Makefile">
-COMPOSE ?= docker compose
-STACK  ?= /home/ubuntu/craw-stack
-
-compose:
-	$(COMPOSE) --project-directory $(STACK) --env-file $(STACK)/.env -f $(STACK)/docker-compose.yml $(CMD)
-
-bootstrap:
-	docker volume create craw-pg-data || true
-	docker volume create dht-crawler-data || true
-
-up: bootstrap
-	$(MAKE) compose CMD="up -d"
-
-build:
-	$(MAKE) compose CMD="up -d --build"
-
-down:
-	$(MAKE) compose CMD="down"
-
-restart: up
-	$(MAKE) compose CMD="restart"
-
-ps:
-	$(MAKE) compose CMD="ps"
-
-logs:
-	$(MAKE) compose CMD="logs -f --tail=100"
-
-backup:
-	mkdir -p backups
-	$(COMPOSE) --project-directory $(STACK) --env-file $(STACK)/.env -f $(STACK)/docker-compose.yml exec -T db \
-		pg_dump -U crawler craw > backups/craw-$$(date +%F-%H%M).sql
-
-.PHONY: compose bootstrap up build down restart ps logs backup
-</file>
-
-<file path="OpenSpec.md">
-# OpenSpec: Crawler v2 (High-Performance DHT Sybil Crawler)
-
-## 1. Overview and Design Philosophy
-
-Crawler v2 is a high-performance BitTorrent DHT crawler and metadata verifier designed to comfortably clear 7,000+ verified infohashes per hour on modest hardware. 
-
-The core philosophy revolves around three principles:
-1. **Inbound-Driven Discovery**: Infohashes are harvested purely from incoming `get_peers` and `announce_peer` queries. Discovery volume is driven by an *active* self-lookup walk engine that inserts our phantom Sybil IDs into real nodes' routing tables.
-2. **Decoupled Pipelines**: Discovery and Verification are completely separate. The discovery engine yields raw infohashes and feeds a bounded queue; the verification engine races connections to fetch metadata. One never blocks the other.
-3. **Batched & Bounded**: Hot paths use multi-socket UDP with `SO_REUSEPORT`, kernel-level batching (`recvmmsg`), zero-copy KRPC decoding, and batch database writes.
-
-### Critical Protocol Realities Addressed
-*   **BEP42 vs. Keyspace Coverage (The Phase 2 Strategy)**: BEP42 ties node IDs to external IPs. With a single IP, all compliant IDs share a prefix and cannot be distributed across the keyspace. To resolve this and hit 7,000/hr, Phase 2 implements a **Hybrid approach (Option C)**: We run BEP42-compliant IDs (using our explicitly resolved external IP) alongside random, non-BEP42 IDs spread broadly across the keyspace. We will actively measure the inbound `get_peers` rate and pruning rate for both pools. If modern nodes aggressively prune the non-BEP42 IDs and throughput drops, we will pivot to provisioning multiple public source IPs (Option A) to achieve genuine keyspace distribution.
-*   **KRPC Completeness**: Proper handling of `ping` (to avoid being pruned) and cryptographic `token` generation (to receive subsequent `announce_peer` messages) are mandatory.
-
----
-
-## 2. Architecture
-
-```mermaid
-flowchart TD
-    subgraph DHT Layer
-        Walk[Self-Lookup Walker\nActive outbound find_node] --> Sybil
-        Sybil[Sybil Swarm\nHybrid: BEP42 + Random Keyspace IDs] 
-        Sybil --> Net[Multi-Socket UDP I/O\nSO_REUSEPORT, recvmmsg]
-    end
-
-    Net --> Router[KRPC Message Router & Tx State]
-    
-    subgraph KRPC State
-        Router <--> TxTable[Shared Transaction Table\nTxID, Retries, Timeouts]
-        Router <--> TokenGen[Token Generator\nHMAC(IP + Secret + Time)]
-    end
-
-    subgraph Harvest Engine
-        Router --> PING[ping responder]
-        Router --> GP[get_peers responder\nReturns Token + Extracts IH]
-        Router --> AP[announce_peer responder\nExtracts IH]
-        Router --> FN[find_node responder\nAnswers with phantom IDs]
-        FN -.-> Sybil
-        PING -.-> Sybil
-    end
-
-    GP --> Bloom[Bloom Filter Dedupe\n2-filter rotation]
-    AP --> Bloom
-    
-    Bloom --> Queue[Bounded MPSC Channel\nBackpressure Boundary]
-
-    subgraph Storage: Discovery
-        Queue --> DiscWriter[Discovery Batch Writer\nINSERT ON CONFLICT]
-    end
-
-    subgraph Verification Pipeline
-        Queue --> VQ[Verification Job Queue]
-        VQ --> Sourcing[Peer Sourcing\nActive get_peers fanout]
-        Sourcing --> Pool[Fetch Pool\nRace N peers, global/local sems]
-        Pool --> Wire[TCP-First Wire Client\nBEP3 + BEP10 + BEP9]
-        Wire --> Verify{Exact Raw Bytes\nSHA1 == Infohash?}
-    end
-
-    subgraph Storage: Metadata
-        Verify -- Pass --> MetaWriter[Metadata Batch Writer]
-        Verify -- Fail --> Retry[Backoff Retry Queue\n1m -> 5m -> 30m -> drop]
-    end
-```
-
----
-
-## 3. Module Breakdown (Rust)
-
-To keep the project maintainable, the crawler is split into targeted modules (approx. 3000-4000 LOC total):
-
-*   **`src/krpc/`**
-    *   `codec.rs`: Zero-copy bencode codec over `BytesMut`. Fuzz-tested against malformed packets to prevent worker panics.
-    *   `message.rs`: KRPC message definitions.
-    *   `tx_state.rs`: **Shared Transaction table** mapping outgoing queries (TxID $\rightarrow$ query type, target, timestamp, callback). Handles timeouts and retry policies. *Must be shared across all `SO_REUSEPORT` sockets*, as responses may arrive on any socket.
-    *   `token.rs`: **Token generation** via HMAC(requesting IP + secret + time window) for `get_peers` responses. Includes time window overlap support for smooth secret rotation.
-*   **`src/dht/`**
-    *   `node_id.rs`: Generation of **BEP42-compliant** Node IDs (tied to external IP) and random keyspace IDs.
-    *   `routing_table.rs`: K-buckets and Sybil identities.
-    *   `walker.rs`: The active self-lookup engine ($\alpha$-bounded `find_node` queries).
-*   **`src/net/`**
-    *   `SO_REUSEPORT` socket management (1 per core).
-    *   `recvmmsg`/`sendmmsg` buffer pools and rate-limiters (token bucket) per target IP.
-*   **`src/harvest/`**
-    *   Dual harvest extraction logic (`get_peers` + `announce_peer`).
-    *   Rotating Bloom filter deduplication.
-*   **`src/verify/`**
-    *   `peer_source.rs`: Active fanout to find more peers for verification.
-    *   `wire.rs`: BEP3, BEP10, and BEP9 metadata fetch extension protocols. **TCP-only initially.** Extracts `metadata_size` from BEP10 handshake. Note: If uTP/MSE are added later, significantly more time must be allocated as hand-rolling is complex.
-    *   `verify.rs`: Slices the **exact raw bytes** of the received info-dictionary for SHA1 verification to prevent bencode key-ordering mismatches.
-    *   `fetch_pool.rs`: 2-level semaphore racing fetch logic with layered timeouts.
-*   **`src/storage/`**
-    *   `discovery_writer.rs`: 500ms multi-row flush using staging tables or `INSERT ... ON CONFLICT` (since pure `COPY` lacks upsert semantics).
-    *   `metadata_writer.rs`: Verified metadata flusher.
-    *   `retry_queue.rs`: Exponential backoff state.
-*   **`src/main.rs`**
-    *   Wiring, async runtime setup, metrics (queue depths, inbound query rates, token issuance, prune rate, keyspace prefix yields), and configuration.
-
----
-
-## 4. Implementation Phases & Milestones
-
-### Phase 1: Foundation (KRPC & Net)
-- Initialize the cargo workspace.
-- Build the zero-copy bencode decoder/encoder (`src/krpc`). Implement **fuzz testing** for malformed KRPC payload handling.
-- Build the UDP socket layer (`src/net`) using `SO_REUSEPORT` and batching.
-- Implement the KRPC router and **Shared Transaction Table** to track outbound TxIDs across all sockets.
-- Implement the `ping` responder.
-- Implement HMAC token generation for `get_peers` responses.
-- **M1 Milestone:** KRPC codec + UDP socket layer can parse and respond to `ping`, `find_node`, and `get_peers` with valid KRPC (including tokens). Robust against fuzzing. Sybil swarm is not yet required; can respond with empty/self nodes.
-
-### Phase 2: Sybil DHT & Harvest Engine
-- Identify external IP. Implement **Hybrid** Node ID generation (BEP42 + random) to solve the keyspace coverage paradox.
-- Implement K-bucket routing tables.
-- Implement the Self-Lookup Walk Engine to inject IDs. Add rate limiting per source IP.
-- Add the dual-harvest extraction logic and rotating Bloom filter deduplication.
-- Measure inbound query yield by ID type (BEP42 vs random) to determine if Option A (multiple IPs) is required.
-- **M2 Milestone:** Harvester collects both `get_peers` and `announce_peer` infohashes, dedupes via rotating Bloom filter, and batches to storage/metrics. Measured inbound rate is meaningful. *No stdout printing.*
-
-### Phase 3: The Verification Pipeline
-#### Phase 3A: TCP-Only Vertical Slice
-- Build the BEP3 handshake and BEP10 extension handshake (parsing `metadata_size`).
-- Build BEP9 metadata piece request/reassembly over **TCP only**.
-- Implement SHA1 validation against the **exact raw bytes** of the payload.
-- Implement Peer Sourcing (active `get_peers` fanout).
-- Build the Fetch Pool: async racing with 2-level semaphores and layered timeouts.
-- **M3 Milestone:** TCP-only verification works end-to-end on a local test swarm (or live swarm).
-
-#### Phase 3B: Protocol Coverage Expansion (Optional/Deferred)
-- *If TCP success rates are insufficient to reach the 7k/hr target*:
-- Add uTP (BEP29) and/or MSE/PE support (allocate heavy dev time or evaluate existing crates).
-
-### Phase 4: Storage, Observability & Finalization
-- Finalize concrete database schemas and migrations.
-- Implement batch upsert semantics (`INSERT ON CONFLICT` or staging tables).
-- Implement the exponential backoff retry queue for failed fetches.
-- Configure resource limits.
-- Solidify observability: queue depths, verification attempts vs. successes vs. failures.
-- **M4 Milestone:** Production deployment reaching the measured 7,000+ verified infohashes/hour target.
 </file>
 
 </files>

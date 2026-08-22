@@ -80,86 +80,52 @@ async fn main() {
     }
 
     let metrics = Arc::new(Metrics::new());
-    crate::trace::TRACE_CONFIG.set(TraceConfig::new(config.trace_sample_rate, config.debug_ih)).unwrap_or(());
+    crate::trace::TRACE_CONFIG
+        .set(TraceConfig::new(config.trace_sample_rate, config.debug_ih.clone()))
+        .unwrap_or(());
 
-    let identity = storage::identity::IdentityStore::load_or_create(
-        &config.data_dir.join("identity.json"),
-        config.external_ip,
-        config.sybil_count,
-    );
-    let self_id = identity.self_id;
-    let sybils = identity.sybils;
+    let (discovery_tx, discovery_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let (verify_tx, verify_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let (announce_tx, announce_rx) = mpsc::channel(CHANNEL_CAPACITY);
 
-    let token_secret = load_or_create_secret(&config.data_dir.join("token_secret.bin"));
-    let token = Arc::new(Mutex::new(TokenGenerator::new(
-        token_secret,
-        Duration::from_secs(config.token_window_secs),
+    let harvester = Arc::new(Mutex::new(Harvester::new(
+        config.bloom_capacity,
+        discovery_tx,
+        verify_tx.clone(),
+        announce_tx,
+        metrics.clone(),
     )));
 
-    let sockets = net::bind_reuseport(config.bind_addr, config.worker_threads)
-        .expect("bind udp sockets")
-        .into_iter()
-        .map(Arc::new)
-        .collect::<Vec<_>>();
-    let self_addr = sockets[0].local_addr().expect("local addr");
-    let send_socks: Arc<Vec<Arc<UdpSocket>>> = Arc::new(sockets.clone());
+    let peer_cache = Arc::new(PeerCache::new(Duration::from_secs(600)));
+    let peer_cache_cleanup = peer_cache.clone();
+
+    let (shutdown_tx, _shutdown_rx): (tokio::sync::broadcast::Sender<()>, _) =
+        broadcast::channel(1);
 
     tracing::info!(
-        self_addr = %self_addr,
-        workers = config.worker_threads,
-        sybils = sybils.len(),
-        arch = env!("CRAW_TARGET_ARCH"),
-        os = env!("CRAW_TARGET_OS"),
-        git = env!("CRAW_GIT_HASH"),
+        nodes = config.nodes,
+        port_base = config.port_base,
+        workers_per_node = config.worker_threads,
+        sybils_per_node = config.sybil_count,
         fetch_limit = config.global_fetch_limit,
         race_peers = config.race_peers,
         "crawler starting"
     );
 
-    let (discovery_tx, discovery_rx) = mpsc::channel(CHANNEL_CAPACITY);
-    let (verify_tx, verify_rx) = mpsc::channel(CHANNEL_CAPACITY);
-
-    let table = Arc::new(Mutex::new(RoutingTable::new(self_id)));
-    load_routing_snapshot(&table, &config.data_dir.join("routing_table.bin"));
-
-    let tx_table = Arc::new(TxTable::new());
-    let harvester = Arc::new(Mutex::new(Harvester::new(
-        config.bloom_capacity,
-        discovery_tx,
-        verify_tx.clone(),
-        metrics.clone(),
-    )));
-
-    let router = Router::new(
-        self_id,
-        self_addr,
-        sybils,
-        config.external_ip,
-        send_socks,
-        tx_table,
-        token.clone(),
-        table.clone(),
-        harvester,
-        metrics.clone(),
-    );
-
-    for sock in sockets {
-        tokio::spawn(net::worker(sock, router.clone()));
-    }
-
-    let limiter = Arc::new(RateLimiter::new(config.rate_limit_per_sec, 64.0));
     let bootstrap = resolve_bootstrap(&config.bootstrap).await;
-    let walker = Walker::new(
-        router.clone(),
-        limiter.clone(),
-        bootstrap.clone(),
-        config.walker_alpha,
-        Duration::from_millis(config.walker_interval_ms),
-    );
-
-    walker.bootstrap(&bootstrap).await;
-
-    let limiter_sweep = limiter_sweep_loop(limiter.clone());
+    let mut node_routers = Vec::with_capacity(config.nodes);
+    for i in 0..config.nodes {
+        spawn_node(
+            &config,
+            i,
+            &bootstrap,
+            metrics.clone(),
+            harvester.clone(),
+            &mut node_routers,
+        ).await;
+        tracing::info!(node = i, "dht node started");
+    }
+    let node_routers: Arc<Vec<Arc<Router>>> = Arc::new(node_routers);
 
     let sightings = Arc::new(SightingWriter::new(pool.clone()));
     let sightings_run = sightings.clone().run(Duration::from_millis(500));
@@ -190,9 +156,6 @@ async fn main() {
         ],
     ));
 
-    let peer_cache = Arc::new(PeerCache::new(Duration::from_secs(600)));
-    let peer_cache_cleanup = peer_cache.clone();
-
     let (shutdown_tx, _shutdown_rx) = broadcast::channel(1);
     let batch_run = batch_writer
         .clone()
@@ -216,7 +179,8 @@ async fn main() {
 
     let pipeline = verify::run_pipeline(
         verify_rx,
-        router.clone(),
+        announce_rx,
+        node_routers,
         utp_socket().await,
         metrics.clone(),
         batch_writer.clone(),
@@ -227,20 +191,12 @@ async fn main() {
         },
     );
 
-    let routing_snapshot = routing_snapshot_loop(
-        table.clone(),
-        config.data_dir.join("routing_table.bin"),
-        ROUTING_SNAPSHOT_INTERVAL,
-    );
-
     let report = report_loop(
         metrics.clone(),
         sightings.clone(),
         batch_writer.clone(),
         Duration::from_secs(15),
     );
-    let cleanup = tx_cleanup(router.clone());
-    let token_rotate = token_rotation(token, Duration::from_secs(config.token_window_secs.max(60)));
     let cache_cleanup = cache_cleanup_loop(peer_cache_cleanup, metrics.clone(), Duration::from_secs(60));
 
     let shutdown_signal = async {
@@ -250,19 +206,14 @@ async fn main() {
     };
 
     tokio::select! {
-        _ = walker.run() => {}
         _ = sightings_run => {}
         _ = sightings_flush => {}
         _ = retry_run => {}
         _ = batch_run => {}
         _ = metrics_run => {}
         _ = pipeline => {}
-        _ = routing_snapshot => {}
         _ = report => {}
-        _ = cleanup => {}
-        _ = token_rotate => {}
         _ = cache_cleanup => {}
-        _ = limiter_sweep => {}
         _ = shutdown_signal => {}
     }
 
@@ -280,6 +231,87 @@ async fn utp_socket() -> Option<Arc<librqbit_utp::UtpSocketUdp>> {
             None
         }
     }
+}
+
+async fn spawn_node(
+    config: &Config,
+    node_index: usize,
+    bootstrap: &[SocketAddr],
+    metrics: Arc<Metrics>,
+    harvester: Arc<Mutex<Harvester>>,
+    node_routers: &mut Vec<Arc<Router>>,
+) {
+    let data_dir = config.data_dir.join(format!("node_{node_index}"));
+    std::fs::create_dir_all(&data_dir).expect("create node data dir");
+
+    let identity = storage::identity::IdentityStore::load_or_create(
+        &data_dir.join("identity.json"),
+        config.external_ip,
+        config.sybil_count,
+    );
+    let self_id = identity.self_id;
+    let sybils = identity.sybils;
+
+    let token_secret = load_or_create_secret(&data_dir.join("token_secret.bin"));
+    let token = Arc::new(std::sync::RwLock::new(TokenGenerator::new(
+        token_secret,
+        Duration::from_secs(config.token_window_secs),
+    )));
+
+    let bind = SocketAddr::new(
+        config.bind_addr.ip(),
+        config.port_base + node_index as u16,
+    );
+    let sockets = net::bind_reuseport(bind, config.worker_threads)
+        .expect("bind udp sockets")
+        .into_iter()
+        .map(Arc::new)
+        .collect::<Vec<_>>();
+    let self_addr = sockets[0].local_addr().expect("local addr");
+    let send_socks: Arc<Vec<Arc<UdpSocket>>> = Arc::new(sockets.clone());
+
+    let table = Arc::new(Mutex::new(RoutingTable::new(self_id)));
+    load_routing_snapshot(&table, &data_dir.join("routing_table.bin"));
+
+    let tx_table = Arc::new(TxTable::new());
+    let router = Router::new(
+        self_id,
+        self_addr,
+        sybils,
+        config.external_ip,
+        send_socks.clone(),
+        tx_table.clone(),
+        token.clone(),
+        table.clone(),
+        harvester.clone(),
+        metrics.clone(),
+    );
+
+    for sock in sockets {
+        tokio::spawn(net::worker(sock, router.clone()));
+    }
+
+    let limiter = Arc::new(RateLimiter::new(config.rate_limit_per_sec, 64.0));
+    let walker = Walker::new(
+        router.clone(),
+        limiter.clone(),
+        bootstrap.to_vec(),
+        config.walker_alpha,
+        Duration::from_millis(config.walker_interval_ms),
+        config.parse_nodes6,
+    );
+    walker.bootstrap(bootstrap).await;
+
+    tokio::spawn(async move {
+        walker.run().await;
+    });
+    tokio::spawn(limiter_sweep_loop(limiter.clone()));
+    let snap_path = data_dir.join("routing_table.bin");
+    tokio::spawn(routing_snapshot_loop(table.clone(), snap_path, ROUTING_SNAPSHOT_INTERVAL));
+    tokio::spawn(tx_cleanup(router.clone()));
+    tokio::spawn(token_rotation(token, Duration::from_secs(config.token_window_secs.max(60))));
+
+    node_routers.push(router);
 }
 
 fn load_or_create_secret(path: &std::path::Path) -> [u8; 32] {
@@ -428,6 +460,23 @@ async fn report_loop(
             utp_metadata_ok = cur.utp_metadata_ok,
             source_returned_peers = cur.source_returned_peers,
             source_filtered_by_cache = cur.source_filtered_by_cache,
+            source_no_values = cur.source_no_values,
+            announce_attempts = cur.announce_attempts,
+            announce_success = cur.announce_success,
+            inbound_announce_valid = cur.inbound_announce_valid,
+            inbound_announce_invalid_token = cur.inbound_announce_invalid_token,
+            walker_steps = cur.walker_steps,
+            walker_queries = cur.walker_queries,
+            walker_ok = cur.walker_ok,
+            walker_nodes_returned = cur.walker_nodes_returned,
+            walker_self_target = cur.walker_self_target,
+            walker_random_target = cur.walker_random_target,
+            walker_sybil_target = cur.walker_sybil_target,
+            routing_insert_calls = cur.routing_insert_calls,
+            routing_nodes_added = cur.routing_nodes_added,
+            routing_buckets_used = cur.routing_buckets_used,
+            routing_new_ids = cur.routing_new_ids,
+            routing_rejected = cur.routing_rejected,
         );
         prev = cur;
     }
@@ -441,12 +490,12 @@ async fn tx_cleanup(router: Arc<Router>) {
     }
 }
 
-async fn token_rotation(token: Arc<Mutex<TokenGenerator>>, window: Duration) {
+async fn token_rotation(token: Arc<std::sync::RwLock<TokenGenerator>>, window: Duration) {
     let mut tick = tokio::time::interval(window);
     loop {
         tick.tick().await;
         token
-            .lock()
+            .write()
             .expect("token generator poisoned")
             .rotate(rand::random::<[u8; 32]>());
     }

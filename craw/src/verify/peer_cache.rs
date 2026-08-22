@@ -65,19 +65,15 @@ impl PeerCache {
         }
         let excess = self.bad.len() - MAX_ENTRIES;
         let target_remove = (excess / 8).max(1);
-        let mut removed = 0usize;
-        let mut remaining = self.bad.len();
+        let mut to_remove = Vec::with_capacity(target_remove);
         for entry in self.bad.iter() {
-            if removed >= target_remove {
+            if to_remove.len() >= target_remove {
                 break;
             }
-            if self.bad.remove(entry.key()).is_some() {
-                removed += 1;
-            }
-            remaining -= 1;
-            if remaining <= MAX_ENTRIES {
-                break;
-            }
+            to_remove.push(*entry.key());
+        }
+        for key in to_remove {
+            self.bad.remove(&key);
         }
     }
 }

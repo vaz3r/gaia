@@ -17,6 +17,9 @@ pub struct Config {
     pub rate_limit_per_sec: f64,
     pub trace_sample_rate: f64,
     pub debug_ih: Option<String>,
+    pub parse_nodes6: bool,
+    pub nodes: usize,
+    pub port_base: u16,
 }
 
 impl Default for Config {
@@ -37,14 +40,17 @@ impl Default for Config {
             sybil_count: 16,
             token_window_secs: 300,
             bloom_capacity: 1_000_000,
-            walker_alpha: 3,
-            walker_interval_ms: 250,
+            walker_alpha: 16,
+            walker_interval_ms: 20,
             global_fetch_limit: 128,
             race_peers: 8,
             data_dir: PathBuf::from("data"),
             rate_limit_per_sec: 8.0,
             trace_sample_rate: 0.0,
             debug_ih: None,
+            parse_nodes6: false,
+            nodes: 1,
+            port_base: 6881,
         }
     }
 }
@@ -102,6 +108,15 @@ impl Config {
             c.trace_sample_rate = v;
         }
         c.debug_ih = std::env::var("CRAW_DEBUG_IH").ok();
+        c.parse_nodes6 = std::env::var("CRAW_PARSE_NODES6")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        c.nodes = env_usize("CRAW_NODES", c.nodes).max(1);
+        c.port_base = env_u64("CRAW_PORT_BASE", 0).max(0) as u16;
+        if c.port_base == 0 {
+            c.port_base = c.bind_addr.port();
+        }
         c
     }
 }

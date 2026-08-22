@@ -74,7 +74,6 @@ def run_embedding_mode(torrents: list[dict], config: dict, output_f):
     anchor_categories = None
     anchor_file = cls_cfg.get("anchor_file", "data/anchors.json")
     if Path(anchor_file).exists():
-        import json
         with open(anchor_file, encoding="utf-8") as f:
             anchor_data = json.load(f)
         anchor_texts = []
@@ -86,6 +85,19 @@ def run_embedding_mode(torrents: list[dict], config: dict, output_f):
         anchor_embeddings = backend.embed(anchor_texts)
         anchor_categories = np.array(anchor_categories_list)
         logger.info("Embedded %d anchors", len(anchor_texts))
+
+    def compute_anchor_features(vec):
+        sims = np.dot(anchor_embeddings, vec)
+        cat_names = list(le.classes_)
+        n_cats = len(cat_names)
+        max_per_cat = np.zeros(n_cats)
+        mean_per_cat = np.zeros(n_cats)
+        for ci, cn in enumerate(cat_names):
+            mask = anchor_categories == cn
+            if mask.any():
+                max_per_cat[ci] = sims[mask].max()
+                mean_per_cat[ci] = sims[mask].mean()
+        return np.concatenate([max_per_cat, mean_per_cat, [sims.max()], [sims.mean()]])
 
     n_total = len(torrents)
     n_linear = 0
@@ -101,7 +113,8 @@ def run_embedding_mode(torrents: list[dict], config: dict, output_f):
         top_candidates = []
 
         if clf is not None:
-            probs = clf.predict_proba(vec.reshape(1, -1))[0]
+            vec_aug = np.concatenate([vec, compute_anchor_features(vec)]) if anchor_embeddings is not None else vec
+            probs = clf.predict_proba(vec_aug.reshape(1, -1))[0]
             classes = le.classes_
             top_idx = np.argsort(probs)[::-1]
             top_candidates = [

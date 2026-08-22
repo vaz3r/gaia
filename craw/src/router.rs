@@ -10,7 +10,7 @@ use crate::metrics::{Add1, Metrics};
 use bytes::Bytes;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::oneshot;
@@ -42,7 +42,7 @@ pub struct Router {
     send_socks: Arc<Vec<Arc<UdpSocket>>>,
     send_idx: AtomicUsize,
     tx: Arc<TxTable>,
-    token: Arc<Mutex<TokenGenerator>>,
+    token: Arc<RwLock<TokenGenerator>>,
     table: Arc<Mutex<RoutingTable>>,
     harvest: Arc<Mutex<Harvester>>,
     metrics: Arc<Metrics>,
@@ -57,7 +57,7 @@ impl Router {
         external_ip: Option<std::net::IpAddr>,
         send_socks: Arc<Vec<Arc<UdpSocket>>>,
         tx: Arc<TxTable>,
-        token: Arc<Mutex<TokenGenerator>>,
+        token: Arc<RwLock<TokenGenerator>>,
         table: Arc<Mutex<RoutingTable>>,
         harvest: Arc<Mutex<Harvester>>,
         metrics: Arc<Metrics>,
@@ -190,10 +190,10 @@ impl Router {
             SybilPool::Bep42 => self.metrics.inbound_get_peers_bep42.add(1),
             SybilPool::Random => self.metrics.inbound_get_peers_random.add(1),
         }
-        self.do_harvest(ih, crate::harvest::Source::GetPeers);
+        self.do_harvest(ih, crate::harvest::Source::GetPeers, None);
         let token = self
             .token
-            .lock()
+            .read()
             .expect("token generator poisoned")
             .generate(from.ip());
         self.metrics.tokens_issued.add(1);
@@ -218,7 +218,7 @@ impl Router {
     fn respond_announce_peer(&self, t: &Bytes, a: &BValue, from: SocketAddr) {
         let valid = a
             .get_bytes(b"token")
-            .map(|tok| self.token.lock().expect("token").verify(from.ip(), tok))
+            .map(|tok| self.token.read().expect("token").verify(from.ip(), tok))
             .unwrap_or(false);
         if let Some(ih) = extract_id20(a, b"info_hash") {
             match self.classify_pool(&ih) {
@@ -226,7 +226,18 @@ impl Router {
                 SybilPool::Random => self.metrics.inbound_announce_random.add(1),
             }
             if valid {
-                self.do_harvest(ih, crate::harvest::Source::AnnouncePeer);
+                self.metrics.inbound_announce_valid.add(1);
+                let implied = a.get_int(b"implied_port").unwrap_or(0) != 0;
+                let target_port = if implied {
+                    from.port()
+                } else {
+                    a.get_int(b"port")
+                        .and_then(|p| u16::try_from(p).ok())
+                        .filter(|&p| p != 0)
+                        .unwrap_or(from.port())
+                };
+                let peer_addr = SocketAddr::new(from.ip(), target_port);
+                self.do_harvest(ih, crate::harvest::Source::AnnouncePeer, Some(peer_addr));
             } else {
                 self.metrics.inbound_announce_invalid_token.add(1);
             }
@@ -235,12 +246,12 @@ impl Router {
         self.send_response(t, from, r);
     }
 
-    fn do_harvest(&self, ih: Infohash, source: crate::harvest::Source) {
+    fn do_harvest(&self, ih: Infohash, source: crate::harvest::Source, direct: Option<SocketAddr>) {
         self.metrics.infohashes_harvested.add(1);
         self.harvest
             .lock()
             .expect("harvester poisoned")
-            .harvest(ih, source);
+            .harvest(ih, source, direct);
     }
 
     fn handle_reply(&self, msg: Message) {
@@ -322,17 +333,31 @@ impl Router {
 
     pub fn insert_nodes(&self, nodes: Vec<NodeInfo>) {
         let mut table = self.table.lock().expect("routing table poisoned");
+        self.metrics.routing_insert_calls.add(nodes.len() as u64);
+        let mut new_ids = 0u64;
+        let mut rejected = 0u64;
         for n in nodes {
             if n.id == self.self_id || self.sybils.iter().any(|(sid, _)| sid == &n.id) {
+                rejected += 1;
                 continue;
+            }
+            if !table.contains_id(&n.id) {
+                new_ids += 1;
             }
             table.insert(n);
         }
+        self.metrics.routing_new_ids.add(new_ids);
+        self.metrics.routing_rejected.add(rejected);
         self.metrics.routing_table_len.store(table.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.metrics.routing_buckets_used.store(table.buckets_used() as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn routing_nodes(&self) -> Vec<NodeInfo> {
         self.table.lock().expect("routing table poisoned").all()
+    }
+
+    pub fn metrics(&self) -> &Arc<Metrics> {
+        &self.metrics
     }
 
     pub fn random_routing_nodes(&self, n: usize) -> Vec<NodeInfo> {

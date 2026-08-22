@@ -164,10 +164,11 @@ async fn flush_jobs(pool: &PgPool, batch: &[&JobUpdate]) -> bool {
     let retry_map: HashMap<Vec<u8>, i32> = if !failed_ihs.is_empty() {
         let mut map = HashMap::new();
         for chunk in failed_ihs.chunks(FLUSH_CHUNK) {
+            let chunk_vec: Vec<Vec<u8>> = chunk.iter().map(|b| b.to_vec()).collect();
             let rows = sqlx::query(
                 "SELECT infohash, retry_count FROM verification_jobs WHERE infohash = ANY($1)",
             )
-            .bind(chunk)
+            .bind(&chunk_vec)
             .fetch_all(pool)
             .await;
             match rows {

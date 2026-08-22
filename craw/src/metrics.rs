@@ -14,6 +14,7 @@ pub struct Metrics {
     pub inbound_announce_bep42: AtomicU64,
     pub inbound_announce_random: AtomicU64,
     pub inbound_announce_invalid_token: AtomicU64,
+    pub inbound_announce_valid: AtomicU64,
     pub tokens_issued: AtomicU64,
     pub infohashes_harvested: AtomicU64,
     pub unique_infohashes: AtomicU64,
@@ -49,6 +50,10 @@ pub struct Metrics {
     // Source peer quality metrics
     pub source_returned_peers: AtomicU64,
     pub source_filtered_by_cache: AtomicU64,
+    pub source_no_values: AtomicU64,
+    // Announce direct-fetch metrics
+    pub announce_attempts: AtomicU64,
+    pub announce_success: AtomicU64,
     // Transport metrics
     pub tcp_attempts: AtomicU64,
     pub utp_attempts: AtomicU64,
@@ -56,6 +61,20 @@ pub struct Metrics {
     pub utp_connect_ok: AtomicU64,
     pub tcp_metadata_ok: AtomicU64,
     pub utp_metadata_ok: AtomicU64,
+    // Walker metrics
+    pub walker_steps: AtomicU64,
+    pub walker_queries: AtomicU64,
+    pub walker_ok: AtomicU64,
+    pub walker_nodes_returned: AtomicU64,
+    pub walker_self_target: AtomicU64,
+    pub walker_random_target: AtomicU64,
+    pub walker_sybil_target: AtomicU64,
+    // Routing insert metrics
+    pub routing_insert_calls: AtomicU64,
+    pub routing_nodes_added: AtomicU64,
+    pub routing_buckets_used: AtomicU64,
+    pub routing_new_ids: AtomicU64,
+    pub routing_rejected: AtomicU64,
 }
 
 impl Metrics {
@@ -88,6 +107,7 @@ pub struct Snapshot {
     pub inbound_announce_bep42: u64,
     pub inbound_announce_random: u64,
     pub inbound_announce_invalid_token: u64,
+    pub inbound_announce_valid: u64,
     pub tokens_issued: u64,
     pub infohashes_harvested: u64,
     pub unique_infohashes: u64,
@@ -120,12 +140,27 @@ pub struct Snapshot {
     pub peer_cache_evictions: u64,
     pub source_returned_peers: u64,
     pub source_filtered_by_cache: u64,
+    pub source_no_values: u64,
+    pub announce_attempts: u64,
+    pub announce_success: u64,
     pub tcp_attempts: u64,
     pub utp_attempts: u64,
     pub tcp_connect_ok: u64,
     pub utp_connect_ok: u64,
     pub tcp_metadata_ok: u64,
     pub utp_metadata_ok: u64,
+    pub walker_steps: u64,
+    pub walker_queries: u64,
+    pub walker_ok: u64,
+    pub walker_nodes_returned: u64,
+    pub walker_self_target: u64,
+    pub walker_random_target: u64,
+    pub walker_sybil_target: u64,
+    pub routing_insert_calls: u64,
+    pub routing_nodes_added: u64,
+    pub routing_buckets_used: u64,
+    pub routing_new_ids: u64,
+    pub routing_rejected: u64,
 }
 
 impl Metrics {
@@ -145,6 +180,7 @@ impl Metrics {
             inbound_announce_invalid_token: self
                 .inbound_announce_invalid_token
                 .load(Ordering::Relaxed),
+            inbound_announce_valid: self.inbound_announce_valid.load(Ordering::Relaxed),
             tokens_issued: self.tokens_issued.load(Ordering::Relaxed),
             infohashes_harvested: self.infohashes_harvested.load(Ordering::Relaxed),
             unique_infohashes: self.unique_infohashes.load(Ordering::Relaxed),
@@ -177,12 +213,27 @@ impl Metrics {
             peer_cache_evictions: self.peer_cache_evictions.load(Ordering::Relaxed),
             source_returned_peers: self.source_returned_peers.load(Ordering::Relaxed),
             source_filtered_by_cache: self.source_filtered_by_cache.load(Ordering::Relaxed),
+            source_no_values: self.source_no_values.load(Ordering::Relaxed),
+            announce_attempts: self.announce_attempts.load(Ordering::Relaxed),
+            announce_success: self.announce_success.load(Ordering::Relaxed),
             tcp_attempts: self.tcp_attempts.load(Ordering::Relaxed),
             utp_attempts: self.utp_attempts.load(Ordering::Relaxed),
             tcp_connect_ok: self.tcp_connect_ok.load(Ordering::Relaxed),
             utp_connect_ok: self.utp_connect_ok.load(Ordering::Relaxed),
             tcp_metadata_ok: self.tcp_metadata_ok.load(Ordering::Relaxed),
             utp_metadata_ok: self.utp_metadata_ok.load(Ordering::Relaxed),
+            walker_steps: self.walker_steps.load(Ordering::Relaxed),
+            walker_queries: self.walker_queries.load(Ordering::Relaxed),
+            walker_ok: self.walker_ok.load(Ordering::Relaxed),
+            walker_nodes_returned: self.walker_nodes_returned.load(Ordering::Relaxed),
+            walker_self_target: self.walker_self_target.load(Ordering::Relaxed),
+            walker_random_target: self.walker_random_target.load(Ordering::Relaxed),
+            walker_sybil_target: self.walker_sybil_target.load(Ordering::Relaxed),
+            routing_insert_calls: self.routing_insert_calls.load(Ordering::Relaxed),
+            routing_nodes_added: self.routing_nodes_added.load(Ordering::Relaxed),
+            routing_buckets_used: self.routing_buckets_used.load(Ordering::Relaxed),
+            routing_new_ids: self.routing_new_ids.load(Ordering::Relaxed),
+            routing_rejected: self.routing_rejected.load(Ordering::Relaxed),
         }
     }
 }

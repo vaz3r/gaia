@@ -77,15 +77,14 @@ impl RoutingTable {
     }
 
     pub fn closest(&self, target: &NodeId, n: usize) -> Vec<NodeInfo> {
-        let mut all: Vec<NodeInfo> = self
+        let mut all: Vec<(NodeInfo, NodeId)> = self
             .buckets
             .iter()
             .flat_map(|b| b.iter())
-            .cloned()
+            .map(|node| (node.clone(), xor(target, &node.id)))
             .collect();
-        all.sort_by_key(|node| xor(target, &node.id));
-        all.truncate(n);
-        all
+        all.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+        all.into_iter().map(|(node, _)| node).take(n).collect()
     }
 
     pub fn all(&self) -> Vec<NodeInfo> {
@@ -98,6 +97,19 @@ impl RoutingTable {
 
     pub fn len(&self) -> usize {
         self.buckets.iter().map(|b| b.len()).sum()
+    }
+
+    pub fn buckets_used(&self) -> usize {
+        self.buckets.iter().filter(|b| !b.is_empty()).count()
+    }
+
+    pub fn contains_id(&self, id: &NodeId) -> bool {
+        self.buckets.iter().any(|b| b.iter().any(|n| &n.id == id))
+    }
+
+    #[cfg(test)]
+    fn bucket_fill(&self, idx: usize) -> usize {
+        self.buckets.get(idx).map(|b| b.len()).unwrap_or(0)
     }
 
     #[allow(dead_code)]
@@ -160,6 +172,24 @@ pub fn decode_compact(bytes: &[u8]) -> Vec<NodeInfo> {
     nodes
 }
 
+pub fn decode_compact6(bytes: &[u8]) -> Vec<NodeInfo> {
+    let mut nodes = Vec::new();
+    let mut i = 0;
+    while i + 38 <= bytes.len() {
+        let mut id = [0u8; 20];
+        id.copy_from_slice(&bytes[i..i + 20]);
+        let mut v6 = [0u8; 16];
+        v6.copy_from_slice(&bytes[i + 20..i + 36]);
+        let port = u16::from_be_bytes([bytes[i + 36], bytes[i + 37]]);
+        nodes.push(NodeInfo {
+            id,
+            addr: SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::from(v6)), port),
+        });
+        i += 38;
+    }
+    nodes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +212,52 @@ mod tests {
         let closest = rt.closest(&target, 4);
         assert_eq!(closest.len(), 4);
         assert_eq!(closest[0].id, target);
+    }
+
+    #[test]
+    fn random_nodes_populated_table() {
+        let mut rt = RoutingTable::new([0u8; 20]);
+        for i in 0..400u16 {
+            let mut id = [0u8; 20];
+            id[0] = (i >> 8) as u8;
+            id[1] = (i & 0xff) as u8;
+            let addr: SocketAddr = format!("10.{}.{}.{}:6881", i % 200, (i / 200) % 200, i % 250)
+                .parse()
+                .unwrap();
+            rt.insert(NodeInfo { id, addr });
+        }
+        assert!(rt.len() > 0);
+        for _ in 0..100 {
+            let nodes = rt.random_nodes(3);
+            assert!(!nodes.is_empty());
+            assert!(nodes.len() <= 3);
+        }
+    }
+
+    #[test]
+    fn flood_of_new_ids_reaches_kademlia_equilibrium() {
+        // Kademlia XOR buckets concentrate node ids exponentially in the most
+        // distant buckets: bucket 159 holds ~50% of uniform ids, 158 ~25%, ...
+        // So a flood of distinct ids saturates only the far buckets (K=8 each)
+        // and the total length plateaus well below 160*K. This documents the
+        // intrinsic property: a healthy table is ~100-400 nodes, not 1280.
+        let mut rt = RoutingTable::new([0u8; 20]);
+        let mut new_at_insert = 0u64;
+        for i in 0..500_000u64 {
+            let id = rand::random::<[u8; 20]>();
+            if !rt.contains_id(&id) {
+                new_at_insert += 1;
+            }
+            rt.insert(NodeInfo {
+                id,
+                addr: format!("1.2.3.{}:6881", (i % 250) as u8 + 1).parse().unwrap(),
+            });
+        }
+        assert_eq!(new_at_insert, 500_000);
+        let top = rt.bucket_fill(159) + rt.bucket_fill(158) + rt.bucket_fill(157);
+        let total = rt.buckets_used();
+        assert!(rt.len() > 50 && rt.len() < 512, "len={}", rt.len());
+        assert!(total < 40, "only far buckets fill under uniform ids, used={total}");
+        let _ = top;
     }
 }

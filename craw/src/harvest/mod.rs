@@ -3,6 +3,7 @@ pub mod bloom;
 use crate::harvest::bloom::BloomFilter;
 use crate::krpc::Infohash;
 use crate::metrics::{Add1, Metrics};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -24,9 +25,11 @@ impl Source {
 pub struct Harvester {
     current: BloomFilter,
     previous: BloomFilter,
+    announce_seen: BloomFilter,
     rotate_at: usize,
     discovery_tx: mpsc::Sender<(Infohash, Source)>,
     verify_tx: mpsc::Sender<Infohash>,
+    announce_tx: mpsc::Sender<(Infohash, SocketAddr)>,
     metrics: Arc<Metrics>,
 }
 
@@ -35,19 +38,44 @@ impl Harvester {
         capacity: usize,
         discovery_tx: mpsc::Sender<(Infohash, Source)>,
         verify_tx: mpsc::Sender<Infohash>,
+        announce_tx: mpsc::Sender<(Infohash, SocketAddr)>,
         metrics: Arc<Metrics>,
     ) -> Self {
         Harvester {
             current: BloomFilter::new(capacity, 0.001),
             previous: BloomFilter::new(capacity, 0.001),
+            announce_seen: BloomFilter::new((capacity / 4).max(64), 0.001),
             rotate_at: capacity,
             discovery_tx,
             verify_tx,
+            announce_tx,
             metrics,
         }
     }
 
-    pub fn harvest(&mut self, ih: Infohash, source: Source) -> bool {
+    pub fn harvest(&mut self, ih: Infohash, source: Source, direct: Option<SocketAddr>) -> bool {
+        if source == Source::AnnouncePeer && let Some(peer) = direct {
+            // Announce sightings get a dedicated bloom so a prior get_peers
+            // first-sighting does not suppress the high-value direct fetch.
+            if self.announce_seen.contains(&ih) {
+                return false;
+            }
+            self.announce_seen.insert(&ih);
+            if self.announce_tx.try_send((ih, peer)).is_err() {
+                if self.verify_tx.try_send(ih).is_err() {
+                    return false;
+                }
+            }
+            self.current.insert(&ih);
+            if self.current.inserted() >= self.rotate_at {
+                std::mem::swap(&mut self.current, &mut self.previous);
+                self.current.clear();
+            }
+            self.metrics.unique_infohashes.add(1);
+            crate::trace_lifecycle!(&ih, "discovered", source = source.tag());
+            return true;
+        }
+
         if self.current.contains(&ih) || self.previous.contains(&ih) {
             return false;
         }
