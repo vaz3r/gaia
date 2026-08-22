@@ -108,10 +108,15 @@ impl BatchWriter {
             buf.drain(..).collect()
         };
 
+        let mut verified_ihs: Vec<Vec<u8>> = Vec::new();
         if !job_batch.is_empty() {
-            if flush_jobs(&self.pool, &job_batch).await {
-                self.jobs_written
-                    .fetch_add(job_batch.len() as u64, Ordering::Relaxed);
+            match flush_jobs(&self.pool, &job_batch).await {
+                Some(v) => {
+                    self.jobs_written
+                        .fetch_add(job_batch.len() as u64, Ordering::Relaxed);
+                    verified_ihs = v;
+                }
+                None => {}
             }
         }
         if !torrent_batch.is_empty() {
@@ -119,6 +124,9 @@ impl BatchWriter {
                 self.torrents_written
                     .fetch_add(torrent_batch.len() as u64, Ordering::Relaxed);
             }
+        }
+        if !verified_ihs.is_empty() {
+            delete_verified(&self.pool, &verified_ihs).await;
         }
 
         self.flushing.store(false, Ordering::Release);
@@ -138,7 +146,9 @@ impl BatchWriter {
     }
 }
 
-async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> bool {
+async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> Option<Vec<Vec<u8>>> {
+    let mut verified_ihs: Vec<Vec<u8>> = Vec::new();
+
     let failed_ihs: Vec<&[u8]> = batch
         .iter()
         .filter_map(|u| match u {
@@ -165,8 +175,8 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> bool {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "batch: select retry_counts failed");
-                }
+                tracing::warn!(error = %e, "batch: select retry_counts failed");
+            }
             }
         }
         map
@@ -246,11 +256,17 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> bool {
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!(error = %e, "batch: upsert verification_jobs failed");
-                return false;
+                return None;
+            }
+        }
+
+        for update in chunk {
+            if let JobUpdate::Verified(ih) = update {
+                verified_ihs.push(ih.as_slice().to_vec());
             }
         }
     }
-    true
+    Some(verified_ihs)
 }
 
 async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) -> bool {
@@ -283,4 +299,19 @@ async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) -> bool {
         }
     }
     true
+}
+
+async fn delete_verified(pool: &PgPool, infohashes: &[Vec<u8>]) {
+    for chunk in infohashes.chunks(FLUSH_CHUNK) {
+        match sqlx::query("DELETE FROM verification_jobs WHERE infohash = ANY($1) AND status = 'verified'")
+            .bind(chunk)
+            .execute(pool)
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "batch: delete verified jobs failed");
+            }
+        }
+    }
 }

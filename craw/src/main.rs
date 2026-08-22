@@ -178,6 +178,16 @@ async fn main() {
         .clone()
         .run(Duration::from_secs(1), shutdown_tx.subscribe());
 
+    let janitor_pool = pool.clone();
+    tokio::spawn(async move {
+        storage::janitor::run(&janitor_pool).await;
+        let mut tick = tokio::time::interval(Duration::from_secs(4 * 3600));
+        loop {
+            tick.tick().await;
+            storage::janitor::run(&janitor_pool).await;
+        }
+    });
+
     let metrics_writer = Arc::new(storage::metrics_writer::MetricsWriter::new(
         pool,
         metrics.clone(),

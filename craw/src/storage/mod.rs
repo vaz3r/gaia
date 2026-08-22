@@ -1,6 +1,7 @@
 pub mod backfill;
 pub mod batch_writer;
 pub mod identity;
+pub mod janitor;
 pub mod jobs;
 pub mod metrics_writer;
 pub mod pg;
