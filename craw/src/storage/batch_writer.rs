@@ -4,7 +4,6 @@ use crate::storage::torrents::parse_info_dict;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use sqlx::Row;
-use sqlx::query_builder::QueryBuilder;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -110,14 +109,21 @@ impl BatchWriter {
 
         let mut verified_ihs: Vec<Vec<u8>> = Vec::new();
         if !job_batch.is_empty() {
-            match flush_jobs(&self.pool, &job_batch).await {
-                Some(v) => {
-                    self.jobs_written
-                        .fetch_add(job_batch.len() as u64, Ordering::Relaxed);
-                    verified_ihs = v;
-                }
-                None => {}
+            let failed_updates: Vec<&JobUpdate> = job_batch
+                .iter()
+                .filter(|u| matches!(u, JobUpdate::Failed(_, _)))
+                .collect();
+            if !failed_updates.is_empty() && flush_jobs(&self.pool, &failed_updates).await {
+                self.jobs_written
+                    .fetch_add(failed_updates.len() as u64, Ordering::Relaxed);
             }
+            verified_ihs = job_batch
+                .iter()
+                .filter_map(|u| match u {
+                    JobUpdate::Verified(ih) => Some(ih.as_slice().to_vec()),
+                    _ => None,
+                })
+                .collect();
         }
         if !torrent_batch.is_empty() {
             if flush_torrents(&self.pool, &torrent_batch).await {
@@ -146,9 +152,7 @@ impl BatchWriter {
     }
 }
 
-async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> Option<Vec<Vec<u8>>> {
-    let mut verified_ihs: Vec<Vec<u8>> = Vec::new();
-
+async fn flush_jobs(pool: &PgPool, batch: &[&JobUpdate]) -> bool {
     let failed_ihs: Vec<&[u8]> = batch
         .iter()
         .filter_map(|u| match u {
@@ -175,8 +179,9 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> Option<Vec<Vec<u8>>> 
                     }
                 }
                 Err(e) => {
-                tracing::warn!(error = %e, "batch: select retry_counts failed");
-            }
+                    tracing::warn!(error = %e, "batch: select retry_counts failed");
+                    return false;
+                }
             }
         }
         map
@@ -189,15 +194,6 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> Option<Vec<Vec<u8>>> 
 
         for update in chunk {
             match update {
-                JobUpdate::Verified(ih) => {
-                    resolved.push(ResolvedJob {
-                        ih: ih.as_slice(),
-                        status: "verified",
-                        retry_count: Some(0),
-                        next_retry_at: None,
-                        last_error: None,
-                    });
-                }
                 JobUpdate::Failed(ih, error) => {
                     let raw = ih.as_slice().to_vec();
                     let current_rc = retry_map.get(&raw).copied().unwrap_or(0);
@@ -227,6 +223,7 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> Option<Vec<Vec<u8>>> 
                         });
                     }
                 }
+                JobUpdate::Verified(_) => {}
             }
         }
 
@@ -234,18 +231,27 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> Option<Vec<Vec<u8>>> 
             continue;
         }
 
-        let mut qb: QueryBuilder<'_, sqlx::Postgres> = QueryBuilder::new(
-            "INSERT INTO verification_jobs (infohash, status, retry_count, next_retry_at, last_error, updated_at) ",
-        );
-        qb.push_values(resolved.iter(), |mut b, r| {
-            b.push_bind(r.ih);
-            b.push_bind(r.status);
-            b.push_bind(r.retry_count);
-            b.push_bind(r.next_retry_at);
-            b.push_bind(r.last_error);
-            b.push("now()");
-        });
-        qb.push(
+        let now = Utc::now();
+        let n = resolved.len();
+        let param_count = n * 6;
+        let mut sql = String::with_capacity(256 + param_count * 4);
+        sql.push_str("INSERT INTO verification_jobs (infohash, status, retry_count, next_retry_at, last_error, updated_at) VALUES ");
+        for i in 0..n {
+            let base = i * 6;
+            if i > 0 {
+                sql.push_str(", ");
+            }
+            sql.push_str(&format!(
+                "(${}, ${}, ${}, ${}, ${}, ${})",
+                base + 1,
+                base + 2,
+                base + 3,
+                base + 4,
+                base + 5,
+                base + 6,
+            ));
+        }
+        sql.push_str(
             " ON CONFLICT (infohash) DO UPDATE SET \
              status = EXCLUDED.status, \
              retry_count = COALESCE(EXCLUDED.retry_count, verification_jobs.retry_count), \
@@ -254,45 +260,75 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> Option<Vec<Vec<u8>>> 
              updated_at = now()",
         );
 
-        match qb.build().execute(pool).await {
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!(error = %e, "batch: upsert verification_jobs failed");
-                return None;
-            }
+        let mut q = sqlx::query(&sql);
+        for r in &resolved {
+            q = q
+                .bind(r.ih)
+                .bind(r.status)
+                .bind(r.retry_count)
+                .bind(r.next_retry_at)
+                .bind(r.last_error)
+                .bind(now);
         }
 
-        for update in chunk {
-            if let JobUpdate::Verified(ih) = update {
-                verified_ihs.push(ih.as_slice().to_vec());
+        match q.execute(pool).await {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    chunk_size = chunk.len(),
+                    "batch: upsert verification_jobs failed"
+                );
+                return false;
             }
         }
     }
-    Some(verified_ihs)
+    true
 }
 
 async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) -> bool {
     for chunk in batch.chunks(FLUSH_CHUNK) {
-        let mut qb: QueryBuilder<'_, sqlx::Postgres> = QueryBuilder::new(
-            "INSERT INTO torrents (infohash, name, piece_length, total_size, file_count, files, verified_at) ",
-        );
-        qb.push_values(chunk.iter(), |mut b, e| {
-            b.push_bind(e.ih.as_slice());
-            b.push_bind(e.name.as_deref());
-            b.push_bind(e.piece_length);
-            b.push_bind(e.total_size);
-            b.push_bind(e.file_count);
-            b.push_bind(e.files.as_ref());
-            b.push("now()");
-        });
-        qb.push(
+        let now = Utc::now();
+        let n = chunk.len();
+        let param_count = n * 7;
+        let mut sql = String::with_capacity(256 + param_count * 4);
+        sql.push_str("INSERT INTO torrents (infohash, name, piece_length, total_size, file_count, files, verified_at) VALUES ");
+        for i in 0..n {
+            let base = i * 7;
+            if i > 0 {
+                sql.push_str(", ");
+            }
+            sql.push_str(&format!(
+                "(${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                base + 1,
+                base + 2,
+                base + 3,
+                base + 4,
+                base + 5,
+                base + 6,
+                base + 7,
+            ));
+        }
+        sql.push_str(
             " ON CONFLICT (infohash) DO UPDATE SET \
              name = EXCLUDED.name, piece_length = EXCLUDED.piece_length, \
              total_size = EXCLUDED.total_size, file_count = EXCLUDED.file_count, \
              files = EXCLUDED.files, verified_at = now()",
         );
 
-        match qb.build().execute(pool).await {
+        let mut q = sqlx::query(&sql);
+        for e in chunk {
+            q = q
+                .bind(e.ih.as_slice())
+                .bind(e.name.as_deref())
+                .bind(e.piece_length)
+                .bind(e.total_size)
+                .bind(e.file_count)
+                .bind(e.files.as_ref())
+                .bind(now);
+        }
+
+        match q.execute(pool).await {
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!(error = %e, "batch: upsert torrents failed");
@@ -305,7 +341,7 @@ async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) -> bool {
 
 async fn delete_verified(pool: &PgPool, infohashes: &[Vec<u8>]) {
     for chunk in infohashes.chunks(FLUSH_CHUNK) {
-        match sqlx::query("DELETE FROM verification_jobs WHERE infohash = ANY($1) AND status = 'verified'")
+        match sqlx::query("DELETE FROM verification_jobs WHERE infohash = ANY($1)")
             .bind(chunk)
             .execute(pool)
             .await

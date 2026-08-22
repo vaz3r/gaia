@@ -1,0 +1,19 @@
+services:
+  classifier:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: torrent-classifier:latest
+    volumes:
+      - ./data:/app/data
+      - hf-cache:/app/data/hf_cache
+    environment:
+      - HF_HOME=/app/data/hf_cache
+    command: >
+      --input /app/data/torrent_sample.jsonl
+      --output /app/data/predictions/classified_sample.jsonl
+      --config /app/config/model.yaml
+      --retry
+
+volumes:
+  hf-cache:

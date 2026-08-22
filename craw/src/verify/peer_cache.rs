@@ -59,15 +59,25 @@ impl PeerCache {
         if self.bad.len() <= MAX_ENTRIES {
             return;
         }
-        let mut entries: Vec<(SocketAddr, Instant)> = self
-            .bad
-            .iter()
-            .map(|entry| (*entry.key(), *entry.value()))
-            .collect();
-        entries.sort_by_key(|(_, t)| *t);
-        let to_remove = entries.len() - MAX_ENTRIES;
-        for (addr, _) in entries.into_iter().take(to_remove) {
-            self.bad.remove(&addr);
+        let _ = self.evict_expired();
+        if self.bad.len() <= MAX_ENTRIES {
+            return;
+        }
+        let excess = self.bad.len() - MAX_ENTRIES;
+        let target_remove = (excess / 8).max(1);
+        let mut removed = 0usize;
+        let mut remaining = self.bad.len();
+        for entry in self.bad.iter() {
+            if removed >= target_remove {
+                break;
+            }
+            if self.bad.remove(entry.key()).is_some() {
+                removed += 1;
+            }
+            remaining -= 1;
+            if remaining <= MAX_ENTRIES {
+                break;
+            }
         }
     }
 }

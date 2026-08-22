@@ -1,0 +1,77 @@
+[
+  {"category": "Movies", "anchors": [
+    "Movie torrent with a large .mkv or .mp4 file and title containing a year",
+    "Feature film 1080p BluRay x264 with single video file",
+    "4K HDR movie with size over 4 GB",
+    "WEBRip movie with a single .mp4 file",
+    "Film collection with multiple movie files",
+    "Cam or TS rip of a recent theatrical release",
+    "Movie with .nfo file and subtitle files",
+    "Classic film DVD rip with single video file"
+  ]},
+  {"category": "Television", "anchors": [
+    "TV series episode S01E01 1080p",
+    "Complete season pack with multiple episodes",
+    "Television show with season folder and episode markers",
+    "Daily TV show WEBRip with recent date",
+    "TV series with S01E01 through S01E22 episode pattern",
+    "Complete series box set with all seasons",
+    "Talk show or reality TV episode",
+    "Mini-series with episode files and .nfo"
+  ]},
+  {"category": "Games", "anchors": [
+    "PC game repack with setup.exe and crack folder",
+    "Video game ISO file size over 1 GB",
+    "Console game ROM or emulator files",
+    "Indie game with small installer",
+    "Game with PROPER-REPACK or FitGirl in name",
+    "Steam game crack with steam_api.dll",
+    "PlayStation or Xbox game dump"
+  ]},
+  {"category": "Music", "anchors": [
+    "Music album with FLAC or MP3 files",
+    "Artist discography with multiple albums",
+    "Single track release with FLAC encoding",
+    "Concert live recording with track listing",
+    "Soundtrack album with Cover.jpg",
+    "DJ mix or compilation with numbered tracks"
+  ]},
+  {"category": "Applications", "anchors": [
+    "Software installer with setup.exe and version number",
+    "Application crack with keygen or patch files",
+    "Adobe or Microsoft software suite",
+    "System utility or tool with readme and changelog",
+    "Portable application with single executable",
+    "Development tool or IDE installer"
+  ]},
+  {"category": "Anime", "anchors": [
+    "Anime episode with subtitle files and episode markers",
+    "Anime series batch with fansub group name",
+    "Japanese animation movie with BDrip",
+    "Anime with Japanese audio and English subtitles",
+    "Anime collection with season or arc naming",
+    "Anime with typical fansub naming conventions",
+    "Manga or light novel adaptation anime"
+  ]},
+  {"category": "Documentaries", "anchors": [
+    "Documentary film with BBC PBS National Geographic",
+    "Nature documentary series with episode files",
+    "True crime documentary with interviews",
+    "Historical documentary with narration",
+    "Science documentary with NOVA or Discovery",
+    "Biography documentary about a person"
+  ]},
+  {"category": "Other", "anchors": [
+    "Ambiguous content with unclear category",
+    "Mixed media torrent with various file types",
+    "Unknown or low-signal content",
+    "Educational content or tutorial",
+    "Religious or spiritual content"
+  ]},
+  {"category": "Unwanted", "anchors": [
+    "Adult content torrent with explicit keywords",
+    "Spam or fake torrent with misleading name",
+    "Malware torrent with executable and suspicious files",
+    "Low-quality or password-protected archive"
+  ]}
+]

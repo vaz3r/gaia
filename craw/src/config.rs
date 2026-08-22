@@ -15,6 +15,8 @@ pub struct Config {
     pub race_peers: usize,
     pub data_dir: PathBuf,
     pub rate_limit_per_sec: f64,
+    pub trace_sample_rate: f64,
+    pub debug_ih: Option<String>,
 }
 
 impl Default for Config {
@@ -41,6 +43,8 @@ impl Default for Config {
             race_peers: 8,
             data_dir: PathBuf::from("data"),
             rate_limit_per_sec: 8.0,
+            trace_sample_rate: 0.0,
+            debug_ih: None,
         }
     }
 }
@@ -91,6 +95,13 @@ impl Config {
         {
             c.rate_limit_per_sec = v;
         }
+        if let Some(v) = std::env::var("CRAW_TRACE_SAMPLE_RATE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+        {
+            c.trace_sample_rate = v;
+        }
+        c.debug_ih = std::env::var("CRAW_DEBUG_IH").ok();
         c
     }
 }

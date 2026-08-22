@@ -14,6 +14,7 @@ const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct Walker {
     router: Arc<Router>,
     limiter: Arc<RateLimiter>,
+    bootstrap: Vec<SocketAddr>,
     alpha: usize,
     interval: Duration,
 }
@@ -22,27 +23,35 @@ impl Walker {
     pub fn new(
         router: Arc<Router>,
         limiter: Arc<RateLimiter>,
+        bootstrap: Vec<SocketAddr>,
         alpha: usize,
         interval: Duration,
     ) -> Self {
         Walker {
             router,
             limiter,
+            bootstrap,
             alpha,
             interval,
         }
     }
 
-    pub async fn bootstrap(&self, nodes: Vec<SocketAddr>) {
-        for addr in nodes {
+    pub async fn bootstrap(&self, nodes: &[SocketAddr]) {
+        let mut set = tokio::task::JoinSet::new();
+        for &addr in nodes {
+            let router = self.router.clone();
             let target = crate::dht::node_id::random_node_id();
-            let args = self.find_node_args(&self.router.self_id, target);
-            if let Ok(msg) = self
-                .router
-                .send_query(FIND_NODE, addr, args, QUERY_TIMEOUT)
-                .await
-            {
-                self.ingest(&msg, addr);
+            set.spawn(async move {
+                let args = find_node_args(&router.self_id, target);
+                router
+                    .send_query(FIND_NODE, addr, args, QUERY_TIMEOUT)
+                    .await
+                    .map(|msg| (msg, addr))
+            });
+        }
+        while let Some(res) = set.join_next().await {
+            if let Ok(Ok((msg, addr))) = res {
+                ingest(&self.router, &msg, addr);
             }
         }
     }
@@ -57,11 +66,13 @@ impl Walker {
     }
 
     async fn step(&self) {
-        let (our_id, target) = self.pick_target();
         let nodes = self.router.random_routing_nodes(self.alpha);
         if nodes.is_empty() {
+            tracing::warn!("routing table empty, re-bootstrapping");
+            self.bootstrap(&self.bootstrap).await;
             return;
         }
+        let (our_id, target) = self.pick_target();
         let mut tasks = Vec::new();
         for node in nodes {
             if !self.limiter.allow(node.addr.ip()) {
@@ -79,48 +90,56 @@ impl Walker {
         }
         for task in tasks {
             if let Ok((Ok(msg), addr)) = task.await {
-                self.ingest(&msg, addr);
+                ingest(&self.router, &msg, addr);
             }
         }
     }
 
     fn pick_target(&self) -> ([u8; 20], [u8; 20]) {
         let r = rand::random::<f64>();
-        if r < 0.25 {
+        if r < 0.10 {
             return (self.router.self_id, self.router.self_id);
         }
-        if r < 0.40 {
-            return (self.router.self_id, crate::dht::node_id::random_node_id());
+        if r < 0.45 {
+            let target = crate::dht::node_id::random_node_id();
+            return (self.router.self_id, target);
         }
         if self.router.sybils.is_empty() {
-            return (self.router.self_id, self.router.self_id);
+            return (
+                self.router.self_id,
+                crate::dht::node_id::random_node_id(),
+            );
         }
         let idx = rand::random::<u64>() as usize % self.router.sybils.len();
-        let sybil = self.router.sybils[idx].0;
+        let (sybil, _) = self.router.sybils[idx];
         (sybil, sybil)
     }
 
     fn find_node_args(&self, id: &[u8; 20], target: [u8; 20]) -> BValue {
-        BValue::dict(vec![
-            (
-                Bytes::from_static(b"id"),
-                BValue::Bytes(Bytes::copy_from_slice(id)),
-            ),
-            (
-                Bytes::from_static(b"target"),
-                BValue::Bytes(Bytes::copy_from_slice(&target)),
-            ),
-        ])
+        find_node_args(id, target)
     }
+}
 
-    fn ingest(&self, msg: &crate::krpc::message::Message, addr: SocketAddr) {
-        if let Kind::Response { r } = &msg.kind {
-            if let Some(id) = extract_id20(r, b"id") {
-                self.router.insert_nodes(vec![NodeInfo { id, addr }]);
-            }
-            if let Some(nodes) = r.get_bytes(b"nodes") {
-                self.router.insert_nodes(decode_compact(nodes));
-            }
+fn find_node_args(id: &[u8; 20], target: [u8; 20]) -> BValue {
+    BValue::dict(vec![
+        (
+            Bytes::from_static(b"id"),
+            BValue::Bytes(Bytes::copy_from_slice(id)),
+        ),
+        (
+            Bytes::from_static(b"target"),
+            BValue::Bytes(Bytes::copy_from_slice(&target)),
+        ),
+    ])
+}
+
+fn ingest(router: &Router, msg: &crate::krpc::message::Message, addr: SocketAddr) {
+    if let Kind::Response { r } = &msg.kind {
+        if let Some(id) = extract_id20(r, b"id") {
+            router.insert_nodes(vec![NodeInfo { id, addr }]);
+        }
+        if let Some(nodes) = r.get_bytes(b"nodes") {
+            router.insert_nodes(decode_compact(nodes));
         }
     }
 }

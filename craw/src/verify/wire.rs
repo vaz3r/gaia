@@ -116,6 +116,7 @@ pub struct WireSession {
     stream: Transport,
     ut_metadata: u8,
     metadata_size: Option<usize>,
+    info_hash: [u8; 20],
 }
 
 impl WireSession {
@@ -162,9 +163,16 @@ impl WireSession {
             stream,
             ut_metadata: 0,
             metadata_size: None,
+            info_hash: *info_hash,
         };
         session.bep3(info_hash, peer_id, timeout).await?;
         session.extension_handshake(timeout).await?;
+        crate::trace_lifecycle!(
+            info_hash,
+            "handshake_ok",
+            ut_metadata = session.ut_metadata as u32,
+            metadata_size = session.metadata_size.unwrap_or(0) as usize
+        );
         Ok(session)
     }
 
@@ -280,11 +288,18 @@ impl WireSession {
         let mut metadata: Vec<u8> = Vec::new();
         let mut piece = 0usize;
 
+        crate::trace_lifecycle!(&self.info_hash, "metadata_start");
+        let start_time = std::time::Instant::now();
+
         self.write_message(self.ut_metadata, &request(piece), timeout)
             .await?;
 
         loop {
-            let (_, payload) = self.read_message(timeout).await?;
+            let piece_start = std::time::Instant::now();
+            let (ext_id, payload) = self.read_message(timeout).await?;
+            if ext_id != self.ut_metadata {
+                continue;
+            }
             let (dict, consumed) = decode_prefix(&payload).map_err(|_| WireError::BadPiece)?;
             let msg_type = dict.get_int(b"msg_type").ok_or(WireError::BadPiece)?;
             match msg_type {
@@ -301,6 +316,16 @@ impl WireSession {
             }
             let data = payload.slice(consumed..);
             metadata.extend_from_slice(&data);
+
+            let total_pieces = known_size.map(|ts| (ts + PIECE_SIZE - 1) / PIECE_SIZE).unwrap_or(0);
+            let piece_status = format!("{}/{}", piece, total_pieces);
+            crate::trace_lifecycle!(
+                &self.info_hash,
+                "metadata_piece",
+                piece = piece_status.as_str(),
+                status = "ok",
+                elapsed_ms = piece_start.elapsed().as_millis() as u64
+            );
 
             let done = match known_size {
                 Some(total) => metadata.len() >= total,
@@ -319,6 +344,11 @@ impl WireSession {
             return Err(WireError::BadPiece);
         }
         metadata.truncate(total);
+        crate::trace_lifecycle!(
+            &self.info_hash,
+            "metadata_done",
+            elapsed_ms = start_time.elapsed().as_millis() as u64
+        );
         Ok(metadata)
     }
 }

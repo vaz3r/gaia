@@ -225,10 +225,8 @@ app.get('/api/stats', async (req, res) => {
       query(`SELECT count(*) AS n FROM infohash_sightings WHERE last_seen > now() - interval '1 hour'`),
       query(`SELECT count(*) AS n FROM infohash_sightings WHERE first_seen > now() - interval '1 hour'`),
       query(
-        `SELECT count(*) FILTER (WHERE status = 'pending') AS pending,
-                count(*) FILTER (WHERE status = 'verifying') AS verifying,
-                count(*) FILTER (WHERE status = 'failed' AND (next_retry_at IS NULL OR next_retry_at <= now())) AS failed_due,
-                count(*) FILTER (WHERE status = 'verified') AS verified
+        `SELECT count(*) FILTER (WHERE status IN ('pending', 'verifying', 'failed')) AS backlog,
+                count(*) FILTER (WHERE status = 'verifying') AS verifying
          FROM verification_jobs`
       ),
       query(`SELECT max(ts) AS ts FROM metrics`),
@@ -241,9 +239,9 @@ app.get('/api/stats', async (req, res) => {
       verified_last_24h: parseInt(v24h.rows[0].n ?? 0, 10),
       seen_last_1h: parseInt(seen1h.rows[0].n ?? 0, 10),
       new_last_1h: parseInt(new1h.rows[0].n ?? 0, 10),
-      queue_backlog: parseInt(jobs.rows[0].pending, 10) + parseInt(jobs.rows[0].failed_due, 10),
+      queue_backlog: parseInt(jobs.rows[0].backlog, 10),
       verifying: parseInt(jobs.rows[0].verifying, 10),
-      verified_total: parseInt(jobs.rows[0].verified, 10),
+      verified_total: parseInt(total.rows[0].est, 10),
       crawler_heartbeat_ts: heartbeat,
       crawler_stale_s: heartbeat ? Math.round((Date.now() - heartbeat.getTime()) / 1000) : null,
     });

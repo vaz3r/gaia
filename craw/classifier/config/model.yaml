@@ -1,0 +1,24 @@
+model:
+  name_or_path: Qwen/Qwen3-0.6B
+  dtype: auto                # auto selects best for hardware
+  device_map: cpu            # explicit CPU
+  attn_implementation: null
+  trust_remote_code: false
+
+generation:
+  max_new_tokens: 128        # ensure full XML response with closing tag
+  temperature: 0.0           # greedy for speed
+  top_p: 1.0
+  top_k: 1
+  min_p: 0.0
+  do_sample: false           # greedy = fastest
+
+chat_template:
+  enable_thinking: false     # disable Qwen3 thinking mode for speed
+
+prompt:
+  system_file: prompts/system.txt
+  fewshot_file: prompts/fewshot.jsonl
+  max_input_files: 20        # truncate file list
+  max_file_name_chars: 200
+  max_torrent_name_chars: 500

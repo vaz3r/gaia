@@ -47,25 +47,31 @@ pub async fn run_pipeline(
             metrics.verify_attempts.add(1);
             match verify_infohash(router, utp, ih, race, metrics.clone(), peer_cache).await {
                 VerifyResult::Success(meta) if check(&ih, &meta) => {
+                    crate::trace_lifecycle!(&ih, "sha1_check", result = "pass");
                     metrics.verify_success.add(1);
                     batch_writer.push_torrent(ih, &meta);
+                    crate::trace_lifecycle!(&ih, "persist_torrents", status = "ok");
                     batch_writer.push_verified(ih);
                 }
                 VerifyResult::Success(_) => {
+                    crate::trace_lifecycle!(&ih, "sha1_check", result = "fail");
                     metrics.sha1_mismatch.add(1);
                     metrics.verify_fail.add(1);
                     batch_writer.push_failed(ih, "sha1_mismatch");
                 }
                 VerifyResult::NoPeers => {
+                    crate::trace_lifecycle!(&ih, "verify_fail", result = "no_peers");
                     metrics.source_no_peers.add(1);
                     metrics.verify_fail.add(1);
                     batch_writer.push_failed(ih, "no_peers");
                 }
                 VerifyResult::SourceTimeout => {
+                    crate::trace_lifecycle!(&ih, "verify_fail", result = "source_timeout");
                     metrics.verify_fail.add(1);
                     batch_writer.push_failed(ih, "source_timeout");
                 }
                 VerifyResult::MetadataFailed => {
+                    crate::trace_lifecycle!(&ih, "verify_fail", result = "no_metadata");
                     metrics.verify_fail.add(1);
                     batch_writer.push_failed(ih, "no_metadata");
                 }

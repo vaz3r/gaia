@@ -109,7 +109,6 @@ export default function MetricsPanel() {
     { label: 'Inbound get_peers /hr', value: rates.inbound_get_peers, sub: 'peers querying us', accent: true },
     { label: 'Fetch attempts /hr', value: rates.fetch_attempts, sub: 'outbound fetches', accent: true },
     { label: 'Fail + timeout /hr', value: failRate, sub: 'failed verification', accent: false },
-    { label: 'Verified stored', value: snap.verify_success, sub: 'metadata stored', accent: false },
   ]
 
   const failBreakdown = [

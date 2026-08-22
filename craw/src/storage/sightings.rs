@@ -48,20 +48,22 @@ impl SightingWriter {
                     continue;
                 }
             };
-            for (ih, source) in chunk {
-                let tag = source.tag();
-                let json = format!("{{\"{tag}\":1}}");
-                let _ = sqlx::query(
-                    "INSERT INTO infohash_sightings (infohash, source_counts) VALUES ($1, $2::jsonb) \
-                     ON CONFLICT (infohash) DO UPDATE SET \
-                     last_seen = now(), total_seen = infohash_sightings.total_seen + 1, \
-                     source_counts = infohash_sightings.source_counts || $2::jsonb",
-                )
-                .bind(ih.as_slice())
-                .bind(&json)
-                .execute(&mut *tx)
-                .await;
-            }
+            let ihs: Vec<&[u8]> = chunk.iter().map(|(ih, _)| ih.as_slice()).collect();
+            let sources: Vec<String> = chunk
+                .iter()
+                .map(|(_, s)| format!("{{\"{}\":1}}", s.tag()))
+                .collect();
+            let _ = sqlx::query(
+                "INSERT INTO infohash_sightings (infohash, source_counts) \
+                 SELECT u.ih, u.sc::jsonb FROM UNNEST($1::bytea[], $2::text[]) AS u(ih, sc) \
+                 ON CONFLICT (infohash) DO UPDATE SET \
+                 last_seen = now(), total_seen = infohash_sightings.total_seen + 1, \
+                 source_counts = infohash_sightings.source_counts || EXCLUDED.source_counts",
+            )
+            .bind(&ihs)
+            .bind(&sources)
+            .execute(&mut *tx)
+            .await;
             if let Err(e) = tx.commit().await {
                 tracing::warn!(error = %e, "sightings: commit failed");
             }

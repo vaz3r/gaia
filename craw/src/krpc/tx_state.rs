@@ -32,7 +32,14 @@ impl TxTable {
     }
 
     pub fn insert(&self, t: Bytes, entry: TxEntry) -> bool {
-        self.map.insert(t, entry).is_none()
+        use dashmap::mapref::entry::Entry;
+        match self.map.entry(t) {
+            Entry::Vacant(v) => {
+                v.insert(entry);
+                true
+            }
+            Entry::Occupied(_) => false,
+        }
     }
 
     pub fn take(&self, t: &Bytes) -> Option<TxEntry> {

@@ -1,0 +1,4 @@
+-r requirements.txt
+torch
+psycopg2-binary
+pytest

@@ -55,15 +55,37 @@ impl RateLimiter {
 
     pub fn allow(&self, ip: IpAddr) -> bool {
         let now = Instant::now();
-        let mut bucket = self
-            .buckets
-            .entry(ip)
-            .or_insert_with(|| TokenBucket::new(self.capacity, self.rate_per_sec, now));
-        let allowed = bucket.try_take(now);
-        if now.duration_since(bucket.last) > self.ttl {
-            self.buckets.remove(&ip);
+        match self.buckets.entry(ip) {
+            dashmap::mapref::entry::Entry::Occupied(mut e) => {
+                if now.duration_since(e.get().last) > self.ttl {
+                    e.remove();
+                    let mut b = TokenBucket::new(self.capacity, self.rate_per_sec, now);
+                    b.try_take(now)
+                } else {
+                    e.get_mut().try_take(now)
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(v) => {
+                let mut b = TokenBucket::new(self.capacity, self.rate_per_sec, now);
+                let allowed = b.try_take(now);
+                v.insert(b);
+                allowed
+            }
         }
-        allowed
+    }
+
+    pub fn sweep_expired(&self) -> usize {
+        let now = Instant::now();
+        let mut expired = 0;
+        self.buckets.retain(|_, b| {
+            if now.duration_since(b.last) > self.ttl {
+                expired += 1;
+                false
+            } else {
+                true
+            }
+        });
+        expired
     }
 
     #[allow(dead_code)]

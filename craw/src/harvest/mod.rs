@@ -51,14 +51,17 @@ impl Harvester {
         if self.current.contains(&ih) || self.previous.contains(&ih) {
             return false;
         }
+        if self.verify_tx.try_send(ih).is_err() {
+            return false;
+        }
+        let _ = self.discovery_tx.try_send((ih, source));
         self.current.insert(&ih);
         if self.current.inserted() >= self.rotate_at {
             std::mem::swap(&mut self.current, &mut self.previous);
             self.current.clear();
         }
-        let _ = self.discovery_tx.try_send((ih, source));
-        let _ = self.verify_tx.try_send(ih);
         self.metrics.unique_infohashes.add(1);
+        crate::trace_lifecycle!(&ih, "discovered", source = source.tag());
         true
     }
 

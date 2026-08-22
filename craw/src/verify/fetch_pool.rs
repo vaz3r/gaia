@@ -69,19 +69,41 @@ pub async fn verify_infohash(
             let mut tcp_task = tokio::spawn({
                 let ih = ih;
                 let pid = pid;
-                async move { WireSession::connect_tcp(addr, &ih, &pid, TCP_TIMEOUT).await }
+                let addr_str = addr.to_string();
+                crate::trace_lifecycle!(&ih, "fetch_start", peer = addr_str.clone(), transport = "tcp");
+                let start = std::time::Instant::now();
+                async move {
+                    let res = WireSession::connect_tcp(addr, &ih, &pid, TCP_TIMEOUT).await;
+                    let result_str = match &res {
+                        Ok(_) => "ok",
+                        Err(WireError::Timeout) => "timeout",
+                        Err(_) => "error",
+                    };
+                    crate::trace_lifecycle!(&ih, "connect_result", peer = addr_str, transport = "tcp", result = result_str, elapsed_ms = start.elapsed().as_millis() as u64);
+                    res
+                }
             });
             let mut utp_task = tokio::spawn({
                 let ih = ih;
                 let pid = pid;
                 let utp = utp.clone();
+                let addr_str = addr.to_string();
+                crate::trace_lifecycle!(&ih, "fetch_start", peer = addr_str.clone(), transport = "utp");
+                let start = std::time::Instant::now();
                 async move {
-                    match utp {
+                    let res = match utp {
                         Some(sock) => {
                             WireSession::connect_utp(sock, addr, &ih, &pid, UTP_TIMEOUT).await
                         }
                         None => Err(WireError::Io(std::io::Error::other("no uTP socket"))),
-                    }
+                    };
+                    let result_str = match &res {
+                        Ok(_) => "ok",
+                        Err(WireError::Timeout) => "timeout",
+                        Err(_) => "error",
+                    };
+                    crate::trace_lifecycle!(&ih, "connect_result", peer = addr_str, transport = "utp", result = result_str, elapsed_ms = start.elapsed().as_millis() as u64);
+                    res
                 }
             });
 

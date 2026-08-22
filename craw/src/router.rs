@@ -9,6 +9,7 @@ use crate::krpc::{Infohash, NodeId};
 use crate::metrics::{Add1, Metrics};
 use bytes::Bytes;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
@@ -37,7 +38,9 @@ pub struct Router {
     pub self_id: NodeId,
     pub self_addr: SocketAddr,
     pub sybils: Vec<(NodeId, SybilPool)>,
-    send_sock: Arc<UdpSocket>,
+    pub external_ip: Option<std::net::IpAddr>,
+    send_socks: Arc<Vec<Arc<UdpSocket>>>,
+    send_idx: AtomicUsize,
     tx: Arc<TxTable>,
     token: Arc<Mutex<TokenGenerator>>,
     table: Arc<Mutex<RoutingTable>>,
@@ -51,7 +54,8 @@ impl Router {
         self_id: NodeId,
         self_addr: SocketAddr,
         sybils: Vec<(NodeId, SybilPool)>,
-        send_sock: Arc<UdpSocket>,
+        external_ip: Option<std::net::IpAddr>,
+        send_socks: Arc<Vec<Arc<UdpSocket>>>,
         tx: Arc<TxTable>,
         token: Arc<Mutex<TokenGenerator>>,
         table: Arc<Mutex<RoutingTable>>,
@@ -62,7 +66,9 @@ impl Router {
             self_id,
             self_addr,
             sybils,
-            send_sock,
+            external_ip,
+            send_socks,
+            send_idx: AtomicUsize::new(0),
             tx,
             token,
             table,
@@ -119,12 +125,16 @@ impl Router {
     }
 
     fn closest_phantom(&self, target: &[u8; 20], count: usize) -> Vec<NodeInfo> {
+        let public_addr = SocketAddr::new(
+            self.external_ip.unwrap_or(self.self_addr.ip()),
+            self.self_addr.port(),
+        );
         let mut sybils: Vec<NodeInfo> = self
             .sybils
             .iter()
             .map(|(id, _)| NodeInfo {
                 id: *id,
-                addr: self.self_addr,
+                addr: public_addr,
             })
             .collect();
         sybils.sort_by_key(|n| xor(target, &n.id));
@@ -247,12 +257,14 @@ impl Router {
         self.try_send(&enc, from);
     }
 
+    fn next_socket(&self) -> &UdpSocket {
+        let idx = self.send_idx.fetch_add(1, AtomicOrdering::Relaxed) % self.send_socks.len();
+        &self.send_socks[idx]
+    }
+
     fn try_send(&self, buf: &[u8], addr: SocketAddr) {
-        match self.send_sock.try_send_to(buf, addr) {
+        match self.next_socket().try_send_to(buf, addr) {
             Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                self.metrics.send_dropped.add(1);
-            }
             Err(_) => {
                 self.metrics.send_dropped.add(1);
             }
@@ -270,7 +282,7 @@ impl Router {
         let msg = Message::query(txid.clone(), method, args);
         let enc = msg.encode();
         self.metrics.outbound_queries.add(1);
-        if let Err(e) = self.send_sock.send_to(&enc, addr).await {
+        if let Err(e) = self.next_socket().send_to(&enc, addr).await {
             self.tx.take(&txid);
             return Err(QueryError::Io(e));
         }
@@ -311,6 +323,9 @@ impl Router {
     pub fn insert_nodes(&self, nodes: Vec<NodeInfo>) {
         let mut table = self.table.lock().expect("routing table poisoned");
         for n in nodes {
+            if n.id == self.self_id || self.sybils.iter().any(|(sid, _)| sid == &n.id) {
+                continue;
+            }
             table.insert(n);
         }
         self.metrics.routing_table_len.store(table.len() as u64, std::sync::atomic::Ordering::Relaxed);
@@ -336,7 +351,9 @@ impl Router {
 
     pub fn cleanup_tx(&self, ttl: Duration) {
         let removed = self.tx.cleanup(Instant::now(), ttl);
-        self.metrics.tx_table_len.add(self.tx.len() as u64);
+        self.metrics
+            .tx_table_len
+            .store(self.tx.len() as u64, std::sync::atomic::Ordering::Relaxed);
         let _ = removed;
     }
 }

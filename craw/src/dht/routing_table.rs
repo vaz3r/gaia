@@ -34,7 +34,11 @@ fn leading_zeros(x: &NodeId) -> usize {
 fn bucket_index(self_id: &NodeId, id: &NodeId) -> usize {
     let d = xor(self_id, id);
     let lz = leading_zeros(&d);
-    (159 - lz).min(159)
+    if lz >= 160 {
+        0
+    } else {
+        159 - lz
+    }
 }
 
 pub struct RoutingTable {
@@ -61,8 +65,8 @@ impl RoutingTable {
         }
         let idx = bucket_index(&self.self_id, &node.id);
         let bucket = &mut self.buckets[idx];
-        if let Some(existing) = bucket.iter_mut().find(|n| n.addr == node.addr) {
-            existing.id = node.id;
+        if let Some(existing) = bucket.iter_mut().find(|n| n.id == node.id) {
+            existing.addr = node.addr;
             return true;
         }
         if bucket.len() >= K {
@@ -102,13 +106,27 @@ impl RoutingTable {
     }
 
     pub fn random_nodes(&self, n: usize) -> Vec<NodeInfo> {
-        let mut all = self.all();
-        for i in (1..all.len()).rev() {
-            let j = rand::random::<u64>() as usize % (i + 1);
-            all.swap(i, j);
+        let non_empty: Vec<usize> = (0..160)
+            .filter(|&i| !self.buckets[i].is_empty())
+            .collect();
+        if non_empty.is_empty() {
+            return Vec::new();
         }
-        all.truncate(n);
-        all
+        let mut result = Vec::with_capacity(n);
+        let mut seen = std::collections::HashSet::new();
+        let mut attempts = 0usize;
+        let max_attempts = n * 32 + 8;
+        while result.len() < n && attempts < max_attempts {
+            attempts += 1;
+            let bidx = non_empty[rand::random::<u64>() as usize % non_empty.len()];
+            let bucket = &self.buckets[bidx];
+            let nidx = rand::random::<u64>() as usize % bucket.len();
+            let node = bucket[nidx].clone();
+            if seen.insert(node.id) {
+                result.push(node);
+            }
+        }
+        result
     }
 }
 

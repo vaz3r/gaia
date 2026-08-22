@@ -6,9 +6,11 @@ mod metrics;
 mod net;
 mod router;
 mod storage;
+mod trace;
 mod verify;
 
 use crate::config::Config;
+use crate::trace::TraceConfig;
 use crate::dht::routing_table::{NodeInfo, RoutingTable};
 use crate::dht::walker::Walker;
 use crate::harvest::{Harvester, Source};
@@ -27,6 +29,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, mpsc};
 
 const CHANNEL_CAPACITY: usize = 65536;
@@ -41,6 +44,14 @@ async fn main() {
         .init();
 
     let config = Config::from_env();
+
+    tracing::info!(
+        git_hash = env!("CRAW_GIT_HASH"),
+        target_arch = env!("CRAW_TARGET_ARCH"),
+        target_os = env!("CRAW_TARGET_OS"),
+        "crawler starting"
+    );
+
     std::fs::create_dir_all(&config.data_dir).expect("create data dir");
 
     let database_url =
@@ -69,6 +80,7 @@ async fn main() {
     }
 
     let metrics = Arc::new(Metrics::new());
+    crate::trace::TRACE_CONFIG.set(TraceConfig::new(config.trace_sample_rate, config.debug_ih)).unwrap_or(());
 
     let identity = storage::identity::IdentityStore::load_or_create(
         &config.data_dir.join("identity.json"),
@@ -84,18 +96,23 @@ async fn main() {
         Duration::from_secs(config.token_window_secs),
     )));
 
-    let mut sockets = net::bind_reuseport(config.bind_addr, config.worker_threads)
+    let sockets = net::bind_reuseport(config.bind_addr, config.worker_threads)
         .expect("bind udp sockets")
         .into_iter()
         .map(Arc::new)
         .collect::<Vec<_>>();
-    let send_sock = sockets.swap_remove(0);
-    let self_addr = send_sock.local_addr().expect("local addr");
+    let self_addr = sockets[0].local_addr().expect("local addr");
+    let send_socks: Arc<Vec<Arc<UdpSocket>>> = Arc::new(sockets.clone());
 
     tracing::info!(
         self_addr = %self_addr,
         workers = config.worker_threads,
         sybils = sybils.len(),
+        arch = env!("CRAW_TARGET_ARCH"),
+        os = env!("CRAW_TARGET_OS"),
+        git = env!("CRAW_GIT_HASH"),
+        fetch_limit = config.global_fetch_limit,
+        race_peers = config.race_peers,
         "crawler starting"
     );
 
@@ -117,7 +134,8 @@ async fn main() {
         self_id,
         self_addr,
         sybils,
-        send_sock.clone(),
+        config.external_ip,
+        send_socks,
         tx_table,
         token.clone(),
         table.clone(),
@@ -128,18 +146,20 @@ async fn main() {
     for sock in sockets {
         tokio::spawn(net::worker(sock, router.clone()));
     }
-    tokio::spawn(net::worker(send_sock, router.clone()));
 
     let limiter = Arc::new(RateLimiter::new(config.rate_limit_per_sec, 64.0));
+    let bootstrap = resolve_bootstrap(&config.bootstrap).await;
     let walker = Walker::new(
         router.clone(),
-        limiter,
+        limiter.clone(),
+        bootstrap.clone(),
         config.walker_alpha,
         Duration::from_millis(config.walker_interval_ms),
     );
 
-    let bootstrap = resolve_bootstrap(&config.bootstrap).await;
-    walker.bootstrap(bootstrap).await;
+    walker.bootstrap(&bootstrap).await;
+
+    let limiter_sweep = limiter_sweep_loop(limiter.clone());
 
     let sightings = Arc::new(SightingWriter::new(pool.clone()));
     let sightings_run = sightings.clone().run(Duration::from_millis(500));
@@ -157,7 +177,7 @@ async fn main() {
     ));
     let retry_run = verify_store
         .clone()
-        .run_scheduler(verify_tx.clone(), Duration::from_secs(30));
+        .run_scheduler(verify_tx.clone(), Duration::from_secs(15));
 
     let batch_writer = Arc::new(BatchWriter::new(
         pool.clone(),
@@ -242,8 +262,14 @@ async fn main() {
         _ = cleanup => {}
         _ = token_rotate => {}
         _ = cache_cleanup => {}
+        _ = limiter_sweep => {}
         _ = shutdown_signal => {}
     }
+
+    tracing::info!("shutdown: draining pending writes");
+    batch_writer.flush().await;
+    sightings.flush().await;
+    tracing::info!("shutdown complete");
 }
 
 async fn utp_socket() -> Option<Arc<librqbit_utp::UtpSocketUdp>> {
@@ -302,8 +328,26 @@ async fn routing_snapshot_loop(table: Arc<Mutex<RoutingTable>>, path: PathBuf, i
 }
 
 async fn flush_sightings(writer: Arc<SightingWriter>, mut rx: mpsc::Receiver<(NodeId, Source)>) {
-    while let Some((ih, source)) = rx.recv().await {
-        writer.push(ih, source);
+    loop {
+        match rx.recv().await {
+            Some((ih, source)) => writer.push(ih, source),
+            None => {
+                tracing::warn!("discovery channel closed, flushing remaining sightings");
+                writer.flush().await;
+                std::future::pending::<()>().await;
+            }
+        }
+    }
+}
+
+async fn limiter_sweep_loop(limiter: Arc<RateLimiter>) {
+    let mut tick = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        tick.tick().await;
+        let expired = limiter.sweep_expired();
+        if expired > 0 {
+            tracing::debug!(expired, "rate limiter: swept expired buckets");
+        }
     }
 }
 

@@ -38,6 +38,10 @@ pub async fn source_peers(
     let mut seen: HashSet<SocketAddr> = HashSet::new();
     let mut peers: Vec<SocketAddr> = Vec::new();
     let mut succeeded: u64 = 0;
+    let mut routed_nodes: Vec<NodeInfo> = Vec::new();
+
+    let start_time = std::time::Instant::now();
+    crate::trace_lifecycle!(&info_hash, "source_start");
 
     for _ in 0..MAX_ROUNDS {
         let batch: Vec<NodeInfo> = candidates
@@ -56,6 +60,8 @@ pub async fn source_peers(
         let mut tasks = Vec::with_capacity(batch.len());
         for node in batch {
             let router = router.clone();
+            let ih_clone = info_hash;
+            let node_addr = node.addr;
             let args = BValue::dict(vec![
                 (
                     Bytes::from_static(b"id"),
@@ -68,21 +74,25 @@ pub async fn source_peers(
             ]);
             metrics.source_queries.add(1);
             tasks.push(tokio::spawn(async move {
-                router
-                    .send_query(GET_PEERS, node.addr, args, QUERY_TIMEOUT)
-                    .await
+                let node_str = node_addr.to_string();
+                crate::trace_lifecycle!(&ih_clone, "source_query", node = node_str);
+                let res = router
+                    .send_query(GET_PEERS, node_addr, args, QUERY_TIMEOUT)
+                    .await;
+                (node_addr, res)
             }));
         }
 
         let mut new_nodes: Vec<NodeInfo> = Vec::new();
         for task in tasks {
             match task.await {
-                Ok(Ok(msg)) => {
+                Ok((node_addr, Ok(msg))) => {
                     let Kind::Response { r } = &msg.kind else {
                         continue;
                     };
                     metrics.source_responses.add(1);
                     succeeded += 1;
+                    let mut returned_here = 0;
                     if let Some(values) = r.get(b"values").and_then(BValue::as_list) {
                         for v in values {
                             if let Some(b) = v.as_bytes()
@@ -96,6 +106,7 @@ pub async fn source_peers(
                                     std::net::IpAddr::V4(ip),
                                     u16::from_be_bytes([b[4], b[5]]),
                                 );
+                                returned_here += 1;
                                 if seen.insert(addr) {
                                     peers.push(addr);
                                     metrics.source_peers_returned.add(1);
@@ -103,11 +114,17 @@ pub async fn source_peers(
                             }
                         }
                     }
+                    crate::trace_lifecycle!(
+                        &info_hash,
+                        "source_response",
+                        node = node_addr.to_string(),
+                        peers_returned = returned_here
+                    );
                     if let Some(nodes) = r.get_bytes(b"nodes") {
                         new_nodes.extend(decode_compact(nodes));
                     }
                 }
-                Ok(Err(_)) | Err(_) => {
+                Ok((_, Err(_))) | Err(_) => {
                     metrics.source_timeout.add(1);
                 }
             }
@@ -120,16 +137,31 @@ pub async fn source_peers(
             break;
         }
         if !new_nodes.is_empty() {
-            candidates.extend(new_nodes);
+            routed_nodes.extend(new_nodes.iter().cloned());
+            candidates.extend(new_nodes.iter().cloned());
             candidates.sort_by_key(|n| xor(&info_hash, &n.id));
-            candidates.dedup_by(|a, b| a.addr == b.addr);
+            candidates.dedup_by(|a, b| a.id == b.id);
             candidates.truncate(K);
+        }
+    }
+
+    if !routed_nodes.is_empty() {
+        let filtered: Vec<NodeInfo> = routed_nodes
+            .into_iter()
+            .filter(|n| {
+                n.id != router.self_id
+                    && !router.sybils.iter().any(|(sid, _)| sid == &n.id)
+            })
+            .collect();
+        if !filtered.is_empty() {
+            router.insert_nodes(filtered);
         }
     }
 
     peers.truncate(count);
     // Track total peers returned before cache filtering
     metrics.source_returned_peers.add(peers.len() as u64);
+    let original_peers_len = peers.len();
     // Filter out cached-bad peers
     let filtered: Vec<SocketAddr> = peers
         .into_iter()
@@ -144,6 +176,13 @@ pub async fn source_peers(
         })
         .collect();
     // Infohash-level source failure classification
+    crate::trace_lifecycle!(
+        &info_hash,
+        "source_done",
+        peers = original_peers_len,
+        cache_filtered = original_peers_len - filtered.len(),
+        elapsed_ms = start_time.elapsed().as_millis() as u64
+    );
     if succeeded == 0 {
         metrics.source_all_timeout.add(1);
         SourceResult::AllTimeout

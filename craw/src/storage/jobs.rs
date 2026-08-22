@@ -32,10 +32,12 @@ impl VerifyStore {
         .bind(ih.as_slice())
         .execute(&self.pool)
         .await?;
+        crate::trace_lifecycle!(&ih, "job_update", status = "verified");
         Ok(())
     }
 
     pub async fn mark_failed(&self, ih: Infohash, error: &str) -> Result<(), sqlx::Error> {
+        crate::trace_lifecycle!(&ih, "job_update", status = "failed", result = error);
         let row = sqlx::query("SELECT retry_count FROM verification_jobs WHERE infohash = $1")
             .bind(ih.as_slice())
             .fetch_optional(&self.pool)
@@ -105,7 +107,7 @@ impl VerifyStore {
             )
             UPDATE verification_jobs SET status = 'verifying', updated_at = now()
             WHERE infohash IN (SELECT infohash FROM fresh UNION SELECT infohash FROM retries)
-            RETURNING infohash",
+            RETURNING infohash, retry_count",
         )
         .bind(fresh_limit)
         .bind(retry_limit)
@@ -115,7 +117,9 @@ impl VerifyStore {
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let raw: Vec<u8> = row.get(0);
+            let retry_count: i32 = row.get(1);
             if let Ok(ih) = <[u8; 20]>::try_from(raw.as_slice()) {
+                crate::trace_lifecycle!(&ih, "claimed", attempt = retry_count as u32);
                 out.push(ih);
             }
         }
@@ -125,7 +129,7 @@ impl VerifyStore {
     async fn reset_stale_verifying(&self) -> Result<u64, sqlx::Error> {
         Ok(sqlx::query(
             "UPDATE verification_jobs SET status = 'pending', next_retry_at = now(), updated_at = now() \
-             WHERE status = 'verifying'",
+             WHERE status = 'verifying' AND updated_at < now() - interval '5 minutes'",
         )
         .execute(&self.pool)
         .await?
@@ -141,21 +145,32 @@ impl VerifyStore {
             Err(e) => tracing::warn!(error = %e, "verification scheduler: recovery failed"),
         }
         let mut tick = tokio::time::interval(interval);
+        let mut stale_tick = tokio::time::interval(Duration::from_secs(300));
         loop {
-            tick.tick().await;
-            match self.claim_due(500).await {
-                Ok(due) => {
-                    if !due.is_empty() {
-                        tracing::info!(
-                            due = due.len(),
-                            "verification scheduler: re-injecting jobs"
-                        );
-                        for ih in due {
-                            let _ = tx.send(ih).await;
+            tokio::select! {
+                _ = tick.tick() => {
+                    match self.claim_due(1000).await {
+                        Ok(due) => {
+                            if !due.is_empty() {
+                                tracing::info!(
+                                    due = due.len(),
+                                    "verification scheduler: re-injecting jobs"
+                                );
+                                for ih in due {
+                                    let _ = tx.send(ih).await;
+                                }
+                            }
                         }
+                        Err(e) => tracing::warn!(error = %e, "verification scheduler: claim failed"),
                     }
                 }
-                Err(e) => tracing::warn!(error = %e, "verification scheduler: claim failed"),
+                _ = stale_tick.tick() => {
+                    match self.reset_stale_verifying().await {
+                        Ok(0) => {}
+                        Ok(n) => tracing::info!(recovered = n, "scheduler: reset stale verifying jobs"),
+                        Err(e) => tracing::warn!(error = %e, "scheduler: stale recovery failed"),
+                    }
+                }
             }
         }
     }
