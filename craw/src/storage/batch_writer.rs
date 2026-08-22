@@ -202,7 +202,9 @@ async fn flush_jobs(pool: &PgPool, batch: &[JobUpdate]) -> Option<Vec<Vec<u8>>> 
                     let raw = ih.as_slice().to_vec();
                     let current_rc = retry_map.get(&raw).copied().unwrap_or(0);
                     let new_count = current_rc + 1;
-                    if new_count >= MAX_RETRIES {
+                    let terminal = new_count >= MAX_RETRIES
+                        || (error == "no_peers" && current_rc >= 1);
+                    if terminal {
                         resolved.push(ResolvedJob {
                             ih: ih.as_slice(),
                             status: "dead",

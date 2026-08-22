@@ -85,12 +85,12 @@ impl Walker {
     }
 
     fn pick_target(&self) -> ([u8; 20], [u8; 20]) {
-        let explore = rand::random::<f64>() < 0.1;
-        if explore {
-            let nodes = self.router.routing_nodes();
-            if let Some(n) = nodes.first() {
-                return (self.router.self_id, n.id);
-            }
+        let r = rand::random::<f64>();
+        if r < 0.25 {
+            return (self.router.self_id, self.router.self_id);
+        }
+        if r < 0.40 {
+            return (self.router.self_id, crate::dht::node_id::random_node_id());
         }
         if self.router.sybils.is_empty() {
             return (self.router.self_id, self.router.self_id);

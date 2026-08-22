@@ -2,7 +2,7 @@ use crate::krpc::Infohash;
 use crate::metrics::{Add1, Metrics};
 use crate::router::Router;
 use crate::verify::peer_cache::PeerCache;
-use crate::verify::peer_source::source_peers;
+use crate::verify::peer_source::{SourceResult, source_peers};
 use crate::verify::wire::{WireError, WireSession, gen_peer_id};
 use librqbit_utp::UtpSocketUdp;
 use std::net::SocketAddr;
@@ -21,6 +21,13 @@ enum FetchOutcome {
     Success(Vec<u8>),
 }
 
+pub enum VerifyResult {
+    Success(Vec<u8>),
+    NoPeers,
+    SourceTimeout,
+    MetadataFailed,
+}
+
 pub async fn verify_infohash(
     router: Arc<Router>,
     utp: Option<Arc<UtpSocketUdp>>,
@@ -28,10 +35,14 @@ pub async fn verify_infohash(
     race_peers: usize,
     metrics: Arc<Metrics>,
     peer_cache: Arc<PeerCache>,
-) -> Option<Vec<u8>> {
-    let peers = source_peers(router, info_hash, race_peers.max(1), metrics.clone(), peer_cache.clone()).await;
+) -> VerifyResult {
+    let peers = match source_peers(router, info_hash, race_peers.max(1), metrics.clone(), peer_cache.clone()).await {
+        SourceResult::Peers(p) => p,
+        SourceResult::NoPeers => return VerifyResult::NoPeers,
+        SourceResult::AllTimeout => return VerifyResult::SourceTimeout,
+    };
     if peers.is_empty() {
-        return None;
+        return VerifyResult::NoPeers;
     }
 
     metrics.fetch_attempts.add(peers.len() as u64);
@@ -187,8 +198,8 @@ pub async fn verify_infohash(
         }
     }
     set.abort_all();
-    if result.is_none() {
-        metrics.verify_fail.add(1);
+    match result {
+        Some(meta) => VerifyResult::Success(meta),
+        None => VerifyResult::MetadataFailed,
     }
-    result
 }

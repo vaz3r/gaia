@@ -9,7 +9,7 @@ use crate::krpc::Infohash;
 use crate::metrics::{Add1, Metrics};
 use crate::router::Router;
 use crate::storage::batch_writer::BatchWriter;
-use crate::verify::fetch_pool::verify_infohash;
+use crate::verify::fetch_pool::{VerifyResult, verify_infohash};
 use crate::verify::peer_cache::PeerCache;
 use crate::verify::verify::check;
 use librqbit_utp::UtpSocketUdp;
@@ -46,17 +46,27 @@ pub async fn run_pipeline(
             let _permit = permit;
             metrics.verify_attempts.add(1);
             match verify_infohash(router, utp, ih, race, metrics.clone(), peer_cache).await {
-                Some(meta) if check(&ih, &meta) => {
+                VerifyResult::Success(meta) if check(&ih, &meta) => {
                     metrics.verify_success.add(1);
                     batch_writer.push_torrent(ih, &meta);
                     batch_writer.push_verified(ih);
                 }
-                Some(_) => {
+                VerifyResult::Success(_) => {
                     metrics.sha1_mismatch.add(1);
                     metrics.verify_fail.add(1);
                     batch_writer.push_failed(ih, "sha1_mismatch");
                 }
-                None => {
+                VerifyResult::NoPeers => {
+                    metrics.source_no_peers.add(1);
+                    metrics.verify_fail.add(1);
+                    batch_writer.push_failed(ih, "no_peers");
+                }
+                VerifyResult::SourceTimeout => {
+                    metrics.verify_fail.add(1);
+                    batch_writer.push_failed(ih, "source_timeout");
+                }
+                VerifyResult::MetadataFailed => {
+                    metrics.verify_fail.add(1);
                     batch_writer.push_failed(ih, "no_metadata");
                 }
             }

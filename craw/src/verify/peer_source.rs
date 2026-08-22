@@ -16,13 +16,19 @@ const K: usize = 12;
 const ALPHA: usize = 3;
 const MAX_ROUNDS: usize = 8;
 
+pub enum SourceResult {
+    Peers(Vec<SocketAddr>),
+    NoPeers,
+    AllTimeout,
+}
+
 pub async fn source_peers(
     router: Arc<Router>,
     info_hash: Infohash,
     count: usize,
     metrics: Arc<Metrics>,
     peer_cache: Arc<PeerCache>,
-) -> Vec<SocketAddr> {
+) -> SourceResult {
     let mut candidates: Vec<NodeInfo> = router.closest_nodes(&info_hash, K);
     if candidates.is_empty() {
         candidates = router.random_routing_nodes(K);
@@ -140,12 +146,12 @@ pub async fn source_peers(
     // Infohash-level source failure classification
     if succeeded == 0 {
         metrics.source_all_timeout.add(1);
-        metrics.verify_fail.add(1);
+        SourceResult::AllTimeout
     } else if filtered.is_empty() {
-        metrics.source_no_peers.add(1);
-        metrics.verify_fail.add(1);
+        SourceResult::NoPeers
+    } else {
+        SourceResult::Peers(filtered)
     }
-    filtered
 }
 
 fn is_routable(ip: Ipv4Addr) -> bool {
