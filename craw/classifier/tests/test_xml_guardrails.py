@@ -81,10 +81,10 @@ class TestParseClassificationXml:
         assert result.confidence == 0.98
 
     def test_markdown_fenced(self):
-        xml = "```xml\n<classification>\n  <category>TV</category>\n  <confidence>0.90</confidence>\n</classification>\n```"
+        xml = "```xml\n<classification>\n  <category>Television</category>\n  <confidence>0.90</confidence>\n</classification>\n```"
         result = parse_classification_xml(xml)
         assert result is not None
-        assert result.category == "TV"
+        assert result.category == "Television"
 
     def test_surrounded_by_text(self):
         text = "Here is the result:\n<classification>\n  <category>Music</category>\n  <confidence>0.85</confidence>\n</classification>\nDone."
@@ -117,7 +117,7 @@ class TestParseClassificationXml:
         assert result.confidence == 0.0
 
     def test_all_categories(self):
-        for cat in ["Movies", "TV", "Games", "Music", "Applications", "Anime", "Documentaries", "Other"]:
+        for cat in ["Movies", "Television", "Games", "Music", "Applications", "Anime", "Documentaries", "Other", "Unwanted"]:
             xml = f"<classification>\n  <category>{cat}</category>\n  <confidence>0.50</confidence>\n</classification>"
             result = parse_classification_xml(xml)
             assert result is not None
