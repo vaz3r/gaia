@@ -1,4 +1,5 @@
 craw/classifier/data/__pycache__/label_map.cpython-313.pyc
+session-*.md
 craw/classifier/data/models/
 craw/classifier/data/predictions/
 craw/classifier/data/*augmented*.jsonl
