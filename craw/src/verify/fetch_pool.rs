@@ -13,7 +13,7 @@ use tokio::task::JoinSet;
 
 const TCP_TIMEOUT: Duration = Duration::from_secs(2);
 const UTP_TIMEOUT: Duration = Duration::from_secs(4);
-const FETCH_TIMEOUT: Duration = Duration::from_secs(8);
+const FETCH_TIMEOUT: Duration = Duration::from_secs(25);
 
 enum FetchOutcome {
     ConnectFailed(SocketAddr, WireError),
@@ -32,6 +32,171 @@ enum SourceState {
     Peers,
     NoPeers,
     Timeout,
+}
+
+async fn try_fetch(
+    addr: SocketAddr,
+    ih: Infohash,
+    pid: [u8; 20],
+    metrics: Arc<Metrics>,
+    cache: Arc<PeerCache>,
+    utp: Option<Arc<UtpSocketUdp>>,
+) -> FetchOutcome {
+    metrics.tcp_attempts.add(1);
+    if utp.is_some() {
+        metrics.utp_attempts.add(1);
+    }
+
+    let addr_str = addr.to_string();
+
+    let mut tcp_task = tokio::spawn({
+        let ih = ih;
+        let pid = pid;
+        let metrics = metrics.clone();
+        let addr_str = addr_str.clone();
+        crate::trace_lifecycle!(&ih, "fetch_start", peer = addr_str.clone(), transport = "tcp");
+        let start = std::time::Instant::now();
+        async move {
+            let res = WireSession::connect_tcp(addr, &ih, &pid, TCP_TIMEOUT).await;
+            if res.is_ok() {
+                metrics.tcp_connect_actual.add(1);
+            }
+            let result_str = match &res {
+                Ok(_) => "ok",
+                Err(WireError::Timeout) => "timeout",
+                Err(_) => "error",
+            };
+            crate::trace_lifecycle!(&ih, "connect_result", peer = addr_str, transport = "tcp", result = result_str, elapsed_ms = start.elapsed().as_millis() as u64);
+            res
+        }
+    });
+    let mut utp_task = tokio::spawn({
+        let ih = ih;
+        let pid = pid;
+        let utp = utp.clone();
+        let metrics = metrics.clone();
+        let addr_str = addr_str.clone();
+        crate::trace_lifecycle!(&ih, "fetch_start", peer = addr_str.clone(), transport = "utp");
+        let start = std::time::Instant::now();
+        async move {
+            let res = match utp {
+                Some(sock) => {
+                    WireSession::connect_utp(sock, addr, &ih, &pid, UTP_TIMEOUT).await
+                }
+                None => Err(WireError::Io(std::io::Error::other("no uTP socket"))),
+            };
+            if res.is_ok() {
+                metrics.utp_connect_actual.add(1);
+            }
+            let result_str = match &res {
+                Ok(_) => "ok",
+                Err(WireError::Timeout) => "timeout",
+                Err(_) => "error",
+            };
+            crate::trace_lifecycle!(&ih, "connect_result", peer = addr_str, transport = "utp", result = result_str, elapsed_ms = start.elapsed().as_millis() as u64);
+            res
+        }
+    });
+
+    let (first_session, first_is_tcp, loser_handle) = tokio::select! {
+        res = &mut tcp_task => {
+            match res {
+                Ok(Ok(s)) => { metrics.tcp_connect_ok.add(1); (Ok(s), true, utp_task) }
+                Ok(Err(e)) => {
+                    let utp_res = utp_task.await;
+                    match utp_res {
+                        Ok(Ok(s)) => { metrics.utp_connect_ok.add(1); (Ok(s), false, tcp_task) }
+                        Ok(Err(utp_e)) => {
+                            cache.mark_bad(addr);
+                            return FetchOutcome::ConnectFailed(addr, e);
+                        }
+                        Err(_) => {
+                            cache.mark_bad(addr);
+                            return FetchOutcome::ConnectFailed(addr, e);
+                        }
+                    }
+                }
+                Err(_) => {
+                    let utp_res = utp_task.await;
+                    match utp_res {
+                        Ok(Ok(s)) => { metrics.utp_connect_ok.add(1); (Ok(s), false, tcp_task) }
+                        Ok(Err(e)) => {
+                            cache.mark_bad(addr);
+                            return FetchOutcome::ConnectFailed(addr, e);
+                        }
+                        Err(_) => {
+                            cache.mark_bad(addr);
+                            return FetchOutcome::ConnectFailed(addr, WireError::Io(std::io::Error::other("both tasks failed")));
+                        }
+                    }
+                }
+            }
+        }
+        res = &mut utp_task => {
+            match res {
+                Ok(Ok(s)) => { metrics.utp_connect_ok.add(1); (Ok(s), false, tcp_task) }
+                Ok(Err(e)) => {
+                    let tcp_res = tcp_task.await;
+                    match tcp_res {
+                        Ok(Ok(s)) => { metrics.tcp_connect_ok.add(1); (Ok(s), true, utp_task) }
+                        Ok(Err(tcp_e)) => {
+                            cache.mark_bad(addr);
+                            return FetchOutcome::ConnectFailed(addr, e);
+                        }
+                        Err(_) => {
+                            cache.mark_bad(addr);
+                            return FetchOutcome::ConnectFailed(addr, e);
+                        }
+                    }
+                }
+                Err(_) => {
+                    let tcp_res = tcp_task.await;
+                    match tcp_res {
+                        Ok(Ok(s)) => { metrics.tcp_connect_ok.add(1); (Ok(s), true, utp_task) }
+                        Ok(Err(e)) => {
+                            cache.mark_bad(addr);
+                            return FetchOutcome::ConnectFailed(addr, e);
+                        }
+                        Err(_) => {
+                            cache.mark_bad(addr);
+                            return FetchOutcome::ConnectFailed(addr, WireError::Io(std::io::Error::other("both tasks failed")));
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    let mut session = match first_session {
+        Ok(s) => s,
+        Err(e) => {
+            cache.mark_bad(addr);
+            return FetchOutcome::ConnectFailed(addr, e);
+        }
+    };
+
+    match session.fetch_metadata(FETCH_TIMEOUT).await {
+        Ok(meta) => {
+            loser_handle.abort();
+            if first_is_tcp { metrics.tcp_metadata_ok.add(1); } else { metrics.utp_metadata_ok.add(1); }
+            FetchOutcome::Success(meta)
+        }
+        Err(first_err) => {
+            let loser_result = loser_handle.await;
+            match loser_result {
+                Ok(Ok(mut loser_session)) => {
+                    match loser_session.fetch_metadata(FETCH_TIMEOUT).await {
+                        Ok(meta) => {
+                            if loser_session.is_tcp() { metrics.tcp_metadata_ok.add(1); } else { metrics.utp_metadata_ok.add(1); }
+                            FetchOutcome::Success(meta)
+                        }
+                        Err(_) => FetchOutcome::MetadataFailed(first_err),
+                    }
+                }
+                _ => FetchOutcome::MetadataFailed(first_err),
+            }
+        }
+    }
 }
 
 pub async fn verify_infohash(
@@ -71,135 +236,15 @@ pub async fn verify_infohash(
 
     metrics.fetch_attempts.add(peers.len() as u64);
     let peer_id = gen_peer_id();
-    let local = Arc::new(Semaphore::new(race_peers.max(1)));
     let mut set = JoinSet::new();
     for addr in peers {
-        let Ok(_permit) = local.clone().try_acquire_owned() else {
-            break;
-        };
-        let utp = utp.clone();
         let ih = info_hash;
         let pid = peer_id;
-        let cache = peer_cache.clone();
         let metrics = metrics.clone();
+        let cache = peer_cache.clone();
+        let utp = utp.clone();
         set.spawn(async move {
-            let _permit = _permit;
-
-            metrics.tcp_attempts.add(1);
-            if utp.is_some() {
-                metrics.utp_attempts.add(1);
-            }
-
-            let mut tcp_task = tokio::spawn({
-                let ih = ih;
-                let pid = pid;
-                let addr_str = addr.to_string();
-                crate::trace_lifecycle!(&ih, "fetch_start", peer = addr_str.clone(), transport = "tcp");
-                let start = std::time::Instant::now();
-                async move {
-                    let res = WireSession::connect_tcp(addr, &ih, &pid, TCP_TIMEOUT).await;
-                    let result_str = match &res {
-                        Ok(_) => "ok",
-                        Err(WireError::Timeout) => "timeout",
-                        Err(_) => "error",
-                    };
-                    crate::trace_lifecycle!(&ih, "connect_result", peer = addr_str, transport = "tcp", result = result_str, elapsed_ms = start.elapsed().as_millis() as u64);
-                    res
-                }
-            });
-            let mut utp_task = tokio::spawn({
-                let ih = ih;
-                let pid = pid;
-                let utp = utp.clone();
-                let addr_str = addr.to_string();
-                crate::trace_lifecycle!(&ih, "fetch_start", peer = addr_str.clone(), transport = "utp");
-                let start = std::time::Instant::now();
-                async move {
-                    let res = match utp {
-                        Some(sock) => {
-                            WireSession::connect_utp(sock, addr, &ih, &pid, UTP_TIMEOUT).await
-                        }
-                        None => Err(WireError::Io(std::io::Error::other("no uTP socket"))),
-                    };
-                    let result_str = match &res {
-                        Ok(_) => "ok",
-                        Err(WireError::Timeout) => "timeout",
-                        Err(_) => "error",
-                    };
-                    crate::trace_lifecycle!(&ih, "connect_result", peer = addr_str, transport = "utp", result = result_str, elapsed_ms = start.elapsed().as_millis() as u64);
-                    res
-                }
-            });
-
-            let session_result: Result<WireSession, WireError> = tokio::select! {
-                res = &mut tcp_task => {
-                    match res {
-                        Ok(Ok(s)) => {
-                            metrics.tcp_connect_ok.add(1);
-                            utp_task.abort();
-                            Ok(s)
-                        }
-                        Ok(Err(tcp_err)) => {
-                            match utp_task.await {
-                                Ok(Ok(s)) => { metrics.utp_connect_ok.add(1); Ok(s) }
-                                Ok(Err(utp_err)) => Err(utp_err),
-                                Err(_) => Err(tcp_err),
-                            }
-                        }
-                        Err(_) => {
-                            match utp_task.await {
-                                Ok(Ok(s)) => { metrics.utp_connect_ok.add(1); Ok(s) }
-                                Ok(Err(e)) => Err(e),
-                                Err(_) => Err(WireError::Io(std::io::Error::other("both tasks failed"))),
-                            }
-                        }
-                    }
-                }
-                res = &mut utp_task => {
-                    match res {
-                        Ok(Ok(s)) => {
-                            metrics.utp_connect_ok.add(1);
-                            tcp_task.abort();
-                            Ok(s)
-                        }
-                        Ok(Err(utp_err)) => {
-                            match tcp_task.await {
-                                Ok(Ok(s)) => { metrics.tcp_connect_ok.add(1); Ok(s) }
-                                Ok(Err(tcp_err)) => Err(tcp_err),
-                                Err(_) => Err(utp_err),
-                            }
-                        }
-                        Err(_) => {
-                            match tcp_task.await {
-                                Ok(Ok(s)) => { metrics.tcp_connect_ok.add(1); Ok(s) }
-                                Ok(Err(e)) => Err(e),
-                                Err(_) => Err(WireError::Io(std::io::Error::other("both tasks failed"))),
-                            }
-                        }
-                    }
-                }
-            };
-
-            let mut session = match session_result {
-                Ok(s) => s,
-                Err(e) => {
-                    cache.mark_bad(addr);
-                    return FetchOutcome::ConnectFailed(addr, e);
-                }
-            };
-
-            let is_tcp = session.is_tcp();
-            match session.fetch_metadata(FETCH_TIMEOUT).await {
-                Ok(meta) => {
-                    if is_tcp {
-                        metrics.tcp_metadata_ok.add(1);
-                    } else {
-                        metrics.utp_metadata_ok.add(1);
-                    }
-                    FetchOutcome::Success(meta)
-                }
-                Err(e) => FetchOutcome::MetadataFailed(e),
-            }
+            try_fetch(addr, ih, pid, metrics, cache, utp).await
         });
     }
 

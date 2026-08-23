@@ -61,6 +61,9 @@ pub struct Metrics {
     pub utp_connect_ok: AtomicU64,
     pub tcp_metadata_ok: AtomicU64,
     pub utp_metadata_ok: AtomicU64,
+    // Per-transport actual connect success (regardless of race winner)
+    pub tcp_connect_actual: AtomicU64,
+    pub utp_connect_actual: AtomicU64,
     // Walker metrics
     pub walker_steps: AtomicU64,
     pub walker_queries: AtomicU64,
@@ -149,6 +152,8 @@ pub struct Snapshot {
     pub utp_connect_ok: u64,
     pub tcp_metadata_ok: u64,
     pub utp_metadata_ok: u64,
+    pub tcp_connect_actual: u64,
+    pub utp_connect_actual: u64,
     pub walker_steps: u64,
     pub walker_queries: u64,
     pub walker_ok: u64,
@@ -222,6 +227,8 @@ impl Metrics {
             utp_connect_ok: self.utp_connect_ok.load(Ordering::Relaxed),
             tcp_metadata_ok: self.tcp_metadata_ok.load(Ordering::Relaxed),
             utp_metadata_ok: self.utp_metadata_ok.load(Ordering::Relaxed),
+            tcp_connect_actual: self.tcp_connect_actual.load(Ordering::Relaxed),
+            utp_connect_actual: self.utp_connect_actual.load(Ordering::Relaxed),
             walker_steps: self.walker_steps.load(Ordering::Relaxed),
             walker_queries: self.walker_queries.load(Ordering::Relaxed),
             walker_ok: self.walker_ok.load(Ordering::Relaxed),

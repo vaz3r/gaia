@@ -20,6 +20,7 @@ pub struct Config {
     pub parse_nodes6: bool,
     pub nodes: usize,
     pub port_base: u16,
+    pub utp_enabled: bool,
 }
 
 impl Default for Config {
@@ -51,6 +52,7 @@ impl Default for Config {
             parse_nodes6: false,
             nodes: 1,
             port_base: 6881,
+            utp_enabled: true,
         }
     }
 }
@@ -117,6 +119,10 @@ impl Config {
         if c.port_base == 0 {
             c.port_base = c.bind_addr.port();
         }
+        c.utp_enabled = std::env::var("CRAW_UTP_ENABLED")
+            .ok()
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(true);
         c
     }
 }
