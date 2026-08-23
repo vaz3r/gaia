@@ -1,1 +1,10 @@
 craw/classifier/data/__pycache__/label_map.cpython-313.pyc
+craw/classifier/data/models/
+craw/classifier/data/predictions/
+craw/classifier/data/*augmented*.jsonl
+craw/classifier/data/labeled_clean.jsonl
+craw/classifier/data/labeled_with_docs.jsonl
+craw/classifier/data/fresh_sample.jsonl
+craw/classifier/data/documentary_candidates*.jsonl
+craw/classifier/data/labeling_template.jsonl
+craw/classifier/data/torrent_sample.jsonl*

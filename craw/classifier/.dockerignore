@@ -1,6 +1,3 @@
-data/*
-!data/anchors.json
-!data/.gitkeep
 *.pyc
 __pycache__/
 .git/
@@ -11,3 +8,9 @@ hf_cache/
 dist/
 build/
 .env
+data/fastembed_cache/
+data/predictions/
+data/models/embeddings_cache.npy
+data/models/transformer/model.onnx
+data/models/transformer/model/
+data/models/transformer/training_report.txt

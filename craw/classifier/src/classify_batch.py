@@ -170,6 +170,68 @@ def run_embedding_mode(torrents: list[dict], config: dict, output_f):
     print(f"Throughput:   {n_total/elapsed:.0f} it/s")
 
 
+def run_transformer_mode(torrents: list[dict], config: dict, output_f):
+    import numpy as np
+    from src.backends.transformer_onnx_backend import TransformerOnnxBackend
+    from src.core.text_builder import build_input_text
+
+    tr_cfg = config.get("transformer", {})
+    model_path = tr_cfg.get("model_path", "data/models/transformer/model_int8.onnx")
+    tokenizer_path = tr_cfg.get("tokenizer_path", "data/models/transformer/tokenizer")
+    batch_size = tr_cfg.get("batch_size", 32)
+
+    backend = TransformerOnnxBackend(
+        model_path=model_path,
+        tokenizer_path=tokenizer_path,
+        max_length=tr_cfg.get("max_length", 128),
+    )
+
+    # Load label encoder
+    import joblib
+    encoder_path = tr_cfg.get("encoder_path", "data/models/transformer/label_encoder.joblib")
+    le = joblib.load(encoder_path)
+    classes = le.classes_
+
+    texts = [build_input_text(row, config) for row in torrents]
+    logger.info("Classifying %d texts with transformer ONNX...", len(texts))
+    t0 = time.time()
+
+    probs, predictions = backend.predict(texts, batch_size=batch_size)
+    elapsed = time.time() - t0
+
+    for i, row in enumerate(torrents):
+        pred_idx = int(predictions[i])
+        category = classes[pred_idx]
+        confidence = float(probs[i][pred_idx])
+
+        top_idx = np.argsort(probs[i])[::-1]
+        top_candidates = [
+            {"category": classes[idx], "confidence": round(float(probs[i][idx]), 4)}
+            for idx in top_idx[:3]
+        ]
+
+        entry = {
+            "infohash": row.get("infohash", row.get("id", "")),
+            "category": category,
+            "confidence": round(confidence, 4),
+            "method": "transformer_onnx",
+            "model": f"distilbert-int8",
+            "classifier": Path(model_path).stem,
+            "top_candidates": top_candidates,
+        }
+        output_f.write(json.dumps(entry) + "\n")
+        output_f.flush()
+
+    n_total = len(torrents)
+    logger.info("[%d/%d] time=%.1fs throughput=%.0f it/s",
+                n_total, n_total, elapsed, n_total / elapsed if elapsed > 0 else 0)
+
+    print(f"\n=== Classification Complete (Transformer ONNX) ===")
+    print(f"Total:        {n_total}")
+    print(f"Total time:   {elapsed:.1f}s")
+    print(f"Throughput:   {n_total/elapsed:.0f} it/s")
+
+
 def run_llm_mode(torrents: list[dict], config: dict, output_f, retry: bool = False):
     from src.core.prompt_builder import PromptBuilder
     from src.core.types import TorrentInput
@@ -261,7 +323,7 @@ def main():
     parser.add_argument("--input", required=True, help="Input JSONL file")
     parser.add_argument("--output", required=True, help="Output JSONL file")
     parser.add_argument("--config", default="config/embedding.yaml", help="Config YAML")
-    parser.add_argument("--mode", choices=["embedding", "llm"], default="embedding",
+    parser.add_argument("--mode", choices=["embedding", "llm", "transformer"], default="embedding",
                         help="Classification mode")
     parser.add_argument("--limit", type=int, default=None, help="Max torrents to classify")
     parser.add_argument("--retry", action="store_true", help="Retry failed parses (LLM mode)")
@@ -277,6 +339,8 @@ def main():
     with open(output_path, "w", encoding="utf-8") as out_f:
         if args.mode == "embedding":
             run_embedding_mode(torrents, config, out_f)
+        elif args.mode == "transformer":
+            run_transformer_mode(torrents, config, out_f)
         else:
             run_llm_mode(torrents, config, out_f, retry=args.retry)
 

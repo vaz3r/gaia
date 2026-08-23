@@ -1,0 +1,28 @@
+# Transformer classifier config (DistilBERT ONNX int8)
+# Used by --mode transformer
+
+embedding:
+  model_name: BAAI/bge-small-en-v1.5
+  normalize: true
+  batch_size: 32
+  cache_dir: /app/data/fastembed_cache
+
+classifier:
+  model_path: data/models/logreg_category.joblib
+  encoder_path: data/models/label_encoder.joblib
+  confidence_threshold: 0.35
+  anchor_threshold: 0.5
+  anchor_file: data/anchors.json
+  use_llm_fallback: false
+
+transformer:
+  model_path: data/models/transformer/model_int8.onnx
+  tokenizer_path: data/models/transformer/tokenizer
+  encoder_path: data/models/transformer/label_encoder.joblib
+  max_length: 128
+  batch_size: 32
+
+text_builder:
+  max_files: 10
+  max_file_chars: 100
+  max_name_chars: 300

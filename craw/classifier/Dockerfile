@@ -20,6 +20,11 @@ COPY prompts/ ./prompts/
 COPY config/ ./config/
 COPY data/anchors.json ./data/anchors.json
 
+# Copy trained transformer model (ONNX int8 + tokenizer + label encoder only)
+COPY data/models/transformer/model_int8.onnx ./data/models/transformer/model_int8.onnx
+COPY data/models/transformer/tokenizer/ ./data/models/transformer/tokenizer/
+COPY data/models/transformer/label_encoder.joblib ./data/models/transformer/label_encoder.joblib
+
 RUN mkdir -p /app/data/predictions /app/data/models
 
 RUN useradd -m classifier && chown -R classifier:classifier /app

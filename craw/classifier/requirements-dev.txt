@@ -1,4 +1,6 @@
 -r requirements.txt
 torch
+onnx
+accelerate
 psycopg2-binary
 pytest
