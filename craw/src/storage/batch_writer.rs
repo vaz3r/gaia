@@ -291,7 +291,9 @@ async fn flush_jobs(pool: &PgPool, batch: &[&JobUpdate]) -> bool {
 }
 
 async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) -> bool {
-    for chunk in batch.chunks(FLUSH_CHUNK) {
+    let mut seen: std::collections::HashSet<[u8; 20]> = std::collections::HashSet::new();
+    let unique: Vec<&TorrentEntry> = batch.iter().filter(|e| seen.insert(e.ih)).collect();
+    for chunk in unique.chunks(FLUSH_CHUNK) {
         let now = Utc::now();
         let n = chunk.len();
         let param_count = n * 7;
@@ -321,7 +323,7 @@ async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) -> bool {
         );
 
         let mut q = sqlx::query(&sql);
-        for e in chunk {
+        for &e in chunk {
             q = q
                 .bind(e.ih.as_slice())
                 .bind(e.name.as_deref())
