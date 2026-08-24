@@ -360,3 +360,115 @@ fn request(piece: usize) -> BValue {
         (Bytes::from_static(b"piece"), BValue::Int(piece as i64)),
     ])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::krpc::codec::{BValue, encode_to_bytes};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn read_frame(sock: &mut tokio::net::TcpStream) -> (u8, Bytes) {
+        let mut lenbuf = [0u8; 4];
+        sock.read_exact(&mut lenbuf).await.unwrap();
+        let len = u32::from_be_bytes(lenbuf) as usize;
+        let mut buf = vec![0u8; len];
+        sock.read_exact(&mut buf).await.unwrap();
+        (buf[1], Bytes::copy_from_slice(&buf[2..]))
+    }
+
+    fn framed_extended(ext_id: u8, payload: Bytes) -> Vec<u8> {
+        let total = 2 + payload.len();
+        let mut msg = Vec::with_capacity(4 + total);
+        msg.extend_from_slice(&(total as u32).to_be_bytes());
+        msg.push(EXTENDED_MSG_ID);
+        msg.push(ext_id);
+        msg.extend_from_slice(&payload);
+        msg
+    }
+
+    // Regression test: a peer sends metadata responses using the ID WE
+    // advertised (1), not its own ID (2). The client must not skip it.
+    #[tokio::test]
+    async fn metadata_response_uses_our_advertised_id() {
+        let info_hash = [0xABu8; 20];
+        let peer_id = [0xCDu8; 20];
+        let metadata = b"hello world metadata".to_vec();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let ih = info_hash;
+        let meta = metadata.clone();
+        let peer = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+
+            // Read BT handshake.
+            let mut hs = [0u8; HANDSHAKE_LEN];
+            sock.read_exact(&mut hs).await.unwrap();
+            assert_eq!(hs[0], 19);
+
+            // Reply with our handshake, extension bit set, same info_hash.
+            let mut resp = [0u8; HANDSHAKE_LEN];
+            resp[0] = 19;
+            resp[1..20].copy_from_slice(PROTOCOL);
+            resp[25] |= 0x10;
+            resp[28..48].copy_from_slice(&ih);
+            resp[48..68].copy_from_slice(b"-MO0001-1234567890AB");
+            sock.write_all(&resp).await.unwrap();
+
+            // Read client's extension handshake.
+            let (ext_id, _) = read_frame(&mut sock).await;
+            assert_eq!(ext_id, EXTENDED_HANDSHAKE_ID);
+
+            // Advertise our own ut_metadata ID as 2.
+            let ext = BValue::dict(vec![
+                (
+                    Bytes::from_static(b"m"),
+                    BValue::dict(vec![(Bytes::from_static(b"ut_metadata"), BValue::Int(2))]),
+                ),
+                (
+                    Bytes::from_static(b"metadata_size"),
+                    BValue::Int(meta.len() as i64),
+                ),
+                (
+                    Bytes::from_static(b"v"),
+                    BValue::Bytes(Bytes::from_static(b"MockPeer")),
+                ),
+            ]);
+            sock.write_all(&framed_extended(EXTENDED_HANDSHAKE_ID, encode_to_bytes(&ext)))
+                .await
+                .unwrap();
+
+            // Read metadata request: client must send using OUR ID (2).
+            let (req_ext, _) = read_frame(&mut sock).await;
+            assert_eq!(req_ext, 2);
+
+            // Respond using the ID the client advertised (1), not ours.
+            let body = encode_to_bytes(&BValue::dict(vec![
+                (Bytes::from_static(b"msg_type"), BValue::Int(1)),
+                (Bytes::from_static(b"piece"), BValue::Int(0)),
+                (
+                    Bytes::from_static(b"total_size"),
+                    BValue::Int(meta.len() as i64),
+                ),
+            ]));
+            let mut payload = body.to_vec();
+            payload.extend_from_slice(&meta);
+            sock.write_all(&framed_extended(OUR_UT_METADATA_ID, Bytes::from(payload)))
+                .await
+                .unwrap();
+        });
+
+        let mut session =
+            WireSession::connect_tcp(addr, &info_hash, &peer_id, Duration::from_secs(5))
+                .await
+                .unwrap();
+        let got = session
+            .fetch_metadata(Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(got, metadata);
+
+        peer.await.unwrap();
+    }
+}
