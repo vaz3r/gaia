@@ -14,6 +14,7 @@ const HANDSHAKE_LEN: usize = 68;
 const PROTOCOL: &[u8] = b"BitTorrent protocol";
 const EXTENDED_MSG_ID: u8 = 20;
 const EXTENDED_HANDSHAKE_ID: u8 = 0;
+const OUR_UT_METADATA_ID: u8 = 1;
 const MAX_MESSAGE_LEN: usize = 16 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -205,7 +206,7 @@ impl WireSession {
         let ours = BValue::dict(vec![
             (
                 Bytes::from_static(b"m"),
-                BValue::dict(vec![(Bytes::from_static(b"ut_metadata"), BValue::Int(1))]),
+                BValue::dict(vec![(Bytes::from_static(b"ut_metadata"), BValue::Int(OUR_UT_METADATA_ID as i64))]),
             ),
             (
                 Bytes::from_static(b"v"),
@@ -297,7 +298,7 @@ impl WireSession {
         loop {
             let piece_start = std::time::Instant::now();
             let (ext_id, payload) = self.read_message(timeout).await?;
-            if ext_id != self.ut_metadata {
+            if ext_id != OUR_UT_METADATA_ID {
                 continue;
             }
             let (dict, consumed) = decode_prefix(&payload).map_err(|_| WireError::BadPiece)?;
