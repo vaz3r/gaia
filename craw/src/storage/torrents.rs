@@ -65,6 +65,16 @@ impl TorrentStore {
     }
 }
 
+fn sanitize_control(s: String) -> String {
+    if s.chars().any(char::is_control) {
+        s.chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect()
+    } else {
+        s
+    }
+}
+
 pub fn parse_info_dict(metadata: &[u8]) -> ParsedTorrent {
     let bytes = Bytes::copy_from_slice(metadata);
     let (mut info, _) = match decode_prefix(&bytes) {
@@ -79,7 +89,7 @@ pub fn parse_info_dict(metadata: &[u8]) -> ParsedTorrent {
     }
     let name = info
         .get_bytes(b"name")
-        .map(|b| String::from_utf8_lossy(b).into_owned());
+        .map(|b| sanitize_control(String::from_utf8_lossy(b).into_owned()));
     let piece_length = info.get_int(b"piece length");
     let single_len = info.get_int(b"length");
     let (file_count, files, total_size) = match info.get(b"files").and_then(BValue::as_list) {
@@ -102,7 +112,7 @@ pub fn parse_info_dict(metadata: &[u8]) -> ParsedTorrent {
                         parts
                             .iter()
                             .filter_map(BValue::as_bytes)
-                            .map(|b| String::from_utf8_lossy(b).into_owned())
+                            .map(|b| sanitize_control(String::from_utf8_lossy(b).into_owned()))
                             .collect::<Vec<String>>()
                     })
                     .unwrap_or_default();
@@ -154,5 +164,12 @@ mod tests {
     fn parse_garbage() {
         let p = parse_info_dict(b"not bencode at all");
         assert_eq!(p.name, None);
+    }
+
+    #[test]
+    fn sanitize_control_chars() {
+        assert_eq!(sanitize_control("ab\u{0000}cd".to_string()), "ab cd");
+        assert_eq!(sanitize_control("tab\there".to_string()), "tab here");
+        assert_eq!(sanitize_control("normal".to_string()), "normal");
     }
 }

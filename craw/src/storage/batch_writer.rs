@@ -337,7 +337,20 @@ async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) -> bool {
         match q.execute(pool).await {
             Ok(_) => {}
             Err(e) => {
-                tracing::warn!(error = %e, "batch: upsert torrents failed");
+                for t in chunk {
+                    let files_json = t
+                        .files
+                        .as_ref()
+                        .and_then(|f| serde_json::to_string(f).ok())
+                        .unwrap_or_default();
+                    tracing::warn!(
+                        error = %e,
+                        ih = %crate::trace::hex_encode(&t.ih),
+                        name = t.name.as_deref().unwrap_or(""),
+                        files = %files_json,
+                        "batch: upsert torrents failed"
+                    );
+                }
                 return false;
             }
         }
