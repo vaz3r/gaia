@@ -93,9 +93,6 @@ impl Router {
     }
 
     fn handle_query(&self, t: &Bytes, q: &Bytes, a: &BValue, from: SocketAddr) {
-        if let Some(id) = extract_id20(a, b"id") {
-            self.insert_nodes(vec![NodeInfo { id, addr: from }]);
-        }
         match q.as_ref() {
             PING => {
                 self.metrics.inbound_ping.add(1);
