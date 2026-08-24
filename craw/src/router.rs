@@ -334,7 +334,7 @@ impl Router {
         let mut new_ids = 0u64;
         let mut rejected = 0u64;
         for n in nodes {
-            if n.id == self.self_id || self.sybils.iter().any(|(sid, _)| sid == &n.id) {
+            if n.id == self.self_id {
                 rejected += 1;
                 continue;
             }

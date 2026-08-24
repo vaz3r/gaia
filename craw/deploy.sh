@@ -29,13 +29,12 @@ file "$BUILD_DIR/craw"
 
 # Step 3: Deploy to remote
 echo "[3/4] Copying to $HOST..."
-ssh "$HOST" "docker stop craw-crawler 2>/dev/null || true"
 scp "$BUILD_DIR/craw" "$HOST:/tmp/craw-new"
 ssh "$HOST" "sudo cp /tmp/craw-new /home/ubuntu/craw-stack/craw && sudo chmod 755 /home/ubuntu/craw-stack/craw"
 
-# Step 4: Restart
-echo "[4/4] Starting container..."
-ssh "$HOST" "docker start craw-crawler"
+# Step 4: Restart with docker compose (so .env changes take effect)
+echo "[4/4] Restarting container..."
+ssh "$HOST" "cd /home/ubuntu/craw-stack && docker compose up -d crawler"
 
 # Step 5: Verify
 sleep 5

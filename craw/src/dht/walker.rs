@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::MissedTickBehavior;
 
-const QUERY_TIMEOUT: Duration = Duration::from_secs(3);
+const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct Walker {
     router: Arc<Router>,
@@ -122,15 +122,12 @@ impl Walker {
     }
 
     fn pick_target(&self) -> ([u8; 20], [u8; 20]) {
-        let r = rand::random::<f64>();
-        if r < 0.10 {
+        let explore = rand::random::<f64>() < 0.1;
+        if explore {
             self.router.metrics().walker_self_target.add(1);
-            return (self.router.self_id, self.router.self_id);
-        }
-        if r < 0.45 {
-            self.router.metrics().walker_random_target.add(1);
-            let target = crate::dht::node_id::random_node_id();
-            return (self.router.self_id, target);
+            if let Some(n) = self.router.routing_nodes().first() {
+                return (self.router.self_id, n.id);
+            }
         }
         self.router.metrics().walker_sybil_target.add(1);
         if self.router.sybils.is_empty() {

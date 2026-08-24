@@ -64,6 +64,11 @@ pub struct Metrics {
     // Per-transport actual connect success (regardless of race winner)
     pub tcp_connect_actual: AtomicU64,
     pub utp_connect_actual: AtomicU64,
+    // Connect-vs-metadata accounting
+    pub connect_ok_no_metadata: AtomicU64,
+    pub metadata_failed_io: AtomicU64,
+    pub metadata_failed_silent: AtomicU64,
+    pub metadata_timeout: AtomicU64,
     // Walker metrics
     pub walker_steps: AtomicU64,
     pub walker_queries: AtomicU64,
@@ -154,6 +159,10 @@ pub struct Snapshot {
     pub utp_metadata_ok: u64,
     pub tcp_connect_actual: u64,
     pub utp_connect_actual: u64,
+    pub connect_ok_no_metadata: u64,
+    pub metadata_failed_io: u64,
+    pub metadata_failed_silent: u64,
+    pub metadata_timeout: u64,
     pub walker_steps: u64,
     pub walker_queries: u64,
     pub walker_ok: u64,
@@ -229,6 +238,10 @@ impl Metrics {
             utp_metadata_ok: self.utp_metadata_ok.load(Ordering::Relaxed),
             tcp_connect_actual: self.tcp_connect_actual.load(Ordering::Relaxed),
             utp_connect_actual: self.utp_connect_actual.load(Ordering::Relaxed),
+            connect_ok_no_metadata: self.connect_ok_no_metadata.load(Ordering::Relaxed),
+            metadata_failed_io: self.metadata_failed_io.load(Ordering::Relaxed),
+            metadata_failed_silent: self.metadata_failed_silent.load(Ordering::Relaxed),
+            metadata_timeout: self.metadata_timeout.load(Ordering::Relaxed),
             walker_steps: self.walker_steps.load(Ordering::Relaxed),
             walker_queries: self.walker_queries.load(Ordering::Relaxed),
             walker_ok: self.walker_ok.load(Ordering::Relaxed),

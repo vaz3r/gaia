@@ -4,15 +4,14 @@ use crate::krpc::codec::BValue;
 use crate::krpc::message::{GET_PEERS, Kind};
 use crate::metrics::{Add1, Metrics};
 use crate::router::Router;
-use crate::verify::peer_cache::PeerCache;
 use bytes::Bytes;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-const QUERY_TIMEOUT: Duration = Duration::from_secs(8);
-const K: usize = 12;
+const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+const K: usize = 8;
 const ALPHA: usize = 3;
 const MAX_ROUNDS: usize = 8;
 
@@ -27,7 +26,6 @@ pub async fn source_peers(
     info_hash: Infohash,
     count: usize,
     metrics: Arc<Metrics>,
-    peer_cache: Arc<PeerCache>,
 ) -> SourceResult {
     let mut candidates: Vec<NodeInfo> = router.closest_nodes(&info_hash, K);
     if candidates.is_empty() {
@@ -46,7 +44,7 @@ pub async fn source_peers(
         let batch: Vec<NodeInfo> = candidates
             .iter()
             .filter(|n| n.addr != router.self_addr && !queried.contains(&n.addr))
-            .take(K)
+            .take(ALPHA)
             .cloned()
             .collect();
         if batch.is_empty() {
@@ -145,40 +143,23 @@ pub async fn source_peers(
     }
 
     peers.truncate(count);
-    // Track total peers returned before cache filtering
     metrics.source_returned_peers.add(peers.len() as u64);
-    let original_peers_len = peers.len();
-    if original_peers_len == 0 {
+    if peers.is_empty() {
         metrics.source_no_values.add(1);
     }
-    // Filter out cached-bad peers
-    let filtered: Vec<SocketAddr> = peers
-        .into_iter()
-        .filter(|addr| {
-            if peer_cache.is_bad(addr) {
-                metrics.peer_cache_hits.add(1);
-                metrics.source_filtered_by_cache.add(1);
-                false
-            } else {
-                true
-            }
-        })
-        .collect();
-    // Infohash-level source failure classification
     crate::trace_lifecycle!(
         &info_hash,
         "source_done",
-        peers = original_peers_len,
-        cache_filtered = original_peers_len - filtered.len(),
+        peers = peers.len(),
         elapsed_ms = start_time.elapsed().as_millis() as u64
     );
     if succeeded == 0 {
         metrics.source_all_timeout.add(1);
         SourceResult::AllTimeout
-    } else if filtered.is_empty() {
+    } else if peers.is_empty() {
         SourceResult::NoPeers
     } else {
-        SourceResult::Peers(filtered)
+        SourceResult::Peers(peers)
     }
 }
 

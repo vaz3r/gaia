@@ -21,6 +21,7 @@ pub struct Config {
     pub nodes: usize,
     pub port_base: u16,
     pub utp_enabled: bool,
+    pub fetch_timeout_ms: u64,
 }
 
 impl Default for Config {
@@ -53,6 +54,7 @@ impl Default for Config {
             nodes: 1,
             port_base: 6881,
             utp_enabled: true,
+            fetch_timeout_ms: 8000,
         }
     }
 }
@@ -123,6 +125,7 @@ impl Config {
             .ok()
             .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
             .unwrap_or(true);
+        c.fetch_timeout_ms = env_u64("CRAW_FETCH_TIMEOUT_MS", c.fetch_timeout_ms);
         c
     }
 }

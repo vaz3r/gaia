@@ -16,11 +16,63 @@ use librqbit_utp::UtpSocketUdp;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 use tokio::sync::{Semaphore, mpsc};
+
+const ANNOUNCE_CACHE_TTL: Duration = Duration::from_secs(600);
+const ANNOUNCE_CACHE_MAX: usize = 50_000;
+
+pub struct AnnouncePeerCache {
+    inner: dashmap::DashMap<Infohash, (SocketAddr, Instant)>,
+}
+
+impl AnnouncePeerCache {
+    pub fn new() -> Self {
+        AnnouncePeerCache {
+            inner: dashmap::DashMap::with_capacity_and_shard_amount(1024, 64),
+        }
+    }
+
+    pub fn insert(&self, ih: Infohash, addr: SocketAddr) {
+        self.inner.insert(ih, (addr, Instant::now()));
+        self.enforce_bound();
+    }
+
+    pub fn get(&self, ih: &Infohash) -> Option<SocketAddr> {
+        self.inner.get(ih).and_then(|entry| {
+            if entry.1.elapsed() < ANNOUNCE_CACHE_TTL {
+                Some(entry.0)
+            } else {
+                drop(entry);
+                self.inner.remove(ih);
+                None
+            }
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn enforce_bound(&self) {
+        if self.inner.len() <= ANNOUNCE_CACHE_MAX {
+            return;
+        }
+        let now = Instant::now();
+        self.inner.retain(|_, (_, ts)| now.duration_since(*ts) < ANNOUNCE_CACHE_TTL);
+    }
+}
+
+impl Default for AnnouncePeerCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 pub struct VerifyConfig {
     pub global_limit: usize,
     pub race_peers: usize,
+    pub fetch_timeout_ms: u64,
 }
 
 pub async fn run_pipeline(
@@ -31,11 +83,14 @@ pub async fn run_pipeline(
     metrics: Arc<Metrics>,
     batch_writer: Arc<BatchWriter>,
     peer_cache: Arc<PeerCache>,
+    announce_peer_cache: Arc<AnnouncePeerCache>,
+    peer_outcomes: Arc<crate::storage::peer_outcomes::PeerOutcomeWriter>,
     config: VerifyConfig,
 ) {
     let global = Arc::new(Semaphore::new(config.global_limit.max(1)));
     let next_router = AtomicUsize::new(0);
     let race = config.race_peers.max(1);
+    let fetch_timeout = Duration::from_millis(config.fetch_timeout_ms);
     loop {
         let Ok(_permit) = global.clone().acquire_owned().await else {
             break;
@@ -61,19 +116,27 @@ pub async fn run_pipeline(
                 }
             }
         };
+
+        // Store the announcing peer for this infohash so verify_infohash can use it.
+        if let Some(addr) = direct {
+            announce_peer_cache.insert(ih, addr);
+        }
+
         let router = node_routers[next_router.fetch_add(1, Ordering::Relaxed) % node_routers.len()].clone();
         let is_direct = direct.is_some();
         let utp = utp.clone();
         let metrics = metrics.clone();
         let batch_writer = batch_writer.clone();
         let peer_cache = peer_cache.clone();
+        let announce_peer_cache = announce_peer_cache.clone();
+        let peer_outcomes = peer_outcomes.clone();
         tokio::spawn(async move {
             let _permit = _permit;
             if is_direct {
                 metrics.announce_attempts.add(1);
             }
             metrics.verify_attempts.add(1);
-            match verify_infohash(router, utp, ih, race, metrics.clone(), peer_cache, direct).await {
+            match verify_infohash(router, utp, ih, race, metrics.clone(), peer_cache, announce_peer_cache, direct, peer_outcomes, fetch_timeout).await {
                 VerifyResult::Success(meta) if check(&ih, &meta) => {
                     crate::trace_lifecycle!(&ih, "sha1_check", result = "pass");
                     metrics.verify_success.add(1);

@@ -1,5 +1,4 @@
 use crate::krpc::NodeId;
-use rand::Rng;
 use std::sync::OnceLock;
 
 pub struct TraceConfig {

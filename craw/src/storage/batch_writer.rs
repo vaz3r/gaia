@@ -11,7 +11,6 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 
 const FLUSH_CHUNK: usize = 5000;
-const BUFFER_MAX: usize = 8192;
 
 pub enum JobUpdate {
     Verified(Infohash),
@@ -190,6 +189,7 @@ async fn flush_jobs(pool: &PgPool, batch: &[&JobUpdate]) -> bool {
         HashMap::new()
     };
 
+    let mut seen_ihs: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
     for chunk in batch.chunks(FLUSH_CHUNK) {
         let mut resolved: Vec<ResolvedJob<'_>> = Vec::with_capacity(chunk.len());
 
@@ -197,6 +197,9 @@ async fn flush_jobs(pool: &PgPool, batch: &[&JobUpdate]) -> bool {
             match update {
                 JobUpdate::Failed(ih, error) => {
                     let raw = ih.as_slice().to_vec();
+                    if !seen_ihs.insert(raw.clone()) {
+                        continue;
+                    }
                     let current_rc = retry_map.get(&raw).copied().unwrap_or(0);
                     let new_count = current_rc + 1;
                     let terminal = new_count >= MAX_RETRIES

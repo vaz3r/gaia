@@ -172,10 +172,14 @@ async fn main() {
     });
 
     let metrics_writer = Arc::new(storage::metrics_writer::MetricsWriter::new(
-        pool,
+        pool.clone(),
         metrics.clone(),
     ));
     let metrics_run = metrics_writer.clone().run(Duration::from_secs(60));
+
+    let announce_peer_cache = Arc::new(verify::AnnouncePeerCache::default());
+    let peer_outcomes = Arc::new(crate::storage::peer_outcomes::PeerOutcomeWriter::new(pool.clone()));
+    let peer_outcomes_run = peer_outcomes.clone().run(Duration::from_secs(30));
 
     let pipeline = verify::run_pipeline(
         verify_rx,
@@ -185,9 +189,12 @@ async fn main() {
         metrics.clone(),
         batch_writer.clone(),
         peer_cache.clone(),
+        announce_peer_cache,
+        peer_outcomes,
         VerifyConfig {
             global_limit: config.global_fetch_limit,
             race_peers: config.race_peers,
+            fetch_timeout_ms: config.fetch_timeout_ms,
         },
     );
 
@@ -211,6 +218,7 @@ async fn main() {
         _ = retry_run => {}
         _ = batch_run => {}
         _ = metrics_run => {}
+        _ = peer_outcomes_run => {}
         _ = pipeline => {}
         _ = report => {}
         _ = cache_cleanup => {}

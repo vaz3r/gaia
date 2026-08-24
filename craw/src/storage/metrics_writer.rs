@@ -101,5 +101,11 @@ fn snapshot_rows(s: &Snapshot) -> Vec<(&'static str, u64)> {
         ("utp_connect_ok", s.utp_connect_ok),
         ("tcp_metadata_ok", s.tcp_metadata_ok),
         ("utp_metadata_ok", s.utp_metadata_ok),
+        ("tcp_connect_actual", s.tcp_connect_actual),
+        ("utp_connect_actual", s.utp_connect_actual),
+        ("connect_ok_no_metadata", s.connect_ok_no_metadata),
+        ("metadata_failed_io", s.metadata_failed_io),
+        ("metadata_failed_silent", s.metadata_failed_silent),
+        ("metadata_timeout", s.metadata_timeout),
     ]
 }

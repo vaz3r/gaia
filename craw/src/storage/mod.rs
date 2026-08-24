@@ -4,6 +4,7 @@ pub mod identity;
 pub mod janitor;
 pub mod jobs;
 pub mod metrics_writer;
+pub mod peer_outcomes;
 pub mod pg;
 pub mod sightings;
 pub mod torrents;

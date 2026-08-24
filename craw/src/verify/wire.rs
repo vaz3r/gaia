@@ -23,8 +23,9 @@ pub enum WireError {
     Timeout,
     Handshake,
     NoExtension,
-    #[allow(dead_code)]
-    NoMetadata,
+    NoMetadataSize,
+    Eof,
+    Cancelled,
     Reject,
     BadPiece,
 }
@@ -36,7 +37,9 @@ impl std::fmt::Display for WireError {
             WireError::Timeout => write!(f, "timeout"),
             WireError::Handshake => write!(f, "bad handshake"),
             WireError::NoExtension => write!(f, "peer lacks ut_metadata extension"),
-            WireError::NoMetadata => write!(f, "metadata not available"),
+            WireError::NoMetadataSize => write!(f, "peer did not advertise metadata_size"),
+            WireError::Eof => write!(f, "connection closed after handshake"),
+            WireError::Cancelled => write!(f, "task cancelled"),
             WireError::Reject => write!(f, "piece rejected"),
             WireError::BadPiece => write!(f, "invalid piece data"),
         }
@@ -118,11 +121,16 @@ pub struct WireSession {
     ut_metadata: u8,
     metadata_size: Option<usize>,
     info_hash: [u8; 20],
+    client: Option<String>,
 }
 
 impl WireSession {
     pub fn is_tcp(&self) -> bool {
         matches!(self.stream, Transport::Tcp(_))
+    }
+
+    pub fn client(&self) -> Option<&str> {
+        self.client.as_deref()
     }
 
     pub async fn connect_tcp(
@@ -165,15 +173,10 @@ impl WireSession {
             ut_metadata: 0,
             metadata_size: None,
             info_hash: *info_hash,
+            client: None,
         };
         session.bep3(info_hash, peer_id, timeout).await?;
         session.extension_handshake(timeout).await?;
-        crate::trace_lifecycle!(
-            info_hash,
-            "handshake_ok",
-            ut_metadata = session.ut_metadata as u32,
-            metadata_size = session.metadata_size.unwrap_or(0) as usize
-        );
         Ok(session)
     }
 
@@ -217,6 +220,14 @@ impl WireSession {
             .await?;
         let (_, payload) = self.read_message(timeout).await?;
         let dict = decode_prefix(&payload).map_err(|_| WireError::Handshake)?.0;
+
+        // Extract client string for diagnostics.
+        let client = dict.get(b"v").and_then(|v| match v {
+            BValue::Bytes(b) => Some(String::from_utf8_lossy(b).to_string()),
+            _ => None,
+        });
+        self.client = client.clone();
+
         let m = dict
             .get(b"m")
             .and_then(BValue::as_dict)
@@ -227,6 +238,28 @@ impl WireSession {
             .ok_or(WireError::NoExtension)?;
         self.ut_metadata = ut as u8;
         self.metadata_size = dict.get_int(b"metadata_size").map(|v| v as usize);
+
+        let reqq = dict.get_int(b"reqq").unwrap_or(0);
+        let all_exts: Vec<String> = m.iter()
+            .filter_map(|(k, v)| {
+                if let BValue::Int(id) = v {
+                    Some(format!("{}={}", String::from_utf8_lossy(k), id))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        crate::trace_lifecycle!(
+            &self.info_hash,
+            "ext_handshake",
+            client = client.as_deref().unwrap_or("unknown"),
+            ut_metadata = self.ut_metadata as u32,
+            metadata_size = self.metadata_size.unwrap_or(0) as usize,
+            reqq = reqq,
+            extensions = all_exts.join(",").as_str()
+        );
+
         Ok(())
     }
 
@@ -288,6 +321,8 @@ impl WireSession {
         let mut known_size = self.metadata_size;
         let mut metadata: Vec<u8> = Vec::new();
         let mut piece = 0usize;
+        let mut skipped_non_ext = 0u32;
+        let mut skipped_non_metadata = 0u32;
 
         crate::trace_lifecycle!(&self.info_hash, "metadata_start");
         let start_time = std::time::Instant::now();
@@ -297,8 +332,39 @@ impl WireSession {
 
         loop {
             let piece_start = std::time::Instant::now();
-            let (ext_id, payload) = self.read_message(timeout).await?;
+            let (ext_id, payload) = match self.read_message(timeout).await {
+                Ok(v) => v,
+                Err(WireError::Io(e)) => {
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof || e.kind() == std::io::ErrorKind::ConnectionReset {
+                        if skipped_non_ext > 0 || skipped_non_metadata > 0 {
+                            crate::trace_lifecycle!(
+                                &self.info_hash,
+                                "metadata_eof_with_skipped",
+                                skipped_non_ext = skipped_non_ext,
+                                skipped_non_metadata = skipped_non_metadata,
+                                elapsed_ms = start_time.elapsed().as_millis() as u64
+                            );
+                        }
+                        return Err(WireError::Eof);
+                    }
+                    return Err(WireError::Io(e));
+                }
+                Err(WireError::Timeout) => {
+                    if skipped_non_ext > 0 || skipped_non_metadata > 0 {
+                        crate::trace_lifecycle!(
+                            &self.info_hash,
+                            "metadata_timeout_with_skipped",
+                            skipped_non_ext = skipped_non_ext,
+                            skipped_non_metadata = skipped_non_metadata,
+                            elapsed_ms = start_time.elapsed().as_millis() as u64
+                        );
+                    }
+                    return Err(WireError::Timeout);
+                }
+                Err(e) => return Err(e),
+            };
             if ext_id != OUR_UT_METADATA_ID {
+                skipped_non_ext += 1;
                 continue;
             }
             let (dict, consumed) = decode_prefix(&payload).map_err(|_| WireError::BadPiece)?;
@@ -306,7 +372,10 @@ impl WireSession {
             match msg_type {
                 2 => return Err(WireError::Reject),
                 1 => {}
-                _ => return Err(WireError::BadPiece),
+                _ => {
+                    skipped_non_metadata += 1;
+                    continue;
+                }
             }
             let recv_piece = dict.get_int(b"piece").ok_or(WireError::BadPiece)? as usize;
             if recv_piece != piece {
