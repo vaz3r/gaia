@@ -79,6 +79,8 @@ fn snapshot_rows(s: &Snapshot) -> Vec<(&'static str, u64)> {
         ("source_timeout", s.source_timeout),
         ("source_no_peers", s.source_no_peers),
         ("source_all_timeout", s.source_all_timeout),
+        ("source_deadline_hits", s.source_deadline_hits),
+        ("source_deadline_peers", s.source_deadline_peers),
         ("fetch_connect_timeout", s.fetch_connect_timeout),
         ("fetch_connect_io", s.fetch_connect_io),
         ("fetch_handshake", s.fetch_handshake),

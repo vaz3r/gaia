@@ -73,6 +73,7 @@ pub struct VerifyConfig {
     pub global_limit: usize,
     pub race_peers: usize,
     pub fetch_timeout_ms: u64,
+    pub source_deadline_ms: u64,
 }
 
 pub async fn run_pipeline(
@@ -91,6 +92,7 @@ pub async fn run_pipeline(
     let next_router = AtomicUsize::new(0);
     let race = config.race_peers.max(1);
     let fetch_timeout = Duration::from_millis(config.fetch_timeout_ms);
+    let source_deadline = Duration::from_millis(config.source_deadline_ms);
     loop {
         let Ok(_permit) = global.clone().acquire_owned().await else {
             break;
@@ -136,7 +138,7 @@ pub async fn run_pipeline(
                 metrics.announce_attempts.add(1);
             }
             metrics.verify_attempts.add(1);
-            match verify_infohash(router, utp, ih, race, metrics.clone(), peer_cache, announce_peer_cache, direct, peer_outcomes, fetch_timeout).await {
+            match verify_infohash(router, utp, ih, race, metrics.clone(), peer_cache, announce_peer_cache, direct, peer_outcomes, fetch_timeout, source_deadline).await {
                 VerifyResult::Success(meta) if check(&ih, &meta) => {
                     crate::trace_lifecycle!(&ih, "sha1_check", result = "pass");
                     metrics.verify_success.add(1);

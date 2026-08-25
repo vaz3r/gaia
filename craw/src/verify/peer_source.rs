@@ -1,19 +1,19 @@
 use crate::dht::routing_table::{NodeInfo, decode_compact, xor};
 use crate::krpc::Infohash;
 use crate::krpc::codec::BValue;
-use crate::krpc::message::{GET_PEERS, Kind};
+use crate::krpc::message::{GET_PEERS, Kind, Message};
 use crate::metrics::{Add1, Metrics};
-use crate::router::Router;
+use crate::router::{QueryError, Router};
 use bytes::Bytes;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::task::JoinSet;
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 const K: usize = 8;
 const ALPHA: usize = 3;
-const MAX_ROUNDS: usize = 8;
 
 pub enum SourceResult {
     Peers(Vec<SocketAddr>),
@@ -26,6 +26,7 @@ pub async fn source_peers(
     info_hash: Infohash,
     count: usize,
     metrics: Arc<Metrics>,
+    deadline: Duration,
 ) -> SourceResult {
     let mut candidates: Vec<NodeInfo> = router.closest_nodes(&info_hash, K);
     if candidates.is_empty() {
@@ -40,106 +41,106 @@ pub async fn source_peers(
     let start_time = std::time::Instant::now();
     crate::trace_lifecycle!(&info_hash, "source_start");
 
-    for _ in 0..MAX_ROUNDS {
-        let batch: Vec<NodeInfo> = candidates
-            .iter()
-            .filter(|n| n.addr != router.self_addr && !queried.contains(&n.addr))
-            .take(ALPHA)
-            .cloned()
-            .collect();
-        if batch.is_empty() {
-            break;
-        }
-        for n in &batch {
-            queried.insert(n.addr);
+    // Pipelined iterative get_peers lookup: keep up to ALPHA queries in
+    // flight at all times, issuing the next closest unqueried candidate as
+    // soon as any query completes, instead of blocking a whole round on the
+    // slowest peer. The global deadline wraps the entire loop, bounding the
+    // worst case; on expiry we abort and return whatever peers we found.
+    let mut set: JoinSet<(SocketAddr, Result<Message, QueryError>)> = JoinSet::new();
+    let mut inflight: usize = 0;
+    let mut new_nodes: Vec<NodeInfo> = Vec::new();
+
+    let lookup = async {
+        // Prime the pipeline with up to ALPHA initial queries.
+        while inflight < ALPHA {
+            let idx = candidates
+                .iter()
+                .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr));
+            let Some(node) = idx.map(|i| candidates.remove(i)) else {
+                break;
+            };
+            queried.insert(node.addr);
+            inflight += 1;
+            spawn_query(&mut set, &router, info_hash, node, &metrics);
         }
 
-        let mut set = tokio::task::JoinSet::new();
-        for node in batch {
-            let router = router.clone();
-            let ih_clone = info_hash;
-            let node_addr = node.addr;
-            let args = BValue::dict(vec![
-                (
-                    Bytes::from_static(b"id"),
-                    BValue::Bytes(Bytes::copy_from_slice(&router.self_id)),
-                ),
-                (
-                    Bytes::from_static(b"info_hash"),
-                    BValue::Bytes(Bytes::copy_from_slice(&info_hash)),
-                ),
-            ]);
-            metrics.source_queries.add(1);
-            set.spawn(async move {
-                let node_str = node_addr.to_string();
-                crate::trace_lifecycle!(&ih_clone, "source_query", node = node_str);
-                let res = router
-                    .send_query(GET_PEERS, node_addr, args, QUERY_TIMEOUT)
-                    .await;
-                (node_addr, res)
-            });
-        }
-
-        let mut new_nodes: Vec<NodeInfo> = Vec::new();
-        while let Some(res) = set.join_next().await {
-            match res {
-                Ok((node_addr, Ok(msg))) => {
-                    let Kind::Response { r } = &msg.kind else {
-                        continue;
-                    };
-                    metrics.source_responses.add(1);
-                    succeeded += 1;
-                    let mut returned_here = 0;
-                    if let Some(values) = r.get(b"values").and_then(BValue::as_list) {
-                        for v in values {
-                            if let Some(b) = v.as_bytes()
-                                && b.len() == 6
-                            {
-                                let ip = Ipv4Addr::new(b[0], b[1], b[2], b[3]);
-                                if !is_routable(ip) {
-                                    continue;
-                                }
-                                let addr = SocketAddr::new(
-                                    std::net::IpAddr::V4(ip),
-                                    u16::from_be_bytes([b[4], b[5]]),
-                                );
-                                returned_here += 1;
-                                if seen.insert(addr) {
-                                    peers.push(addr);
-                                    metrics.source_peers_returned.add(1);
+        while inflight > 0 {
+            match set.join_next().await {
+                Some(Ok((node_addr, Ok(msg)))) => {
+                    if let Kind::Response { r } = &msg.kind {
+                        metrics.source_responses.add(1);
+                        succeeded += 1;
+                        let mut returned_here = 0;
+                        if let Some(values) = r.get(b"values").and_then(BValue::as_list) {
+                            for v in values {
+                                if let Some(b) = v.as_bytes()
+                                    && b.len() == 6
+                                {
+                                    let ip = Ipv4Addr::new(b[0], b[1], b[2], b[3]);
+                                    if !is_routable(ip) {
+                                        continue;
+                                    }
+                                    let addr = SocketAddr::new(
+                                        std::net::IpAddr::V4(ip),
+                                        u16::from_be_bytes([b[4], b[5]]),
+                                    );
+                                    returned_here += 1;
+                                    if seen.insert(addr) {
+                                        peers.push(addr);
+                                        metrics.source_peers_returned.add(1);
+                                    }
                                 }
                             }
                         }
-                    }
-                    crate::trace_lifecycle!(
-                        &info_hash,
-                        "source_response",
-                        node = node_addr.to_string(),
-                        peers_returned = returned_here
-                    );
-                    if let Some(nodes) = r.get_bytes(b"nodes") {
-                        new_nodes.extend(decode_compact(nodes));
+                        crate::trace_lifecycle!(
+                            &info_hash,
+                            "source_response",
+                            node = node_addr.to_string(),
+                            peers_returned = returned_here
+                        );
+                        if let Some(nodes) = r.get_bytes(b"nodes") {
+                            new_nodes.extend(decode_compact(nodes));
+                        }
                     }
                 }
-                Ok((_, Err(_))) | Err(_) => {
+                Some(Ok((_, Err(_)))) | Some(Err(_)) => {
                     metrics.source_timeout.add(1);
                 }
+                None => break,
             }
+            inflight -= 1;
+
+            if !new_nodes.is_empty() {
+                candidates.extend(new_nodes.drain(..));
+                candidates.sort_by_key(|n| xor(&info_hash, &n.id));
+                candidates.dedup_by(|a, b| a.id == b.id);
+                candidates.truncate(K);
+            }
+
             if peers.len() >= count {
                 set.abort_all();
                 break;
             }
-        }
 
-        if peers.len() >= count {
-            break;
+            while inflight < ALPHA {
+                let idx = candidates
+                    .iter()
+                    .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr));
+                let Some(node) = idx.map(|i| candidates.remove(i)) else {
+                    break;
+                };
+                queried.insert(node.addr);
+                inflight += 1;
+                spawn_query(&mut set, &router, info_hash, node, &metrics);
+            }
         }
-        if !new_nodes.is_empty() {
-            candidates.extend(new_nodes.iter().cloned());
-            candidates.sort_by_key(|n| xor(&info_hash, &n.id));
-            candidates.dedup_by(|a, b| a.id == b.id);
-            candidates.truncate(K);
-        }
+    };
+
+    let timed = tokio::time::timeout(deadline, lookup).await;
+    if timed.is_err() {
+        metrics.source_deadline_hits.add(1);
+        metrics.source_deadline_peers.add(peers.len() as u64);
+        set.abort_all();
     }
 
     peers.truncate(count);
@@ -161,6 +162,37 @@ pub async fn source_peers(
     } else {
         SourceResult::Peers(peers)
     }
+}
+
+fn spawn_query(
+    set: &mut JoinSet<(SocketAddr, Result<Message, QueryError>)>,
+    router: &Arc<Router>,
+    info_hash: Infohash,
+    node: NodeInfo,
+    metrics: &Arc<Metrics>,
+) {
+    let router = router.clone();
+    let ih = info_hash;
+    let addr = node.addr;
+    let args = BValue::dict(vec![
+        (
+            Bytes::from_static(b"id"),
+            BValue::Bytes(Bytes::copy_from_slice(&router.self_id)),
+        ),
+        (
+            Bytes::from_static(b"info_hash"),
+            BValue::Bytes(Bytes::copy_from_slice(&info_hash)),
+        ),
+    ]);
+    metrics.source_queries.add(1);
+    set.spawn(async move {
+        let node_str = addr.to_string();
+        crate::trace_lifecycle!(&ih, "source_query", node = node_str);
+        let res = router
+            .send_query(GET_PEERS, addr, args, QUERY_TIMEOUT)
+            .await;
+        (addr, res)
+    });
 }
 
 fn is_routable(ip: Ipv4Addr) -> bool {

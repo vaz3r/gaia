@@ -195,6 +195,7 @@ async fn main() {
             global_limit: config.global_fetch_limit,
             race_peers: config.race_peers,
             fetch_timeout_ms: config.fetch_timeout_ms,
+            source_deadline_ms: config.source_deadline_ms,
         },
     );
 
@@ -471,6 +472,8 @@ async fn report_loop(
             source_returned_peers = cur.source_returned_peers,
             source_filtered_by_cache = cur.source_filtered_by_cache,
             source_no_values = cur.source_no_values,
+            source_deadline_hits = cur.source_deadline_hits,
+            source_deadline_peers = cur.source_deadline_peers,
             fetch_connect_timeout = cur.fetch_connect_timeout,
             fetch_connect_io = cur.fetch_connect_io,
             fetch_handshake = cur.fetch_handshake,

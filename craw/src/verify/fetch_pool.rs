@@ -157,12 +157,14 @@ pub async fn verify_infohash(
     direct: Option<SocketAddr>,
     peer_outcomes: Arc<PeerOutcomeWriter>,
     fetch_timeout: Duration,
+    source_deadline: Duration,
 ) -> VerifyResult {
     let (mut peers, state) = match source_peers(
         router,
         info_hash,
         race_peers.max(1),
         metrics.clone(),
+        source_deadline,
     )
     .await
     {

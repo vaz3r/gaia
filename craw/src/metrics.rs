@@ -51,6 +51,9 @@ pub struct Metrics {
     pub source_returned_peers: AtomicU64,
     pub source_filtered_by_cache: AtomicU64,
     pub source_no_values: AtomicU64,
+    // Pipelined source lookup termination
+    pub source_deadline_hits: AtomicU64,
+    pub source_deadline_peers: AtomicU64,
     // Announce direct-fetch metrics
     pub announce_attempts: AtomicU64,
     pub announce_success: AtomicU64,
@@ -149,6 +152,8 @@ pub struct Snapshot {
     pub source_returned_peers: u64,
     pub source_filtered_by_cache: u64,
     pub source_no_values: u64,
+    pub source_deadline_hits: u64,
+    pub source_deadline_peers: u64,
     pub announce_attempts: u64,
     pub announce_success: u64,
     pub tcp_attempts: u64,
@@ -228,6 +233,8 @@ impl Metrics {
             source_returned_peers: self.source_returned_peers.load(Ordering::Relaxed),
             source_filtered_by_cache: self.source_filtered_by_cache.load(Ordering::Relaxed),
             source_no_values: self.source_no_values.load(Ordering::Relaxed),
+            source_deadline_hits: self.source_deadline_hits.load(Ordering::Relaxed),
+            source_deadline_peers: self.source_deadline_peers.load(Ordering::Relaxed),
             announce_attempts: self.announce_attempts.load(Ordering::Relaxed),
             announce_success: self.announce_success.load(Ordering::Relaxed),
             tcp_attempts: self.tcp_attempts.load(Ordering::Relaxed),
