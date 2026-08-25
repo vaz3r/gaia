@@ -309,6 +309,8 @@ fn log_effective_config(config: &Config) {
         walker_alpha = config.dht.walker_alpha,
         walker_interval_ms = config.dht.walker_interval_ms,
         source_query_timeout = config.dht.source_query_timeout_secs,
+        source_k = config.dht.source_k,
+        source_alpha = config.dht.source_alpha,
         source_deadline_ms = config.dht.source_deadline_ms,
         rate_limit = config.dht.rate_limit_per_sec,
         rate_limit_burst = config.dht.rate_limit_burst,
@@ -319,8 +321,15 @@ fn log_effective_config(config: &Config) {
         utp_timeout_secs = config.fetch.utp_timeout_secs,
         utp_enabled = config.fetch.utp_enabled,
         max_retries = config.retry.max_retries,
+        scheduler_claim_limit = config.retry.scheduler_claim_limit,
+        scheduler_interval_secs = config.retry.scheduler_interval_secs,
+        pg_pool_max = config.storage.pg_pool_max_connections,
+        pg_pool_acquire_timeout = config.storage.pg_pool_acquire_timeout_secs,
+        batch_flush_interval = config.storage.batch_flush_interval_secs,
         bloom_capacity = config.harvest.bloom_capacity,
         log_json = config.logging.log_json,
+        log_dir = %config.logging.log_dir.display(),
+        profile = %config.profile,
         "effective config"
     );
 }

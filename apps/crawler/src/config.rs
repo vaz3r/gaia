@@ -25,6 +25,7 @@ pub struct Config {
     pub report_interval_secs: u64,
     pub rate_limit_sweep_interval_secs: u64,
     pub shutdown_flush_ms: u64,
+    pub profile: String,
 
     pub dht: DhtConfig,
     pub fetch: FetchConfig,
@@ -158,6 +159,7 @@ impl Default for Config {
             report_interval_secs: 15,
             rate_limit_sweep_interval_secs: 60,
             shutdown_flush_ms: 500,
+            profile: "production".to_string(),
             dht: DhtConfig::default(),
             fetch: FetchConfig::default(),
             retry: RetryConfig::default(),
@@ -337,6 +339,7 @@ impl Config {
 
         // 1. Load default.toml (if present) on top of built-in defaults.
         let profile = std::env::var("CRAW_PROFILE").unwrap_or_else(|_| "production".into());
+        cfg.profile = profile.clone();
         let config_dir = std::env::var("CRAW_CONFIG_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_CONFIG_PATH));
@@ -1012,6 +1015,12 @@ mod tests {
         assert_eq!(c.dht.rate_limit_per_sec, 8.0);
         assert_eq!(c.dht.rate_limit_burst, 64.0);
         assert_eq!(c.channel_capacity, 65536);
+        assert_eq!(c.report_interval_secs, 15);
+        assert_eq!(c.rate_limit_sweep_interval_secs, 60);
+        assert_eq!(c.shutdown_flush_ms, 500);
+        assert_eq!(c.retry.scheduler_claim_limit, 1000);
+        assert_eq!(c.storage.pg_pool_max_connections, 128);
+        assert_eq!(c.logging.log_dir, PathBuf::from("data/logs"));
     }
 
     #[test]
