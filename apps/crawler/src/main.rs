@@ -22,9 +22,11 @@ use crate::metrics::Metrics;
 use crate::net::rate_limit::RateLimiter;
 use crate::router::Router;
 use crate::storage::batch_writer::BatchWriter;
-use crate::storage::jobs::VerifyStore;
+use crate::storage::jobs::{RetryConfig as JobRetryConfig, VerifyStore};
+use crate::storage::janitor::JanitorConfig;
 use crate::storage::sightings::SightingWriter;
-use crate::verify::VerifyConfig;
+use crate::storage::pg::PoolConfig;
+use crate::verify::fetch_pool::FetchParams;
 use crate::verify::peer_cache::PeerCache;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -34,15 +36,19 @@ use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, mpsc};
 
-const CHANNEL_CAPACITY: usize = 65536;
-const ROUTING_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(60);
-
 #[tokio::main]
 async fn main() {
-    let config = Config::from_env();
+    let config = Config::load();
+
+    if let Err(e) = config.validate() {
+        eprintln!("invalid configuration: {e}");
+        std::process::exit(1);
+    }
 
     let log_dropped = Arc::new(AtomicU64::new(0));
     let _logging_guard = logging::init(&config, log_dropped.clone());
+
+    log_effective_config(&config);
 
     tracing::info!(
         git_hash = env!("CRAW_GIT_HASH"),
@@ -55,9 +61,16 @@ async fn main() {
 
     let database_url =
         std::env::var("DATABASE_URL").expect("DATABASE_URL environment variable is required");
-    let pool = storage::pg::connect(&database_url)
-        .await
-        .expect("connect to postgres");
+    let pool = storage::pg::connect(
+        &database_url,
+        &PoolConfig {
+            max_connections: config.storage.pg_pool_max_connections,
+            min_connections: config.storage.pg_pool_min_connections,
+            acquire_timeout_secs: config.storage.pg_pool_acquire_timeout_secs,
+        },
+    )
+    .await
+    .expect("connect to postgres");
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
@@ -83,19 +96,26 @@ async fn main() {
         .set(TraceConfig::new(config.trace_sample_rate, config.debug_ih.clone()))
         .unwrap_or(());
 
-    let (discovery_tx, discovery_rx) = mpsc::channel(CHANNEL_CAPACITY);
-    let (verify_tx, verify_rx) = mpsc::channel(CHANNEL_CAPACITY);
-    let (announce_tx, announce_rx) = mpsc::channel(CHANNEL_CAPACITY);
+    let channel_capacity = config.channel_capacity.max(1);
+    let (discovery_tx, discovery_rx) = mpsc::channel(channel_capacity);
+    let (verify_tx, verify_rx) = mpsc::channel(channel_capacity);
+    let (announce_tx, announce_rx) = mpsc::channel(channel_capacity);
 
     let harvester = Arc::new(Mutex::new(Harvester::new(
-        config.bloom_capacity,
+        config.harvest.bloom_capacity,
+        config.harvest.bloom_fp_rate,
+        config.harvest.announce_bloom_ratio,
+        config.harvest.announce_bloom_min,
         discovery_tx,
         verify_tx.clone(),
         announce_tx,
         metrics.clone(),
     )));
 
-    let peer_cache = Arc::new(PeerCache::new(Duration::from_secs(600)));
+    let peer_cache = Arc::new(PeerCache::new(
+        Duration::from_secs(config.cache.peer_cache_ttl_secs),
+        config.cache.peer_cache_max_entries,
+    ));
     let peer_cache_cleanup = peer_cache.clone();
 
     let (shutdown_tx, _shutdown_rx): (tokio::sync::broadcast::Sender<()>, _) =
@@ -105,9 +125,9 @@ async fn main() {
         nodes = config.nodes,
         port_base = config.port_base,
         workers_per_node = config.worker_threads,
-        sybils_per_node = config.sybil_count,
-        fetch_limit = config.global_fetch_limit,
-        race_peers = config.race_peers,
+        sybils_per_node = config.dht.sybil_count,
+        fetch_limit = config.fetch.global_fetch_limit,
+        race_peers = config.fetch.race_peers,
         "crawler starting"
     );
 
@@ -126,47 +146,65 @@ async fn main() {
     }
     let node_routers: Arc<Vec<Arc<Router>>> = Arc::new(node_routers);
 
-    let sightings = Arc::new(SightingWriter::new(pool.clone()));
-    let sightings_run = sightings.clone().run(Duration::from_millis(500));
+    let sightings = Arc::new(SightingWriter::new(pool.clone(), config.storage.sighting_chunk_size));
+    let sightings_run = sightings
+        .clone()
+        .run(Duration::from_millis(config.storage.sighting_flush_interval_ms));
     let sightings_flush = flush_sightings(sightings.clone(), discovery_rx);
+
+    let retry_backoffs = config
+        .retry
+        .backoff_sequence_secs
+        .iter()
+        .map(|&s| Duration::from_secs(s))
+        .collect::<Vec<_>>();
 
     let verify_store = Arc::new(VerifyStore::new(
         pool.clone(),
-        vec![
-            Duration::from_secs(60),
-            Duration::from_secs(300),
-            Duration::from_secs(1800),
-            Duration::from_secs(7200),
-            Duration::from_secs(43200),
-        ],
+        JobRetryConfig {
+            max_retries: config.retry.max_retries,
+            backoffs: retry_backoffs.clone(),
+            scheduler_claim_limit: config.retry.scheduler_claim_limit,
+            scheduler_fresh_ratio: config.retry.scheduler_fresh_ratio,
+            stale_verifying_timeout_secs: config.retry.stale_verifying_timeout_secs,
+        },
     ));
     let retry_run = verify_store
         .clone()
-        .run_scheduler(verify_tx.clone(), Duration::from_secs(15));
+        .run_scheduler(
+            verify_tx.clone(),
+            Duration::from_secs(config.retry.scheduler_interval_secs),
+        );
 
     let batch_writer = Arc::new(BatchWriter::new(
         pool.clone(),
-        vec![
-            Duration::from_secs(60),
-            Duration::from_secs(300),
-            Duration::from_secs(1800),
-            Duration::from_secs(7200),
-            Duration::from_secs(43200),
-        ],
+        retry_backoffs.clone(),
+        config.retry.max_retries,
+        config.storage.batch_flush_chunk,
     ));
 
     let (shutdown_tx, _shutdown_rx) = broadcast::channel(1);
     let batch_run = batch_writer
         .clone()
-        .run(Duration::from_secs(1), shutdown_tx.subscribe());
+        .run(
+            Duration::from_secs(config.storage.batch_flush_interval_secs),
+            shutdown_tx.subscribe(),
+        );
 
     let janitor_pool = pool.clone();
+    let janitor_config = JanitorConfig {
+        dead_retention_secs: config.storage.janitor_dead_retention_secs,
+        verified_retention_secs: config.storage.janitor_verified_retention_secs,
+        batch_size: config.storage.janitor_batch_size,
+        batch_sleep_ms: config.storage.janitor_batch_sleep_ms,
+    };
     tokio::spawn(async move {
-        storage::janitor::run(&janitor_pool).await;
-        let mut tick = tokio::time::interval(Duration::from_secs(4 * 3600));
+        storage::janitor::run(&janitor_pool, &janitor_config).await;
+        let mut tick =
+            tokio::time::interval(Duration::from_secs(config.storage.janitor_interval_secs));
         loop {
             tick.tick().await;
-            storage::janitor::run(&janitor_pool).await;
+            storage::janitor::run(&janitor_pool, &janitor_config).await;
         }
     });
 
@@ -174,27 +212,49 @@ async fn main() {
         pool.clone(),
         metrics.clone(),
     ));
-    let metrics_run = metrics_writer.clone().run(Duration::from_secs(60));
+    let metrics_run = metrics_writer
+        .clone()
+        .run(Duration::from_secs(config.storage.metrics_flush_interval_secs));
 
-    let announce_peer_cache = Arc::new(verify::AnnouncePeerCache::default());
-    let peer_outcomes = Arc::new(crate::storage::peer_outcomes::PeerOutcomeWriter::new(pool.clone()));
-    let peer_outcomes_run = peer_outcomes.clone().run(Duration::from_secs(30));
+    let announce_peer_cache = Arc::new(crate::verify::AnnouncePeerCache::new(
+        Duration::from_secs(config.cache.announce_cache_ttl_secs),
+        config.cache.announce_cache_max_entries,
+        config.cache.announce_cache_initial_capacity,
+        config.cache.announce_cache_shards,
+    ));
+    let peer_outcomes = Arc::new(
+        crate::storage::peer_outcomes::PeerOutcomeWriter::new(
+            pool.clone(),
+            config.storage.peer_outcomes_chunk_size,
+        ),
+    );
+    let peer_outcomes_run = peer_outcomes
+        .clone()
+        .run(Duration::from_secs(config.storage.peer_outcomes_flush_interval_secs));
 
     let pipeline = verify::run_pipeline(
         verify_rx,
         announce_rx,
         node_routers,
-        if config.utp_enabled { utp_socket().await } else { None },
+        if config.fetch.utp_enabled { utp_socket().await } else { None },
         metrics.clone(),
         batch_writer.clone(),
         peer_cache.clone(),
         announce_peer_cache,
         peer_outcomes,
-        VerifyConfig {
-            global_limit: config.global_fetch_limit,
-            race_peers: config.race_peers,
-            fetch_timeout_ms: config.fetch_timeout_ms,
-            source_deadline_ms: config.source_deadline_ms,
+        verify::VerifyConfig {
+            global_limit: config.fetch.global_fetch_limit,
+            params: FetchParams {
+                tcp_timeout: Duration::from_secs(config.fetch.tcp_timeout_secs),
+                utp_timeout: Duration::from_secs(config.fetch.utp_timeout_secs),
+                metadata_timeout: Duration::from_secs(config.fetch.metadata_timeout_secs),
+                source_deadline: Duration::from_millis(config.dht.source_deadline_ms),
+                source_k: config.dht.source_k,
+                source_alpha: config.dht.source_alpha,
+                source_query_timeout: Duration::from_secs(config.dht.source_query_timeout_secs),
+                race_peers: config.fetch.race_peers,
+                failed_peer_sample_rate: config.fetch.failed_peer_sample_rate,
+            },
         },
     );
 
@@ -204,7 +264,11 @@ async fn main() {
         batch_writer.clone(),
         Duration::from_secs(15),
     );
-    let cache_cleanup = cache_cleanup_loop(peer_cache_cleanup, metrics.clone(), Duration::from_secs(60));
+    let cache_cleanup = cache_cleanup_loop(
+        peer_cache_cleanup,
+        metrics.clone(),
+        Duration::from_secs(config.cache.peer_cache_cleanup_interval_secs),
+    );
 
     let shutdown_signal = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -235,6 +299,32 @@ async fn main() {
     drop(_logging_guard);
 }
 
+fn log_effective_config(config: &Config) {
+    tracing::info!(
+        bind_addr = %config.bind_addr,
+        nodes = config.nodes,
+        port_base = config.port_base,
+        worker_threads = config.worker_threads,
+        channel_capacity = config.channel_capacity,
+        walker_alpha = config.dht.walker_alpha,
+        walker_interval_ms = config.dht.walker_interval_ms,
+        source_query_timeout = config.dht.source_query_timeout_secs,
+        source_deadline_ms = config.dht.source_deadline_ms,
+        rate_limit = config.dht.rate_limit_per_sec,
+        rate_limit_burst = config.dht.rate_limit_burst,
+        global_fetch_limit = config.fetch.global_fetch_limit,
+        race_peers = config.fetch.race_peers,
+        metadata_timeout_secs = config.fetch.metadata_timeout_secs,
+        tcp_timeout_secs = config.fetch.tcp_timeout_secs,
+        utp_timeout_secs = config.fetch.utp_timeout_secs,
+        utp_enabled = config.fetch.utp_enabled,
+        max_retries = config.retry.max_retries,
+        bloom_capacity = config.harvest.bloom_capacity,
+        log_json = config.logging.log_json,
+        "effective config"
+    );
+}
+
 async fn utp_socket() -> Option<Arc<librqbit_utp::UtpSocketUdp>> {
     match librqbit_utp::UtpSocketUdp::new_udp(SocketAddr::from(([0, 0, 0, 0], 0))).await {
         Ok(s) => Some(s),
@@ -259,7 +349,8 @@ async fn spawn_node(
     let identity = storage::identity::IdentityStore::load_or_create(
         &data_dir.join("identity.json"),
         config.external_ip,
-        config.sybil_count,
+        config.dht.sybil_count,
+        config.dht.sybil_bep42_ratio,
     );
     let self_id = identity.self_id;
     let sybils = identity.sybils;
@@ -267,7 +358,7 @@ async fn spawn_node(
     let token_secret = load_or_create_secret(&data_dir.join("token_secret.bin"));
     let token = Arc::new(std::sync::RwLock::new(TokenGenerator::new(
         token_secret,
-        Duration::from_secs(config.token_window_secs),
+        Duration::from_secs(config.dht.token_window_secs),
     )));
 
     let bind = SocketAddr::new(
@@ -303,13 +394,19 @@ async fn spawn_node(
         tokio::spawn(net::worker(sock, router.clone()));
     }
 
-    let limiter = Arc::new(RateLimiter::new(config.rate_limit_per_sec, 64.0));
+    let limiter = Arc::new(RateLimiter::new(
+        config.dht.rate_limit_per_sec,
+        config.dht.rate_limit_burst,
+        config.dht.rate_limit_bucket_ttl_secs,
+    ));
     let walker = Walker::new(
         router.clone(),
         limiter.clone(),
         bootstrap.to_vec(),
-        config.walker_alpha,
-        Duration::from_millis(config.walker_interval_ms),
+        config.dht.walker_alpha,
+        Duration::from_millis(config.dht.walker_interval_ms),
+        Duration::from_secs(config.dht.walker_query_timeout_secs),
+        config.dht.walker_self_explore_prob,
         config.parse_nodes6,
     );
     walker.bootstrap(bootstrap).await;
@@ -319,9 +416,20 @@ async fn spawn_node(
     });
     tokio::spawn(limiter_sweep_loop(limiter.clone()));
     let snap_path = data_dir.join("routing_table.bin");
-    tokio::spawn(routing_snapshot_loop(table.clone(), snap_path, ROUTING_SNAPSHOT_INTERVAL));
-    tokio::spawn(tx_cleanup(router.clone()));
-    tokio::spawn(token_rotation(token, Duration::from_secs(config.token_window_secs.max(60))));
+    tokio::spawn(routing_snapshot_loop(
+        table.clone(),
+        snap_path,
+        Duration::from_secs(config.dht.routing_snapshot_interval_secs),
+    ));
+    tokio::spawn(tx_cleanup(
+        router.clone(),
+        Duration::from_secs(config.dht.tx_cleanup_interval_secs),
+        Duration::from_secs(config.dht.tx_entry_ttl_secs),
+    ));
+    tokio::spawn(token_rotation(
+        token,
+        Duration::from_secs(config.dht.token_window_secs.max(60)),
+    ));
 
     node_routers.push(router);
 }
@@ -506,11 +614,11 @@ async fn report_loop(
     }
 }
 
-async fn tx_cleanup(router: Arc<Router>) {
-    let mut tick = tokio::time::interval(Duration::from_secs(10));
+async fn tx_cleanup(router: Arc<Router>, tick_interval: Duration, entry_ttl: Duration) {
+    let mut tick = tokio::time::interval(tick_interval);
     loop {
         tick.tick().await;
-        router.cleanup_tx(Duration::from_secs(30));
+        router.cleanup_tx(entry_ttl);
     }
 }
 

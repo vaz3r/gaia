@@ -12,17 +12,25 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinSet;
 
-const TCP_TIMEOUT: Duration = Duration::from_secs(5);
-const UTP_TIMEOUT: Duration = Duration::from_secs(5);
+#[derive(Clone)]
+pub struct FetchParams {
+    pub tcp_timeout: Duration,
+    pub utp_timeout: Duration,
+    pub metadata_timeout: Duration,
+    pub source_deadline: Duration,
+    pub source_k: usize,
+    pub source_alpha: usize,
+    pub source_query_timeout: Duration,
+    pub race_peers: usize,
+    pub failed_peer_sample_rate: u64,
+}
 
-const FAILED_PEER_SAMPLE_RATE: u64 = 500; // Log ~1 in 500 I/O failures (~0.2%)
-
-fn sample_failed_peer(ih: &Infohash, addr: &SocketAddr, metrics: &Metrics) {
+fn sample_failed_peer(ih: &Infohash, addr: &SocketAddr, metrics: &Metrics, rate: u64) {
     let count = metrics.fetch_connect_io.load(Ordering::Relaxed);
     let hash = count
         .wrapping_mul(0x517c1b7275698a01)
         .wrapping_mul(u64::from(ih[0] as u64) | 1);
-    if hash % FAILED_PEER_SAMPLE_RATE == 0 {
+    if hash % rate == 0 {
         tracing::warn!(
             addr = %addr,
             ih_prefix = ?&ih[..4],
@@ -76,6 +84,8 @@ async fn try_fetch(
     peer_outcomes: Arc<PeerOutcomeWriter>,
     source: &str,
     fetch_timeout: Duration,
+    tcp_timeout: Duration,
+    utp_timeout: Duration,
 ) -> FetchOutcome {
     metrics.tcp_attempts.add(1);
 
@@ -83,7 +93,7 @@ async fn try_fetch(
     crate::trace_lifecycle!(&ih, "fetch_start", stream = "fetch", peer = addr_str.clone(), transport = "tcp");
     let start = std::time::Instant::now();
 
-    let mut session = match WireSession::connect_tcp(addr, &ih, &pid, TCP_TIMEOUT).await {
+    let mut session = match WireSession::connect_tcp(addr, &ih, &pid, tcp_timeout).await {
         Ok(s) => {
             metrics.tcp_connect_ok.add(1);
             metrics.tcp_connect_actual.add(1);
@@ -102,7 +112,7 @@ async fn try_fetch(
                     metrics.utp_attempts.add(1);
                     crate::trace_lifecycle!(&ih, "fetch_start", stream = "fetch", peer = addr_str.clone(), transport = "utp");
                     let utp_start = std::time::Instant::now();
-                    match WireSession::connect_utp(sock.clone(), addr, &ih, &pid, UTP_TIMEOUT).await {
+                    match WireSession::connect_utp(sock.clone(), addr, &ih, &pid, utp_timeout).await {
                         Ok(s) => {
                             metrics.utp_connect_ok.add(1);
                             metrics.utp_connect_actual.add(1);
@@ -150,21 +160,23 @@ pub async fn verify_infohash(
     router: Arc<Router>,
     utp: Option<Arc<UtpSocketUdp>>,
     info_hash: Infohash,
-    race_peers: usize,
+    params: &FetchParams,
     metrics: Arc<Metrics>,
     peer_cache: Arc<PeerCache>,
     announce_peer_cache: Arc<crate::verify::AnnouncePeerCache>,
     direct: Option<SocketAddr>,
     peer_outcomes: Arc<PeerOutcomeWriter>,
-    fetch_timeout: Duration,
-    source_deadline: Duration,
 ) -> VerifyResult {
+    let race_peers = params.race_peers;
     let (mut peers, state) = match source_peers(
         router,
         info_hash,
         race_peers.max(1),
         metrics.clone(),
-        source_deadline,
+        params.source_deadline,
+        params.source_k,
+        params.source_alpha,
+        params.source_query_timeout,
     )
     .await
     {
@@ -208,8 +220,11 @@ pub async fn verify_infohash(
         let utp = utp.clone();
         let po = peer_outcomes.clone();
         let source = if announce_peers.contains(&addr) { "announce_peer" } else { "get_peers" };
+        let fetch_timeout = params.metadata_timeout;
+        let tcp_timeout = params.tcp_timeout;
+        let utp_timeout = params.utp_timeout;
         set.spawn(async move {
-            try_fetch(addr, ih, pid, metrics, cache, utp, po, source, fetch_timeout).await
+            try_fetch(addr, ih, pid, metrics, cache, utp, po, source, fetch_timeout, tcp_timeout, utp_timeout).await
         });
     }
 
@@ -226,11 +241,11 @@ pub async fn verify_infohash(
             }
             Ok(FetchOutcome::ConnectFailed(_addr, WireError::Io(_))) => {
                 metrics.fetch_connect_io.add(1);
-                sample_failed_peer(&info_hash, &_addr, &metrics);
+                sample_failed_peer(&info_hash, &_addr, &metrics, params.failed_peer_sample_rate.max(1));
             }
             Ok(FetchOutcome::ConnectFailed(_addr, _)) => {
                 metrics.fetch_connect_io.add(1);
-                sample_failed_peer(&info_hash, &_addr, &metrics);
+                sample_failed_peer(&info_hash, &_addr, &metrics, params.failed_peer_sample_rate.max(1));
             }
             Ok(FetchOutcome::MetadataFailed(WireError::Timeout)) => {
                 metrics.fetch_io.add(1);

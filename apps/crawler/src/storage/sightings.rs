@@ -9,14 +9,16 @@ use std::time::Duration;
 pub struct SightingWriter {
     pool: PgPool,
     buf: Mutex<Vec<(Infohash, Source)>>,
+    chunk_size: usize,
     written: AtomicU64,
 }
 
 impl SightingWriter {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, chunk_size: usize) -> Self {
         SightingWriter {
             pool,
             buf: Mutex::new(Vec::with_capacity(4096)),
+            chunk_size: chunk_size.max(1),
             written: AtomicU64::new(0),
         }
     }
@@ -40,7 +42,7 @@ impl SightingWriter {
             }
             std::mem::take(&mut *buf)
         };
-        for chunk in batch.chunks(256) {
+        for chunk in batch.chunks(self.chunk_size) {
             let mut tx = match self.pool.begin().await {
                 Ok(tx) => tx,
                 Err(e) => {

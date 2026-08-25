@@ -1,0 +1,24 @@
+# Production profile (zerone).
+# Only values that differ from default.toml belong here.
+# Everything is env-overridable via CRAW_* vars.
+
+[dht]
+walker_alpha = 3
+walker_interval_ms = 250
+source_deadline_ms = 25000
+sybil_count = 16
+rate_limit_per_sec = 8.0
+
+[fetch]
+global_fetch_limit = 1200
+race_peers = 8
+metadata_timeout_secs = 25
+utp_enabled = true
+
+[logging]
+log_dir = "/data/logs"
+log_json = true
+log_file_max_bytes = 50000000
+log_total_max_bytes = 500000000
+log_flush_interval_ms = 500
+log_buffer_capacity = 8192

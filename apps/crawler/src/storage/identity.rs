@@ -23,7 +23,12 @@ pub struct IdentityStore {
 }
 
 impl IdentityStore {
-    pub fn load_or_create(path: &Path, external_ip: Option<IpAddr>, count: usize) -> Self {
+    pub fn load_or_create(
+        path: &Path,
+        external_ip: Option<IpAddr>,
+        count: usize,
+        bep42_ratio: f64,
+    ) -> Self {
         let ip_key = external_ip.map(|i| i.to_string());
         if let Ok(data) = std::fs::read(path)
             && let Ok(f) = serde_json::from_slice::<IdentityFile>(&data)
@@ -48,7 +53,7 @@ impl IdentityStore {
         }
 
         let self_id = bep42_or_random(external_ip);
-        let sybils = build_fresh(external_ip, count);
+        let sybils = build_fresh(external_ip, count, bep42_ratio);
         let f = IdentityFile {
             self_id,
             external_ip: ip_key,
@@ -72,11 +77,15 @@ fn bep42_or_random(external_ip: Option<IpAddr>) -> NodeId {
     }
 }
 
-fn build_fresh(external_ip: Option<IpAddr>, n: usize) -> Vec<(NodeId, SybilPool)> {
+fn build_fresh(
+    external_ip: Option<IpAddr>,
+    n: usize,
+    bep42_ratio: f64,
+) -> Vec<(NodeId, SybilPool)> {
     let mut ids = Vec::with_capacity(n);
     match external_ip {
         Some(ip) => {
-            let bep42 = n / 3;
+            let bep42 = (n as f64 * bep42_ratio).floor() as usize;
             for _ in 0..bep42 {
                 ids.push((bep42_node_id_rng(ip), SybilPool::Bep42));
             }

@@ -11,6 +11,8 @@ pub struct AsyncWriter {
     file_max_bytes: u64,
     total_max_bytes: u64,
     flush_interval_ms: u64,
+    batch_size: usize,
+    max_file_age_secs: u64,
     shutdown_rx: oneshot::Receiver<()>,
 }
 
@@ -21,6 +23,8 @@ impl AsyncWriter {
         file_max_bytes: u64,
         total_max_bytes: u64,
         flush_interval_ms: u64,
+        batch_size: usize,
+        max_file_age_secs: u64,
         shutdown_rx: oneshot::Receiver<()>,
     ) -> Self {
         Self {
@@ -29,6 +33,8 @@ impl AsyncWriter {
             file_max_bytes,
             total_max_bytes,
             flush_interval_ms,
+            batch_size,
+            max_file_age_secs,
             shutdown_rx,
         }
     }
@@ -36,7 +42,7 @@ impl AsyncWriter {
     pub async fn run(mut self) {
         let _ = fs::create_dir_all(&self.dir);
 
-        let mut buffer: Vec<String> = Vec::with_capacity(1024);
+        let mut buffer: Vec<String> = Vec::with_capacity(self.batch_size.min(8192));
         let mut bytes_written: u64 = 0;
         let mut file_start = Instant::now();
         let (path, file) = create_new_file(&self.dir);
@@ -59,7 +65,7 @@ impl AsyncWriter {
                     match msg {
                         Some(line) => {
                             buffer.push(line);
-                            if buffer.len() >= super::BATCH_SIZE {
+                            if buffer.len() >= self.batch_size {
                                 flush_and_maybe_rotate(&mut writer, &mut buffer, &mut bytes_written, &mut file_start, &mut current_path, &self);
                             }
                         }
@@ -109,7 +115,7 @@ fn flush_and_maybe_rotate(
     let _ = writer.flush();
 
     let should_rotate = *bytes_written >= ctx.file_max_bytes
-        || file_start.elapsed() >= Duration::from_secs(3600);
+        || file_start.elapsed() >= Duration::from_secs(ctx.max_file_age_secs);
 
     if should_rotate {
         rotate(writer, bytes_written, file_start, current_path, ctx);

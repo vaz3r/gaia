@@ -5,11 +5,21 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
-pub const MAX_RETRIES: i32 = 4;
+pub struct RetryConfig {
+    pub max_retries: i32,
+    pub backoffs: Vec<Duration>,
+    pub scheduler_claim_limit: i64,
+    pub scheduler_fresh_ratio: f64,
+    pub stale_verifying_timeout_secs: u64,
+}
 
 pub struct VerifyStore {
     pool: PgPool,
     backoffs: Vec<Duration>,
+    max_retries: i32,
+    claim_limit: i64,
+    fresh_ratio: f64,
+    stale_verifying_timeout_secs: u64,
 }
 
 fn now_secs() -> u64 {
@@ -20,8 +30,15 @@ fn now_secs() -> u64 {
 }
 
 impl VerifyStore {
-    pub fn new(pool: PgPool, backoffs: Vec<Duration>) -> Self {
-        VerifyStore { pool, backoffs }
+    pub fn new(pool: PgPool, cfg: RetryConfig) -> Self {
+        VerifyStore {
+            pool,
+            backoffs: cfg.backoffs,
+            max_retries: cfg.max_retries,
+            claim_limit: cfg.scheduler_claim_limit,
+            fresh_ratio: cfg.scheduler_fresh_ratio,
+            stale_verifying_timeout_secs: cfg.stale_verifying_timeout_secs,
+        }
     }
 
     pub async fn mark_verified(&self, ih: Infohash) -> Result<(), sqlx::Error> {
@@ -47,7 +64,7 @@ impl VerifyStore {
             None => 0,
         };
         let new_count = retry_count + 1;
-        if new_count >= MAX_RETRIES {
+        if new_count >= self.max_retries {
             sqlx::query(
                 "INSERT INTO verification_jobs (infohash, status, retry_count, next_retry_at, last_error, updated_at) \
                  VALUES ($1, 'dead', $2, NULL, $4, now()) \
@@ -86,7 +103,8 @@ impl VerifyStore {
     }
 
     pub async fn claim_due(&self, limit: i64) -> Result<Vec<Infohash>, sqlx::Error> {
-        let fresh_limit = (limit * 7 / 10).max(1);
+        let fresh_ratio = self.fresh_ratio.clamp(0.0, 1.0);
+        let fresh_limit = ((limit as f64 * fresh_ratio) as i64).max(1);
         let retry_limit = (limit - fresh_limit).max(1);
         let rows = sqlx::query(
             "WITH fresh AS (
@@ -111,7 +129,7 @@ impl VerifyStore {
         )
         .bind(fresh_limit)
         .bind(retry_limit)
-        .bind(MAX_RETRIES)
+        .bind(self.max_retries)
         .fetch_all(&self.pool)
         .await?;
         let mut out = Vec::with_capacity(rows.len());
@@ -128,8 +146,11 @@ impl VerifyStore {
 
     async fn reset_stale_verifying(&self) -> Result<u64, sqlx::Error> {
         Ok(sqlx::query(
-            "UPDATE verification_jobs SET status = 'pending', next_retry_at = now(), updated_at = now() \
-             WHERE status = 'verifying' AND updated_at < now() - interval '5 minutes'",
+            &format!(
+                "UPDATE verification_jobs SET status = 'pending', next_retry_at = now(), updated_at = now() \
+                 WHERE status = 'verifying' AND updated_at < now() - interval '{} seconds'",
+                self.stale_verifying_timeout_secs
+            ),
         )
         .execute(&self.pool)
         .await?
@@ -144,12 +165,13 @@ impl VerifyStore {
             ),
             Err(e) => tracing::warn!(error = %e, "verification scheduler: recovery failed"),
         }
+        let stale_interval = Duration::from_secs(self.stale_verifying_timeout_secs);
         let mut tick = tokio::time::interval(interval);
-        let mut stale_tick = tokio::time::interval(Duration::from_secs(300));
+        let mut stale_tick = tokio::time::interval(stale_interval);
         loop {
             tokio::select! {
                 _ = tick.tick() => {
-                    match self.claim_due(1000).await {
+                    match self.claim_due(self.claim_limit).await {
                         Ok(due) => {
                             if !due.is_empty() {
                                 tracing::info!(

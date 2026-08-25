@@ -10,14 +10,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::MissedTickBehavior;
 
-const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
-
 pub struct Walker {
     router: Arc<Router>,
     limiter: Arc<RateLimiter>,
     bootstrap: Vec<SocketAddr>,
     alpha: usize,
     interval: Duration,
+    query_timeout: Duration,
+    self_explore_prob: f64,
     parse_nodes6: bool,
 }
 
@@ -28,6 +28,8 @@ impl Walker {
         bootstrap: Vec<SocketAddr>,
         alpha: usize,
         interval: Duration,
+        query_timeout: Duration,
+        self_explore_prob: f64,
         parse_nodes6: bool,
     ) -> Self {
         Walker {
@@ -36,19 +38,22 @@ impl Walker {
             bootstrap,
             alpha,
             interval,
+            query_timeout,
+            self_explore_prob,
             parse_nodes6,
         }
     }
 
     pub async fn bootstrap(&self, nodes: &[SocketAddr]) {
         let mut set = tokio::task::JoinSet::new();
+        let query_timeout = self.query_timeout;
         for &addr in nodes {
             let router = self.router.clone();
             let target = crate::dht::node_id::random_node_id();
             set.spawn(async move {
                 let args = find_node_args(&router.self_id, target);
                 router
-                    .send_query(FIND_NODE, addr, args, QUERY_TIMEOUT)
+                    .send_query(FIND_NODE, addr, args, query_timeout)
                     .await
                     .map(|msg| (msg, addr))
             });
@@ -103,6 +108,7 @@ impl Walker {
             return false;
         }
         let (our_id, target) = self.pick_target();
+        let query_timeout = self.query_timeout;
         for node in nodes {
             if !self.limiter.allow(node.addr.ip()) {
                 continue;
@@ -113,7 +119,7 @@ impl Walker {
             self.router.metrics().walker_queries.add(1);
             set.spawn(async move {
                 let res = router
-                    .send_query(FIND_NODE, addr, args, QUERY_TIMEOUT)
+                    .send_query(FIND_NODE, addr, args, query_timeout)
                     .await;
                 (res, addr)
             });
@@ -122,7 +128,7 @@ impl Walker {
     }
 
     fn pick_target(&self) -> ([u8; 20], [u8; 20]) {
-        let explore = rand::random::<f64>() < 0.1;
+        let explore = rand::random::<f64>() < self.self_explore_prob;
         if explore {
             self.router.metrics().walker_self_target.add(1);
             if let Some(n) = self.router.routing_nodes().first() {

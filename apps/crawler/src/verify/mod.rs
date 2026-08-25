@@ -9,7 +9,7 @@ use crate::krpc::Infohash;
 use crate::metrics::{Add1, Metrics};
 use crate::router::Router;
 use crate::storage::batch_writer::BatchWriter;
-use crate::verify::fetch_pool::{VerifyResult, verify_infohash};
+use crate::verify::fetch_pool::{FetchParams, VerifyResult, verify_infohash};
 use crate::verify::peer_cache::PeerCache;
 use crate::verify::verify::check;
 use librqbit_utp::UtpSocketUdp;
@@ -19,17 +19,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Semaphore, mpsc};
 
-const ANNOUNCE_CACHE_TTL: Duration = Duration::from_secs(600);
-const ANNOUNCE_CACHE_MAX: usize = 50_000;
-
 pub struct AnnouncePeerCache {
     inner: dashmap::DashMap<Infohash, (SocketAddr, Instant)>,
+    ttl: Duration,
+    max_entries: usize,
 }
 
 impl AnnouncePeerCache {
-    pub fn new() -> Self {
+    pub fn new(ttl: Duration, max_entries: usize, initial_capacity: usize, shards: usize) -> Self {
         AnnouncePeerCache {
-            inner: dashmap::DashMap::with_capacity_and_shard_amount(1024, 64),
+            inner: dashmap::DashMap::with_capacity_and_shard_amount(
+                initial_capacity.max(1),
+                shards.max(1),
+            ),
+            ttl,
+            max_entries,
         }
     }
 
@@ -40,7 +44,7 @@ impl AnnouncePeerCache {
 
     pub fn get(&self, ih: &Infohash) -> Option<SocketAddr> {
         self.inner.get(ih).and_then(|entry| {
-            if entry.1.elapsed() < ANNOUNCE_CACHE_TTL {
+            if entry.1.elapsed() < self.ttl {
                 Some(entry.0)
             } else {
                 drop(entry);
@@ -55,25 +59,17 @@ impl AnnouncePeerCache {
     }
 
     fn enforce_bound(&self) {
-        if self.inner.len() <= ANNOUNCE_CACHE_MAX {
+        if self.inner.len() <= self.max_entries {
             return;
         }
         let now = Instant::now();
-        self.inner.retain(|_, (_, ts)| now.duration_since(*ts) < ANNOUNCE_CACHE_TTL);
-    }
-}
-
-impl Default for AnnouncePeerCache {
-    fn default() -> Self {
-        Self::new()
+        self.inner.retain(|_, (_, ts)| now.duration_since(*ts) < self.ttl);
     }
 }
 
 pub struct VerifyConfig {
     pub global_limit: usize,
-    pub race_peers: usize,
-    pub fetch_timeout_ms: u64,
-    pub source_deadline_ms: u64,
+    pub params: FetchParams,
 }
 
 pub async fn run_pipeline(
@@ -90,9 +86,6 @@ pub async fn run_pipeline(
 ) {
     let global = Arc::new(Semaphore::new(config.global_limit.max(1)));
     let next_router = AtomicUsize::new(0);
-    let race = config.race_peers.max(1);
-    let fetch_timeout = Duration::from_millis(config.fetch_timeout_ms);
-    let source_deadline = Duration::from_millis(config.source_deadline_ms);
     loop {
         let Ok(_permit) = global.clone().acquire_owned().await else {
             break;
@@ -132,13 +125,14 @@ pub async fn run_pipeline(
         let peer_cache = peer_cache.clone();
         let announce_peer_cache = announce_peer_cache.clone();
         let peer_outcomes = peer_outcomes.clone();
+        let params = config.params.clone();
         tokio::spawn(async move {
             let _permit = _permit;
             if is_direct {
                 metrics.announce_attempts.add(1);
             }
             metrics.verify_attempts.add(1);
-            match verify_infohash(router, utp, ih, race, metrics.clone(), peer_cache, announce_peer_cache, direct, peer_outcomes, fetch_timeout, source_deadline).await {
+            match verify_infohash(router, utp, ih, &params, metrics.clone(), peer_cache, announce_peer_cache, direct, peer_outcomes).await {
                 VerifyResult::Success(meta) if check(&ih, &meta) => {
                     crate::trace_lifecycle!(&ih, "sha1_check", stream = "verify", result = "pass");
                     metrics.verify_success.add(1);

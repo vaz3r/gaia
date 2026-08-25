@@ -44,12 +44,12 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
-    pub fn new(rate_per_sec: f64, burst: f64) -> Self {
+    pub fn new(rate_per_sec: f64, burst: f64, bucket_ttl_secs: u64) -> Self {
         RateLimiter {
             buckets: DashMap::new(),
             capacity: burst,
             rate_per_sec,
-            ttl: Duration::from_secs(600),
+            ttl: Duration::from_secs(bucket_ttl_secs),
         }
     }
 
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn burst_then_refill() {
-        let rl = RateLimiter::new(10.0, 3.0);
+        let rl = RateLimiter::new(10.0, 3.0, 600);
         let ip: IpAddr = "1.2.3.4".parse().unwrap();
         assert!(rl.allow(ip));
         assert!(rl.allow(ip));

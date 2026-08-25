@@ -1,0 +1,102 @@
+# Default configuration for the GAIA crawler.
+# These values are also the built-in defaults in code. This file documents
+# every operational tunable and serves as the baseline that profile files
+# override. Secrets (DATABASE_URL / PG_PASSWORD) are NEVER placed here.
+#
+# Load precedence (highest wins):
+#   built-in defaults < default.toml < {CRAW_PROFILE}.toml < CRAW_* env vars
+
+# Top-level / network
+# bind_addr = "0.0.0.0:6881"
+# external_ip = "YOUR_PUBLIC_IP"
+# bootstrap = ["router.bittorrent.com:6881", "router.utorrent.com:6881"]
+# worker_threads = 8
+# nodes = 1
+# port_base = 6881
+# data_dir = "data"
+# trace_sample_rate = 0.0
+# parse_nodes6 = false
+# channel_capacity = 65536          # shared discovery/verify/announce queue
+
+[dht]
+walker_alpha = 3
+walker_interval_ms = 250
+walker_query_timeout_secs = 5
+walker_self_explore_prob = 0.1
+sybil_count = 16
+sybil_bep42_ratio = 0.333
+routing_k = 8
+source_k = 8
+source_alpha = 3
+source_query_timeout_secs = 5
+source_deadline_ms = 25000
+routing_snapshot_interval_secs = 60
+tx_cleanup_interval_secs = 10
+tx_entry_ttl_secs = 30
+tx_collision_retries = 32
+rate_limit_per_sec = 8.0
+rate_limit_burst = 64.0
+rate_limit_bucket_ttl_secs = 600
+token_window_secs = 300
+
+[fetch]
+tcp_timeout_secs = 5
+utp_timeout_secs = 5
+metadata_timeout_secs = 25
+race_peers = 8
+global_fetch_limit = 1200
+utp_enabled = true
+max_message_len = 16777216
+max_pieces = 4096
+failed_peer_sample_rate = 500
+
+[retry]
+max_retries = 4
+backoff_sequence_secs = [60, 300, 1800, 7200, 43200]
+scheduler_interval_secs = 15
+scheduler_claim_limit = 1000
+scheduler_fresh_ratio = 0.7
+stale_verifying_timeout_secs = 300
+
+[storage]
+pg_pool_max_connections = 128
+pg_pool_min_connections = 1
+pg_pool_acquire_timeout_secs = 30
+batch_flush_interval_secs = 1
+batch_flush_chunk = 5000
+batch_initial_capacity = 4096
+sighting_flush_interval_ms = 500
+sighting_chunk_size = 256
+metrics_flush_interval_secs = 60
+peer_outcomes_flush_interval_secs = 30
+peer_outcomes_chunk_size = 256
+janitor_interval_secs = 14400
+janitor_dead_retention_secs = 86400
+janitor_verified_retention_secs = 3600
+janitor_batch_size = 50000
+janitor_batch_sleep_ms = 100
+
+[cache]
+peer_cache_ttl_secs = 600
+peer_cache_max_entries = 100000
+peer_cache_cleanup_interval_secs = 60
+announce_cache_ttl_secs = 600
+announce_cache_max_entries = 50000
+announce_cache_initial_capacity = 1024
+announce_cache_shards = 64
+
+[harvest]
+bloom_capacity = 1000000
+bloom_fp_rate = 0.001
+announce_bloom_ratio = 0.25
+announce_bloom_min = 64
+
+[logging]
+log_dir = "data/logs"
+log_json = false
+log_file_max_bytes = 50000000
+log_total_max_bytes = 500000000
+log_flush_interval_ms = 500
+log_buffer_capacity = 8192
+log_batch_size = 1000
+log_max_file_age_secs = 3600

@@ -12,8 +12,6 @@ use tracing_subscriber::EnvFilter;
 
 use crate::config::Config;
 
-const BATCH_SIZE: usize = 1000;
-
 pub struct LoggingGuard {
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
@@ -31,12 +29,14 @@ pub fn init(config: &Config, log_dropped: Arc<AtomicU64>) -> LoggingGuard {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
-    if config.log_json {
-        let log_dir = config.log_dir.clone();
-        let file_max = config.log_file_max_bytes;
-        let total_max = config.log_total_max_bytes;
-        let flush_ms = config.log_flush_interval_ms;
-        let buffer_cap = config.log_buffer_capacity;
+    if config.logging.log_json {
+        let log_dir = config.logging.log_dir.clone();
+        let file_max = config.logging.log_file_max_bytes;
+        let total_max = config.logging.log_total_max_bytes;
+        let flush_ms = config.logging.log_flush_interval_ms;
+        let buffer_cap = config.logging.log_buffer_capacity.max(1);
+        let batch_size = config.logging.log_batch_size.max(1);
+        let max_file_age_secs = config.logging.log_max_file_age_secs;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<String>(buffer_cap);
 
@@ -48,6 +48,8 @@ pub fn init(config: &Config, log_dropped: Arc<AtomicU64>) -> LoggingGuard {
             file_max,
             total_max,
             flush_ms,
+            batch_size,
+            max_file_age_secs,
             shutdown_rx,
         );
 

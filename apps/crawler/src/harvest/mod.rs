@@ -36,15 +36,20 @@ pub struct Harvester {
 impl Harvester {
     pub fn new(
         capacity: usize,
+        fp_rate: f64,
+        announce_bloom_ratio: f64,
+        announce_bloom_min: usize,
         discovery_tx: mpsc::Sender<(Infohash, Source)>,
         verify_tx: mpsc::Sender<Infohash>,
         announce_tx: mpsc::Sender<(Infohash, SocketAddr)>,
         metrics: Arc<Metrics>,
     ) -> Self {
+        let capacity = capacity.max(64);
+        let announce_cap = ((capacity as f64 * announce_bloom_ratio) as usize).max(announce_bloom_min.max(1));
         Harvester {
-            current: BloomFilter::new(capacity, 0.001),
-            previous: BloomFilter::new(capacity, 0.001),
-            announce_seen: BloomFilter::new((capacity / 4).max(64), 0.001),
+            current: BloomFilter::new(capacity, fp_rate),
+            previous: BloomFilter::new(capacity, fp_rate),
+            announce_seen: BloomFilter::new(announce_cap, fp_rate),
             rotate_at: capacity,
             discovery_tx,
             verify_tx,

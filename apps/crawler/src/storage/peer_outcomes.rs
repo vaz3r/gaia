@@ -16,15 +16,17 @@ pub struct PeerOutcome {
 pub struct PeerOutcomeWriter {
     pool: PgPool,
     buf: Mutex<Vec<PeerOutcome>>,
+    chunk_size: usize,
     written: AtomicU64,
     flushing: AtomicBool,
 }
 
 impl PeerOutcomeWriter {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, chunk_size: usize) -> Self {
         PeerOutcomeWriter {
             pool,
             buf: Mutex::new(Vec::with_capacity(8192)),
+            chunk_size: chunk_size.max(1),
             written: AtomicU64::new(0),
             flushing: AtomicBool::new(false),
         }
@@ -53,7 +55,7 @@ impl PeerOutcomeWriter {
             }
             std::mem::take(&mut *buf)
         };
-        for chunk in batch.chunks(256) {
+        for chunk in batch.chunks(self.chunk_size) {
             let mut tx = match self.pool.begin().await {
                 Ok(tx) => tx,
                 Err(e) => {

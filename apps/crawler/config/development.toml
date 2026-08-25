@@ -1,0 +1,37 @@
+# Development profile (local).
+# Lower load, faster feedback, smaller caches/buffers than production.
+
+[dht]
+walker_alpha = 3
+walker_interval_ms = 250
+source_deadline_ms = 10000
+sybil_count = 4
+rate_limit_per_sec = 8.0
+
+[fetch]
+global_fetch_limit = 128
+race_peers = 4
+metadata_timeout_secs = 10
+utp_enabled = false
+
+[retry]
+backoff_sequence_secs = [5, 15, 60, 300]
+scheduler_interval_secs = 5
+
+[storage]
+sighting_flush_interval_ms = 250
+metrics_flush_interval_secs = 15
+peer_outcomes_flush_interval_secs = 10
+
+[cache]
+peer_cache_ttl_secs = 60
+announce_cache_ttl_secs = 60
+
+[harvest]
+bloom_capacity = 100000
+
+[logging]
+log_dir = "data/logs"
+log_json = false
+log_flush_interval_ms = 250
+log_buffer_capacity = 1024

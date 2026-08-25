@@ -2,18 +2,18 @@ use dashmap::DashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-const MAX_ENTRIES: usize = 100_000;
-
 pub struct PeerCache {
     bad: DashMap<SocketAddr, Instant>,
     ttl: Duration,
+    max_entries: usize,
 }
 
 impl PeerCache {
-    pub fn new(ttl: Duration) -> Self {
+    pub fn new(ttl: Duration, max_entries: usize) -> Self {
         PeerCache {
             bad: DashMap::with_capacity_and_shard_amount(1024, 64),
             ttl,
+            max_entries,
         }
     }
 
@@ -56,14 +56,14 @@ impl PeerCache {
     }
 
     fn enforce_bound(&self) {
-        if self.bad.len() <= MAX_ENTRIES {
+        if self.bad.len() <= self.max_entries {
             return;
         }
         let _ = self.evict_expired();
-        if self.bad.len() <= MAX_ENTRIES {
+        if self.bad.len() <= self.max_entries {
             return;
         }
-        let excess = self.bad.len() - MAX_ENTRIES;
+        let excess = self.bad.len() - self.max_entries;
         let target_remove = (excess / 8).max(1);
         let mut to_remove = Vec::with_capacity(target_remove);
         for entry in self.bad.iter() {

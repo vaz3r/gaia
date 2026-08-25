@@ -11,10 +11,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinSet;
 
-const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
-const K: usize = 8;
-const ALPHA: usize = 3;
-
 pub enum SourceResult {
     Peers(Vec<SocketAddr>),
     NoPeers,
@@ -27,10 +23,15 @@ pub async fn source_peers(
     count: usize,
     metrics: Arc<Metrics>,
     deadline: Duration,
+    k: usize,
+    alpha: usize,
+    query_timeout: Duration,
 ) -> SourceResult {
-    let mut candidates: Vec<NodeInfo> = router.closest_nodes(&info_hash, K);
+    let k = k.max(1);
+    let alpha = alpha.max(1);
+    let mut candidates: Vec<NodeInfo> = router.closest_nodes(&info_hash, k);
     if candidates.is_empty() {
-        candidates = router.random_routing_nodes(K);
+        candidates = router.random_routing_nodes(k);
     }
 
     let mut queried: HashSet<SocketAddr> = HashSet::new();
@@ -52,7 +53,7 @@ pub async fn source_peers(
 
     let lookup = async {
         // Prime the pipeline with up to ALPHA initial queries.
-        while inflight < ALPHA {
+        while inflight < alpha {
             let idx = candidates
                 .iter()
                 .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr));
@@ -61,7 +62,7 @@ pub async fn source_peers(
             };
             queried.insert(node.addr);
             inflight += 1;
-            spawn_query(&mut set, &router, info_hash, node, &metrics);
+            spawn_query(&mut set, &router, info_hash, node, &metrics, query_timeout);
         }
 
         while inflight > 0 {
@@ -115,7 +116,7 @@ pub async fn source_peers(
                 candidates.extend(new_nodes.drain(..));
                 candidates.sort_by_key(|n| xor(&info_hash, &n.id));
                 candidates.dedup_by(|a, b| a.id == b.id);
-                candidates.truncate(K);
+                candidates.truncate(k);
             }
 
             if peers.len() >= count {
@@ -123,7 +124,7 @@ pub async fn source_peers(
                 break;
             }
 
-            while inflight < ALPHA {
+            while inflight < alpha {
                 let idx = candidates
                     .iter()
                     .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr));
@@ -132,7 +133,7 @@ pub async fn source_peers(
                 };
                 queried.insert(node.addr);
                 inflight += 1;
-                spawn_query(&mut set, &router, info_hash, node, &metrics);
+                spawn_query(&mut set, &router, info_hash, node, &metrics, query_timeout);
             }
         }
     };
@@ -172,6 +173,7 @@ fn spawn_query(
     info_hash: Infohash,
     node: NodeInfo,
     metrics: &Arc<Metrics>,
+    query_timeout: Duration,
 ) {
     let router = router.clone();
     let ih = info_hash;
@@ -191,7 +193,7 @@ fn spawn_query(
         let node_str = addr.to_string();
         crate::trace_lifecycle!(&ih, "source_query", stream = "dht", node = node_str);
         let res = router
-            .send_query(GET_PEERS, addr, args, QUERY_TIMEOUT)
+            .send_query(GET_PEERS, addr, args, query_timeout)
             .await;
         (addr, res)
     });

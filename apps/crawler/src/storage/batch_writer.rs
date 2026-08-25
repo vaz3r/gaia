@@ -1,5 +1,4 @@
 use crate::krpc::Infohash;
-use crate::storage::jobs::MAX_RETRIES;
 use crate::storage::torrents::parse_info_dict;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
@@ -9,8 +8,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
-
-const FLUSH_CHUNK: usize = 5000;
 
 pub enum JobUpdate {
     Verified(Infohash),
@@ -39,18 +36,22 @@ pub struct BatchWriter {
     jobs: Mutex<Vec<JobUpdate>>,
     torrents: Mutex<Vec<TorrentEntry>>,
     backoffs: Vec<Duration>,
+    max_retries: i32,
+    flush_chunk: usize,
     flushing: AtomicBool,
     jobs_written: AtomicU64,
     torrents_written: AtomicU64,
 }
 
 impl BatchWriter {
-    pub fn new(pool: PgPool, backoffs: Vec<Duration>) -> Self {
+    pub fn new(pool: PgPool, backoffs: Vec<Duration>, max_retries: i32, flush_chunk: usize) -> Self {
         BatchWriter {
             pool,
             jobs: Mutex::new(Vec::with_capacity(4096)),
             torrents: Mutex::new(Vec::with_capacity(4096)),
             backoffs,
+            max_retries,
+            flush_chunk: flush_chunk.max(1),
             flushing: AtomicBool::new(false),
             jobs_written: AtomicU64::new(0),
             torrents_written: AtomicU64::new(0),
@@ -112,7 +113,16 @@ impl BatchWriter {
                 .iter()
                 .filter(|u| matches!(u, JobUpdate::Failed(_, _)))
                 .collect();
-            if !failed_updates.is_empty() && flush_jobs(&self.pool, &failed_updates).await {
+            if !failed_updates.is_empty()
+                && flush_jobs(
+                    &self.pool,
+                    &failed_updates,
+                    self.flush_chunk,
+                    self.max_retries,
+                    &self.backoffs,
+                )
+                .await
+            {
                 self.jobs_written
                     .fetch_add(failed_updates.len() as u64, Ordering::Relaxed);
             }
@@ -125,13 +135,13 @@ impl BatchWriter {
                 .collect();
         }
         if !torrent_batch.is_empty() {
-            if flush_torrents(&self.pool, &torrent_batch).await {
+            if flush_torrents(&self.pool, &torrent_batch, self.flush_chunk).await {
                 self.torrents_written
                     .fetch_add(torrent_batch.len() as u64, Ordering::Relaxed);
             }
         }
         if !verified_ihs.is_empty() {
-            delete_verified(&self.pool, &verified_ihs).await;
+            delete_verified(&self.pool, &verified_ihs, self.flush_chunk).await;
         }
 
         self.flushing.store(false, Ordering::Release);
@@ -151,7 +161,13 @@ impl BatchWriter {
     }
 }
 
-async fn flush_jobs(pool: &PgPool, batch: &[&JobUpdate]) -> bool {
+async fn flush_jobs(
+    pool: &PgPool,
+    batch: &[&JobUpdate],
+    flush_chunk: usize,
+    max_retries: i32,
+    backoffs: &[Duration],
+) -> bool {
     let failed_ihs: Vec<&[u8]> = batch
         .iter()
         .filter_map(|u| match u {
@@ -162,7 +178,7 @@ async fn flush_jobs(pool: &PgPool, batch: &[&JobUpdate]) -> bool {
 
     let retry_map: HashMap<Vec<u8>, i32> = if !failed_ihs.is_empty() {
         let mut map = HashMap::new();
-        for chunk in failed_ihs.chunks(FLUSH_CHUNK) {
+        for chunk in failed_ihs.chunks(flush_chunk) {
             let chunk_vec: Vec<Vec<u8>> = chunk.iter().map(|b| b.to_vec()).collect();
             let rows = sqlx::query(
                 "SELECT infohash, retry_count FROM verification_jobs WHERE infohash = ANY($1)",
@@ -189,8 +205,11 @@ async fn flush_jobs(pool: &PgPool, batch: &[&JobUpdate]) -> bool {
         HashMap::new()
     };
 
+    let base_backoff = backoffs.first().copied().unwrap_or(Duration::from_secs(60));
+    let max_backoff = backoffs.last().copied().unwrap_or(Duration::from_secs(43200));
+
     let mut seen_ihs: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
-    for chunk in batch.chunks(FLUSH_CHUNK) {
+    for chunk in batch.chunks(flush_chunk) {
         let mut resolved: Vec<ResolvedJob<'_>> = Vec::with_capacity(chunk.len());
 
         for update in chunk {
@@ -202,7 +221,7 @@ async fn flush_jobs(pool: &PgPool, batch: &[&JobUpdate]) -> bool {
                     }
                     let current_rc = retry_map.get(&raw).copied().unwrap_or(0);
                     let new_count = current_rc + 1;
-                    let terminal = new_count >= MAX_RETRIES
+                    let terminal = new_count >= max_retries
                         || (error == "no_peers" && current_rc >= 1);
                     if terminal {
                         resolved.push(ResolvedJob {
@@ -213,10 +232,10 @@ async fn flush_jobs(pool: &PgPool, batch: &[&JobUpdate]) -> bool {
                             last_error: Some(error),
                         });
                     } else {
-                        let idx = current_rc.max(0) as usize;
-                        let delay = Duration::from_secs(60)
-                            .checked_mul(1u32.checked_shl(idx as u32).unwrap_or(u32::MAX))
-                            .unwrap_or(Duration::from_secs(43200));
+                        let idx = current_rc.max(0) as u32;
+                        let delay = base_backoff
+                            .checked_mul(1u32.checked_shl(idx).unwrap_or(u32::MAX))
+                            .unwrap_or(max_backoff);
                         let next = Utc::now() + chrono::Duration::from_std(delay).unwrap();
                         resolved.push(ResolvedJob {
                             ih: ih.as_slice(),
@@ -290,10 +309,10 @@ async fn flush_jobs(pool: &PgPool, batch: &[&JobUpdate]) -> bool {
     true
 }
 
-async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) -> bool {
+async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry], flush_chunk: usize) -> bool {
     let mut seen: std::collections::HashSet<[u8; 20]> = std::collections::HashSet::new();
     let unique: Vec<&TorrentEntry> = batch.iter().filter(|e| seen.insert(e.ih)).collect();
-    for chunk in unique.chunks(FLUSH_CHUNK) {
+    for chunk in unique.chunks(flush_chunk) {
         let now = Utc::now();
         let n = chunk.len();
         let param_count = n * 7;
@@ -358,8 +377,8 @@ async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry]) -> bool {
     true
 }
 
-async fn delete_verified(pool: &PgPool, infohashes: &[Vec<u8>]) {
-    for chunk in infohashes.chunks(FLUSH_CHUNK) {
+async fn delete_verified(pool: &PgPool, infohashes: &[Vec<u8>], flush_chunk: usize) {
+    for chunk in infohashes.chunks(flush_chunk) {
         match sqlx::query("DELETE FROM verification_jobs WHERE infohash = ANY($1)")
             .bind(chunk)
             .execute(pool)

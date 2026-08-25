@@ -9,7 +9,10 @@ RUN cargo build --release
 FROM --platform=linux/arm64 debian:bookworm-slim
 RUN useradd -m -u 10001 crawler && mkdir -p /home/crawler/data && chown -R crawler:crawler /home/crawler
 COPY --from=builder /app/target/release/crawler /usr/local/bin/crawler
+COPY --from=builder /app/config /etc/crawler/config
 USER crawler
 WORKDIR /home/crawler
 ENV CRAW_DATA_DIR=/home/crawler/data
+ENV CRAW_CONFIG_DIR=/etc/crawler/config
+ENV CRAW_PROFILE=production
 ENTRYPOINT ["crawler"]

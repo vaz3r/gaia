@@ -1,26 +1,33 @@
 use sqlx::PgPool;
 
-const BATCH_SIZE: i64 = 50_000;
-
-pub async fn run(pool: &PgPool) {
-    cleanup_dead(pool).await;
-    cleanup_verified(pool).await;
+pub struct JanitorConfig {
+    pub dead_retention_secs: u64,
+    pub verified_retention_secs: u64,
+    pub batch_size: i64,
+    pub batch_sleep_ms: u64,
 }
 
-async fn cleanup_dead(pool: &PgPool) {
+pub async fn run(pool: &PgPool, cfg: &JanitorConfig) {
+    cleanup_dead(pool, cfg).await;
+    cleanup_verified(pool, cfg).await;
+}
+
+async fn cleanup_dead(pool: &PgPool, cfg: &JanitorConfig) {
     let mut total: i64 = 0;
     loop {
-        let result = sqlx::query(
+        let sql = format!(
             "DELETE FROM verification_jobs \
              WHERE ctid = ANY( \
                  SELECT ctid FROM verification_jobs \
-                 WHERE status = 'dead' AND updated_at < now() - interval '1 day' \
+                 WHERE status = 'dead' AND updated_at < now() - interval '{} seconds' \
                  LIMIT $1 \
              )",
-        )
-        .bind(BATCH_SIZE)
-        .execute(pool)
-        .await;
+            cfg.dead_retention_secs
+        );
+        let result = sqlx::query(&sql)
+            .bind(cfg.batch_size)
+            .execute(pool)
+            .await;
 
         match result {
             Ok(r) => {
@@ -29,10 +36,10 @@ async fn cleanup_dead(pool: &PgPool) {
                 if n == 0 {
                     break;
                 }
-                if n < BATCH_SIZE {
+                if n < cfg.batch_size {
                     break;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(cfg.batch_sleep_ms)).await;
             }
             Err(e) => {
                 tracing::warn!(error = %e, "janitor: delete dead failed");
@@ -45,20 +52,22 @@ async fn cleanup_dead(pool: &PgPool) {
     }
 }
 
-async fn cleanup_verified(pool: &PgPool) {
+async fn cleanup_verified(pool: &PgPool, cfg: &JanitorConfig) {
     let mut total: i64 = 0;
     loop {
-        let result = sqlx::query(
+        let sql = format!(
             "DELETE FROM verification_jobs \
              WHERE ctid = ANY( \
                  SELECT ctid FROM verification_jobs \
-                 WHERE status = 'verified' AND updated_at < now() - interval '1 hour' \
+                 WHERE status = 'verified' AND updated_at < now() - interval '{} seconds' \
                  LIMIT $1 \
              )",
-        )
-        .bind(BATCH_SIZE)
-        .execute(pool)
-        .await;
+            cfg.verified_retention_secs
+        );
+        let result = sqlx::query(&sql)
+            .bind(cfg.batch_size)
+            .execute(pool)
+            .await;
 
         match result {
             Ok(r) => {
@@ -67,10 +76,10 @@ async fn cleanup_verified(pool: &PgPool) {
                 if n == 0 {
                     break;
                 }
-                if n < BATCH_SIZE {
+                if n < cfg.batch_size {
                     break;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(cfg.batch_sleep_ms)).await;
             }
             Err(e) => {
                 tracing::warn!(error = %e, "janitor: delete verified failed");
