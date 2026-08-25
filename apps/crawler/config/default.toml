@@ -45,6 +45,7 @@ utp_timeout_secs = 5
 metadata_timeout_secs = 25
 race_peers = 8
 global_fetch_limit = 1200
+max_connections_per_ip = 4
 utp_enabled = true
 max_message_len = 16777216
 max_pieces = 4096
@@ -57,6 +58,7 @@ scheduler_interval_secs = 15
 scheduler_claim_limit = 1000
 scheduler_fresh_ratio = 0.7
 stale_verifying_timeout_secs = 300
+no_peers_terminal_on_first = true
 
 [storage]
 pg_pool_max_connections = 128
@@ -64,16 +66,17 @@ pg_pool_min_connections = 1
 pg_pool_acquire_timeout_secs = 30
 batch_flush_interval_secs = 1
 batch_flush_chunk = 5000
+torrent_batch_chunk = 2000
 batch_initial_capacity = 4096
 sighting_flush_interval_ms = 500
 sighting_chunk_size = 256
 metrics_flush_interval_secs = 60
 peer_outcomes_flush_interval_secs = 30
 peer_outcomes_chunk_size = 256
-janitor_interval_secs = 14400
+janitor_interval_secs = 1800
 janitor_dead_retention_secs = 86400
 janitor_verified_retention_secs = 3600
-janitor_batch_size = 50000
+janitor_batch_size = 25000
 janitor_batch_sleep_ms = 100
 
 [cache]

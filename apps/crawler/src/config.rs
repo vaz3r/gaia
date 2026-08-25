@@ -66,6 +66,7 @@ pub struct FetchConfig {
     pub metadata_timeout_secs: u64,
     pub race_peers: usize,
     pub global_fetch_limit: usize,
+    pub max_connections_per_ip: usize,
     pub utp_enabled: bool,
     pub max_message_len: usize,
     pub max_pieces: usize,
@@ -80,6 +81,7 @@ pub struct RetryConfig {
     pub scheduler_claim_limit: i64,
     pub scheduler_fresh_ratio: f64,
     pub stale_verifying_timeout_secs: u64,
+    pub no_peers_terminal_on_first: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -89,6 +91,7 @@ pub struct StorageConfig {
     pub pg_pool_acquire_timeout_secs: u64,
     pub batch_flush_interval_secs: u64,
     pub batch_flush_chunk: usize,
+    pub torrent_batch_chunk: usize,
     pub batch_initial_capacity: usize,
     pub sighting_flush_interval_ms: u64,
     pub sighting_chunk_size: usize,
@@ -205,6 +208,7 @@ impl Default for FetchConfig {
             metadata_timeout_secs: 25,
             race_peers: 8,
             global_fetch_limit: 1200,
+            max_connections_per_ip: 4,
             utp_enabled: true,
             max_message_len: 16 * 1024 * 1024,
             max_pieces: 4096,
@@ -222,6 +226,7 @@ impl Default for RetryConfig {
             scheduler_claim_limit: 1000,
             scheduler_fresh_ratio: 0.7,
             stale_verifying_timeout_secs: 300,
+            no_peers_terminal_on_first: true,
         }
     }
 }
@@ -234,16 +239,17 @@ impl Default for StorageConfig {
             pg_pool_acquire_timeout_secs: 30,
             batch_flush_interval_secs: 1,
             batch_flush_chunk: 5000,
+            torrent_batch_chunk: 2000,
             batch_initial_capacity: 4096,
             sighting_flush_interval_ms: 500,
             sighting_chunk_size: 256,
             metrics_flush_interval_secs: 60,
             peer_outcomes_flush_interval_secs: 30,
             peer_outcomes_chunk_size: 256,
-            janitor_interval_secs: 4 * 3600,
+            janitor_interval_secs: 1800,
             janitor_dead_retention_secs: 86400,
             janitor_verified_retention_secs: 3600,
-            janitor_batch_size: 50000,
+            janitor_batch_size: 25000,
             janitor_batch_sleep_ms: 100,
         }
     }
@@ -576,6 +582,8 @@ struct PartialFetch {
     #[serde(default)]
     global_fetch_limit: Option<usize>,
     #[serde(default)]
+    max_connections_per_ip: Option<usize>,
+    #[serde(default)]
     utp_enabled: Option<bool>,
     #[serde(default)]
     max_message_len: Option<usize>,
@@ -599,6 +607,8 @@ struct PartialRetry {
     scheduler_fresh_ratio: Option<f64>,
     #[serde(default)]
     stale_verifying_timeout_secs: Option<u64>,
+    #[serde(default)]
+    no_peers_terminal_on_first: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -613,6 +623,8 @@ struct PartialStorage {
     batch_flush_interval_secs: Option<u64>,
     #[serde(default)]
     batch_flush_chunk: Option<usize>,
+    #[serde(default)]
+    torrent_batch_chunk: Option<usize>,
     #[serde(default)]
     batch_initial_capacity: Option<usize>,
     #[serde(default)]
@@ -834,6 +846,9 @@ impl PartialFetch {
         if let Some(v) = self.global_fetch_limit {
             cfg.global_fetch_limit = v;
         }
+        if let Some(v) = self.max_connections_per_ip {
+            cfg.max_connections_per_ip = v;
+        }
         if let Some(v) = self.utp_enabled {
             cfg.utp_enabled = v;
         }
@@ -869,6 +884,9 @@ impl PartialRetry {
         if let Some(v) = self.stale_verifying_timeout_secs {
             cfg.stale_verifying_timeout_secs = v;
         }
+        if let Some(v) = self.no_peers_terminal_on_first {
+            cfg.no_peers_terminal_on_first = v;
+        }
     }
 }
 
@@ -888,6 +906,9 @@ impl PartialStorage {
         }
         if let Some(v) = self.batch_flush_chunk {
             cfg.batch_flush_chunk = v;
+        }
+        if let Some(v) = self.torrent_batch_chunk {
+            cfg.torrent_batch_chunk = v;
         }
         if let Some(v) = self.batch_initial_capacity {
             cfg.batch_initial_capacity = v;
@@ -1021,6 +1042,11 @@ mod tests {
         assert_eq!(c.retry.scheduler_claim_limit, 1000);
         assert_eq!(c.storage.pg_pool_max_connections, 128);
         assert_eq!(c.logging.log_dir, PathBuf::from("data/logs"));
+        assert_eq!(c.fetch.max_connections_per_ip, 4);
+        assert_eq!(c.retry.no_peers_terminal_on_first, true);
+        assert_eq!(c.storage.torrent_batch_chunk, 2000);
+        assert_eq!(c.storage.janitor_interval_secs, 1800);
+        assert_eq!(c.storage.janitor_batch_size, 25000);
     }
 
     #[test]

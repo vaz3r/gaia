@@ -37,21 +37,32 @@ pub struct BatchWriter {
     torrents: Mutex<Vec<TorrentEntry>>,
     backoffs: Vec<Duration>,
     max_retries: i32,
+    no_peers_terminal_on_first: bool,
     flush_chunk: usize,
+    torrent_flush_chunk: usize,
     flushing: AtomicBool,
     jobs_written: AtomicU64,
     torrents_written: AtomicU64,
 }
 
 impl BatchWriter {
-    pub fn new(pool: PgPool, backoffs: Vec<Duration>, max_retries: i32, flush_chunk: usize) -> Self {
+    pub fn new(
+        pool: PgPool,
+        backoffs: Vec<Duration>,
+        max_retries: i32,
+        no_peers_terminal_on_first: bool,
+        flush_chunk: usize,
+        torrent_flush_chunk: usize,
+    ) -> Self {
         BatchWriter {
             pool,
             jobs: Mutex::new(Vec::with_capacity(4096)),
             torrents: Mutex::new(Vec::with_capacity(4096)),
             backoffs,
             max_retries,
+            no_peers_terminal_on_first,
             flush_chunk: flush_chunk.max(1),
+            torrent_flush_chunk: torrent_flush_chunk.max(1),
             flushing: AtomicBool::new(false),
             jobs_written: AtomicU64::new(0),
             torrents_written: AtomicU64::new(0),
@@ -119,6 +130,7 @@ impl BatchWriter {
                     &failed_updates,
                     self.flush_chunk,
                     self.max_retries,
+                    self.no_peers_terminal_on_first,
                     &self.backoffs,
                 )
                 .await
@@ -135,7 +147,7 @@ impl BatchWriter {
                 .collect();
         }
         if !torrent_batch.is_empty() {
-            if flush_torrents(&self.pool, &torrent_batch, self.flush_chunk).await {
+            if flush_torrents(&self.pool, &torrent_batch, self.torrent_flush_chunk).await {
                 self.torrents_written
                     .fetch_add(torrent_batch.len() as u64, Ordering::Relaxed);
             }
@@ -166,6 +178,7 @@ async fn flush_jobs(
     batch: &[&JobUpdate],
     flush_chunk: usize,
     max_retries: i32,
+    no_peers_terminal_on_first: bool,
     backoffs: &[Duration],
 ) -> bool {
     let failed_ihs: Vec<&[u8]> = batch
@@ -221,8 +234,9 @@ async fn flush_jobs(
                     }
                     let current_rc = retry_map.get(&raw).copied().unwrap_or(0);
                     let new_count = current_rc + 1;
-                    let terminal = new_count >= max_retries
-                        || (error == "no_peers" && current_rc >= 1);
+                    let no_peers_terminal = error == "no_peers"
+                        && (no_peers_terminal_on_first || current_rc >= 1);
+                    let terminal = new_count >= max_retries || no_peers_terminal;
                     if terminal {
                         resolved.push(ResolvedJob {
                             ih: ih.as_slice(),

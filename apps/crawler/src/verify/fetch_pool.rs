@@ -166,6 +166,7 @@ pub async fn verify_infohash(
     announce_peer_cache: Arc<crate::verify::AnnouncePeerCache>,
     direct: Option<SocketAddr>,
     peer_outcomes: Arc<PeerOutcomeWriter>,
+    conn_limiter: Arc<crate::verify::ConnLimiter>,
 ) -> VerifyResult {
     let race_peers = params.race_peers;
     let (mut peers, state) = match source_peers(
@@ -223,7 +224,9 @@ pub async fn verify_infohash(
         let fetch_timeout = params.metadata_timeout;
         let tcp_timeout = params.tcp_timeout;
         let utp_timeout = params.utp_timeout;
+        let limiter = conn_limiter.clone();
         set.spawn(async move {
+            let _permit = limiter.acquire(addr.ip()).await;
             try_fetch(addr, ih, pid, metrics, cache, utp, po, source, fetch_timeout, tcp_timeout, utp_timeout).await
         });
     }

@@ -180,7 +180,9 @@ async fn main() {
         pool.clone(),
         retry_backoffs.clone(),
         config.retry.max_retries,
+        config.retry.no_peers_terminal_on_first,
         config.storage.batch_flush_chunk,
+        config.storage.torrent_batch_chunk,
     ));
 
     let (shutdown_tx, _shutdown_rx) = broadcast::channel(1);
@@ -199,12 +201,23 @@ async fn main() {
         batch_sleep_ms: config.storage.janitor_batch_sleep_ms,
     };
     tokio::spawn(async move {
-        storage::janitor::run(&janitor_pool, &janitor_config).await;
+        let report = storage::janitor::run(&janitor_pool, &janitor_config).await;
+        if report.dead_deleted == 0 && report.verified_deleted == 0 {
+            tracing::info!("janitor: nothing to clean (table drained)");
+        }
         let mut tick =
             tokio::time::interval(Duration::from_secs(config.storage.janitor_interval_secs));
         loop {
             tick.tick().await;
-            storage::janitor::run(&janitor_pool, &janitor_config).await;
+            let report = storage::janitor::run(&janitor_pool, &janitor_config).await;
+            let _ = sqlx::query(
+                "INSERT INTO metrics (ts, metric_name, metric_value) \
+                 VALUES (now(), 'janitor_deleted', $1) \
+                 ON CONFLICT (ts, metric_name) DO UPDATE SET metric_value = EXCLUDED.metric_value",
+            )
+            .bind(report.dead_deleted + report.verified_deleted)
+            .execute(&janitor_pool)
+            .await;
         }
     });
 
@@ -242,6 +255,7 @@ async fn main() {
         peer_cache.clone(),
         announce_peer_cache,
         peer_outcomes,
+        Arc::new(verify::ConnLimiter::new(config.fetch.max_connections_per_ip)),
         verify::VerifyConfig {
             global_limit: config.fetch.global_fetch_limit,
             params: FetchParams {
@@ -316,16 +330,22 @@ fn log_effective_config(config: &Config) {
         rate_limit_burst = config.dht.rate_limit_burst,
         global_fetch_limit = config.fetch.global_fetch_limit,
         race_peers = config.fetch.race_peers,
+        max_conns_per_ip = config.fetch.max_connections_per_ip,
         metadata_timeout_secs = config.fetch.metadata_timeout_secs,
         tcp_timeout_secs = config.fetch.tcp_timeout_secs,
         utp_timeout_secs = config.fetch.utp_timeout_secs,
         utp_enabled = config.fetch.utp_enabled,
         max_retries = config.retry.max_retries,
+        no_peers_terminal_on_first = config.retry.no_peers_terminal_on_first,
         scheduler_claim_limit = config.retry.scheduler_claim_limit,
         scheduler_interval_secs = config.retry.scheduler_interval_secs,
         pg_pool_max = config.storage.pg_pool_max_connections,
         pg_pool_acquire_timeout = config.storage.pg_pool_acquire_timeout_secs,
         batch_flush_interval = config.storage.batch_flush_interval_secs,
+        batch_flush_chunk = config.storage.batch_flush_chunk,
+        torrent_batch_chunk = config.storage.torrent_batch_chunk,
+        janitor_interval_secs = config.storage.janitor_interval_secs,
+        janitor_batch_size = config.storage.janitor_batch_size,
         bloom_capacity = config.harvest.bloom_capacity,
         log_json = config.logging.log_json,
         log_dir = %config.logging.log_dir.display(),

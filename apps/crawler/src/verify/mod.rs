@@ -72,6 +72,35 @@ pub struct VerifyConfig {
     pub params: FetchParams,
 }
 
+/// Bounds concurrent TCP+uTP connects per peer IP so a small set of high-value
+/// multi-port seedboxes is not hammered (prevents librqbit_utp "too many
+/// concurrent connections" floods and wasted connect attempts).
+pub struct ConnLimiter {
+    inner: dashmap::DashMap<std::net::IpAddr, Arc<tokio::sync::Semaphore>>,
+    permits: usize,
+}
+
+impl ConnLimiter {
+    pub fn new(permits: usize) -> Self {
+        ConnLimiter {
+            inner: dashmap::DashMap::new(),
+            permits: permits.max(1),
+        }
+    }
+
+    pub async fn acquire(
+        &self,
+        ip: std::net::IpAddr,
+    ) -> tokio::sync::OwnedSemaphorePermit {
+        let sem = self
+            .inner
+            .entry(ip)
+            .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(self.permits)))
+            .clone();
+        sem.acquire_owned().await.expect("conn limiter closed")
+    }
+}
+
 pub async fn run_pipeline(
     mut rx: mpsc::Receiver<Infohash>,
     mut announce_rx: mpsc::Receiver<(Infohash, SocketAddr)>,
@@ -82,6 +111,7 @@ pub async fn run_pipeline(
     peer_cache: Arc<PeerCache>,
     announce_peer_cache: Arc<AnnouncePeerCache>,
     peer_outcomes: Arc<crate::storage::peer_outcomes::PeerOutcomeWriter>,
+    conn_limiter: Arc<ConnLimiter>,
     config: VerifyConfig,
 ) {
     let global = Arc::new(Semaphore::new(config.global_limit.max(1)));
@@ -125,6 +155,7 @@ pub async fn run_pipeline(
         let peer_cache = peer_cache.clone();
         let announce_peer_cache = announce_peer_cache.clone();
         let peer_outcomes = peer_outcomes.clone();
+        let conn_limiter = conn_limiter.clone();
         let params = config.params.clone();
         tokio::spawn(async move {
             let _permit = _permit;
@@ -132,7 +163,7 @@ pub async fn run_pipeline(
                 metrics.announce_attempts.add(1);
             }
             metrics.verify_attempts.add(1);
-            match verify_infohash(router, utp, ih, &params, metrics.clone(), peer_cache, announce_peer_cache, direct, peer_outcomes).await {
+            match verify_infohash(router, utp, ih, &params, metrics.clone(), peer_cache, announce_peer_cache, direct, peer_outcomes, conn_limiter).await {
                 VerifyResult::Success(meta) if check(&ih, &meta) => {
                     crate::trace_lifecycle!(&ih, "sha1_check", stream = "verify", result = "pass");
                     metrics.verify_success.add(1);
