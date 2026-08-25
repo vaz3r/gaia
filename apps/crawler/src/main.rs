@@ -262,7 +262,7 @@ async fn main() {
         metrics.clone(),
         sightings.clone(),
         batch_writer.clone(),
-        Duration::from_secs(15),
+        Duration::from_secs(config.report_interval_secs),
     );
     let cache_cleanup = cache_cleanup_loop(
         peer_cache_cleanup,
@@ -295,7 +295,7 @@ async fn main() {
     tracing::info!("shutdown complete");
 
     // Let logging guard flush remaining events
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(config.shutdown_flush_ms)).await;
     drop(_logging_guard);
 }
 
@@ -414,7 +414,10 @@ async fn spawn_node(
     tokio::spawn(async move {
         walker.run().await;
     });
-    tokio::spawn(limiter_sweep_loop(limiter.clone()));
+    tokio::spawn(limiter_sweep_loop(
+        limiter.clone(),
+        Duration::from_secs(config.rate_limit_sweep_interval_secs),
+    ));
     let snap_path = data_dir.join("routing_table.bin");
     tokio::spawn(routing_snapshot_loop(
         table.clone(),
@@ -492,8 +495,8 @@ async fn flush_sightings(writer: Arc<SightingWriter>, mut rx: mpsc::Receiver<(No
     }
 }
 
-async fn limiter_sweep_loop(limiter: Arc<RateLimiter>) {
-    let mut tick = tokio::time::interval(Duration::from_secs(60));
+async fn limiter_sweep_loop(limiter: Arc<RateLimiter>, interval: Duration) {
+    let mut tick = tokio::time::interval(interval);
     loop {
         tick.tick().await;
         let expired = limiter.sweep_expired();
@@ -609,6 +612,7 @@ async fn report_loop(
             routing_buckets_used = cur.routing_buckets_used,
             routing_new_ids = cur.routing_new_ids,
             routing_rejected = cur.routing_rejected,
+            log_dropped = cur.log_dropped,
         );
         prev = cur;
     }

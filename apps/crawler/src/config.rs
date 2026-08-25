@@ -22,6 +22,9 @@ pub struct Config {
     pub debug_ih: Option<String>,
     pub parse_nodes6: bool,
     pub channel_capacity: usize,
+    pub report_interval_secs: u64,
+    pub rate_limit_sweep_interval_secs: u64,
+    pub shutdown_flush_ms: u64,
 
     pub dht: DhtConfig,
     pub fetch: FetchConfig,
@@ -152,6 +155,9 @@ impl Default for Config {
             debug_ih: None,
             parse_nodes6: false,
             channel_capacity: 65536,
+            report_interval_secs: 15,
+            rate_limit_sweep_interval_secs: 60,
+            shutdown_flush_ms: 500,
             dht: DhtConfig::default(),
             fetch: FetchConfig::default(),
             retry: RetryConfig::default(),
@@ -376,6 +382,9 @@ impl Config {
             self.port_base = self.bind_addr.port();
         }
         self.channel_capacity = env_usize("CRAW_CHANNEL_CAPACITY", self.channel_capacity);
+        self.report_interval_secs = env_u64("CRAW_REPORT_INTERVAL", self.report_interval_secs);
+        self.rate_limit_sweep_interval_secs =
+            env_u64("CRAW_RATE_LIMIT_SWEEP_INTERVAL", self.rate_limit_sweep_interval_secs);
         if let Ok(dir) = std::env::var("CRAW_DATA_DIR") {
             self.data_dir = PathBuf::from(dir);
             // If data_dir changes and logging log_dir wasn't explicitly set
@@ -487,6 +496,12 @@ struct PartialConfig {
     parse_nodes6: Option<bool>,
     #[serde(default)]
     channel_capacity: Option<usize>,
+    #[serde(default)]
+    report_interval_secs: Option<u64>,
+    #[serde(default)]
+    rate_limit_sweep_interval_secs: Option<u64>,
+    #[serde(default)]
+    shutdown_flush_ms: Option<u64>,
     #[serde(default)]
     dht: Option<PartialDht>,
     #[serde(default)]
@@ -703,6 +718,15 @@ impl PartialConfig {
         }
         if let Some(v) = self.channel_capacity {
             cfg.channel_capacity = v;
+        }
+        if let Some(v) = self.report_interval_secs {
+            cfg.report_interval_secs = v;
+        }
+        if let Some(v) = self.rate_limit_sweep_interval_secs {
+            cfg.rate_limit_sweep_interval_secs = v;
+        }
+        if let Some(v) = self.shutdown_flush_ms {
+            cfg.shutdown_flush_ms = v;
         }
         if let Some(v) = self.dht {
             v.merge_into(&mut cfg.dht);
