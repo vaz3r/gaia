@@ -214,7 +214,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "craw"
+name = "crawler"
 version = "0.1.0"
 dependencies = [
  "bincode",

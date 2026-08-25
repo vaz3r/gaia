@@ -11,23 +11,17 @@ set -euo pipefail
 
 HOST="${1:-zerone}"
 REF="${2:-HEAD}"
-REMOTE_GIT="/home/ubuntu/craw-stack"
-REMOTE_DIR="$REMOTE_GIT/craw"
-SSH_KEY="$(dirname "$0")/zerone"
+REMOTE_GIT="/home/ubuntu/gaia"
+REMOTE_COMPOSE="$REMOTE_GIT/deploy/compose"
+SSH_KEY="${HOME}/.ssh/zerone"
 SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no ubuntu@$HOST"
 
 # ── Load env ──
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# Production env takes precedence for deploy operations
-if [ -f "$SCRIPT_DIR/craw-stack/.env" ]; then
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+if [ -f "$REPO_ROOT/.env" ]; then
     set -a
     # shellcheck disable=SC1091
-    source "$SCRIPT_DIR/craw-stack/.env"
-    set +a
-elif [ -f "$SCRIPT_DIR/.env" ]; then
-    set -a
-    # shellcheck disable=SC1091
-    source "$SCRIPT_DIR/.env"
+    source "$REPO_ROOT/.env"
     set +a
 fi
 
@@ -54,22 +48,22 @@ $SSH "cd $REMOTE_GIT && git fetch origin && git checkout $TAG"
 $SSH "cd $REMOTE_GIT && git log --oneline -1"
 
 # ── 3. Verify Docker Compose file exists ──
-if ! $SSH "test -f $REMOTE_DIR/docker-compose.yml"; then
-    echo "ERROR: docker-compose.yml not found at $REMOTE_DIR"
+if ! $SSH "test -f $REMOTE_COMPOSE/docker-compose.yml"; then
+    echo "ERROR: docker-compose.yml not found at $REMOTE_COMPOSE"
     exit 1
 fi
 
 # ── 4. Build images ──
 echo "[3/6] Building images..."
-$SSH "cd $REMOTE_DIR && GIT_COMMIT=$TAG docker compose build crawler dashboard"
+$SSH "cd $REMOTE_COMPOSE && GIT_COMMIT=$TAG docker compose --env-file $REMOTE_GIT/.env build crawler dashboard"
 
 # ── 5. Recreate containers ──
 echo "[4/6] Recreating services..."
-$SSH "cd $REMOTE_DIR && GIT_COMMIT=$TAG docker compose up -d --force-recreate crawler dashboard"
+$SSH "cd $REMOTE_COMPOSE && GIT_COMMIT=$TAG docker compose --env-file $REMOTE_GIT/.env up -d --force-recreate crawler dashboard"
 
 # ── 6. Run db-init.sql (idempotent) ──
 echo "[5/6] Ensuring dashboard indexes..."
-scp -i "$SSH_KEY" "$SCRIPT_DIR/dashboard/db-init.sql" "ubuntu@$HOST:/tmp/db-init.sql"
+scp -i "$SSH_KEY" "$REPO_ROOT/apps/dashboard/db-init.sql" "ubuntu@$HOST:/tmp/db-init.sql"
 $SSH "docker run --rm --network host -v /tmp/db-init.sql:/tmp/db-init.sql:ro postgres:16 psql '$REMOTE_DB' -f /tmp/db-init.sql"
 
 # ── 7. Verify ──
@@ -77,7 +71,7 @@ echo "[6/6] Verifying..."
 sleep 5
 
 echo "--- Services ---"
-$SSH "docker ps --filter name=craw --format 'table {{.Names}}\t{{.Status}}'"
+$SSH "docker ps --filter name=gaia --format 'table {{.Names}}\t{{.Status}}'"
 
 echo "--- Health ---"
 HTTP_CODE=$($SSH "curl -s -o /dev/null -w '%{http_code}' http://localhost:${DASH_PORT:-3000}/api/health 2>/dev/null" || echo "000")
@@ -88,7 +82,7 @@ else
 fi
 
 echo "--- Crawler logs ---"
-$SSH "docker logs --tail 5 craw-crawler 2>&1"
+$SSH "docker logs --tail 5 gaia-crawler 2>&1"
 
 echo ""
 echo "=== Deploy $TAG complete ==="

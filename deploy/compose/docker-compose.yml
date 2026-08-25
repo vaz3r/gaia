@@ -1,14 +1,14 @@
-name: craw
+name: gaia
 
 services:
   crawler:
     build:
-      context: .
+      context: ../../apps/crawler
       dockerfile: Dockerfile
       args:
         CRAW_GIT_HASH: ${GIT_COMMIT:-unknown}
-    image: dht-crawler:${GIT_COMMIT:-latest}
-    container_name: craw-crawler
+    image: gaia-crawler:${GIT_COMMIT:-latest}
+    container_name: gaia-crawler
     init: true
     restart: unless-stopped
     network_mode: host
@@ -34,10 +34,10 @@ services:
 
   dashboard:
     build:
-      context: ./dashboard
+      context: ../../apps/dashboard
       dockerfile: Dockerfile
-    image: craw-dashboard:${GIT_COMMIT:-latest}
-    container_name: craw-dashboard
+    image: gaia-dashboard:${GIT_COMMIT:-latest}
+    container_name: gaia-dashboard
     init: true
     restart: unless-stopped
     network_mode: host
@@ -47,4 +47,4 @@ services:
 
 volumes:
   crawler-data:
-    name: dht-crawler-data
+    name: gaia-crawler-data

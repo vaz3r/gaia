@@ -2,43 +2,44 @@
 set -euo pipefail
 
 # Deploy PostgreSQL config to workspace-production.
-# Usage: ./deploy-db.sh [commit-ref]
+# Usage: ./db-init.sh [commit-ref]
 #
 # This script:
 #   1. Backs up the database (pg_dump)
-#   2. Copies postgresql.production.conf to workspace-production
+#   2. Copies postgresql.workspace-production.conf to workspace-production
 #   3. Updates docker-compose.yml to mount the config (removes -c flags)
 #   4. Recreates the craw-db container with new config
 #   5. Verifies PG is healthy with correct settings
 
 REMOTE_HOST="workspace-production"
 SSH_USER="core"
-REMOTE_DIR="/home/${SSH_USER}/craw-stack"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REMOTE_DIR="/home/${SSH_USER}/gaia"
 SSH="ssh -o StrictHostKeyChecking=no ${SSH_USER}@${REMOTE_HOST}"
 REF="${1:-HEAD}"
+
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 echo "=== Deploying PostgreSQL config to $REMOTE_HOST ==="
 
 # ── 1. Ensure remote directories exist ──
 echo "[1/7] Setting up remote directories..."
-$SSH "mkdir -p ${REMOTE_DIR}/pg"
+$SSH "mkdir -p ${REMOTE_DIR}/deploy/postgres"
 
 # ── 2. Copy config file ──
-echo "[2/7] Copying postgresql.production.conf..."
-scp -o StrictHostKeyChecking=no "$SCRIPT_DIR/pg/postgresql.production.conf" \
-    "${SSH_USER}@${REMOTE_HOST}:${REMOTE_DIR}/pg/postgresql.production.conf"
+echo "[2/7] Copying postgresql.workspace-production.conf..."
+scp -o StrictHostKeyChecking=no "$REPO_ROOT/deploy/postgres/postgresql.workspace-production.conf" \
+    "${SSH_USER}@${REMOTE_HOST}:${REMOTE_DIR}/deploy/postgres/postgresql.production.conf"
 
 # ── 3. Backup current database ──
 echo "[3/7] Backing up database (pg_dump)..."
 BACKUP_FILE="backup-$(date +%Y%m%d-%H%M).sql"
-$SSH "docker exec craw-db pg_dump -U crawler craw" > "$SCRIPT_DIR/$BACKUP_FILE"
-BACKUP_SIZE=$(wc -c < "$SCRIPT_DIR/$BACKUP_FILE" | tr -d ' ')
+$SSH "docker exec craw-db pg_dump -U crawler craw" > "$REPO_ROOT/$BACKUP_FILE"
+BACKUP_SIZE=$(wc -c < "$REPO_ROOT/$BACKUP_FILE" | tr -d ' ')
 echo "    Backup saved: $BACKUP_FILE ($BACKUP_SIZE bytes)"
 
 # ── 4. Update docker-compose.yml on remote ──
 echo "[4/7] Updating docker-compose.yml..."
-$SSH "cat > ${REMOTE_DIR}/docker-compose.yml" <<'COMPOSE'
+$SSH "cat > ${REMOTE_DIR}/deploy/compose/docker-compose.yml" <<'COMPOSE'
 services:
   db:
     image: postgres:16
@@ -52,7 +53,7 @@ services:
       - "0.0.0.0:5432:5432"
     volumes:
       - pg-data:/var/lib/postgresql/data
-      - ./pg/postgresql.production.conf:/etc/postgresql/production.conf
+      - ./postgres/postgresql.production.conf:/etc/postgresql/production.conf
     restart: unless-stopped
     command: postgres -c config_file=/etc/postgresql/production.conf
 
@@ -70,7 +71,7 @@ echo "    .env OK"
 
 # ── 6. Recreate container ──
 echo "[6/7] Recreating craw-db container..."
-$SSH "cd ${REMOTE_DIR} && docker compose up -d --force-recreate db"
+$SSH "cd ${REMOTE_DIR}/deploy/compose && docker compose --env-file ${REMOTE_DIR}/.env up -d --force-recreate db"
 
 echo "    Waiting for PostgreSQL to be ready..."
 for i in $(seq 1 30); do
@@ -115,4 +116,4 @@ $SSH "docker ps --filter name=craw-db --format 'table {{.Names}}\t{{.Status}}\t{
 
 echo ""
 echo "=== PostgreSQL config deploy complete ==="
-echo "    Backup: $SCRIPT_DIR/$BACKUP_FILE"
+echo "    Backup: $REPO_ROOT/$BACKUP_FILE"
