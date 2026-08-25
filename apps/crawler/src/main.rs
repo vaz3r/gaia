@@ -2,6 +2,7 @@ mod config;
 mod dht;
 mod harvest;
 mod krpc;
+mod logging;
 mod metrics;
 mod net;
 mod router;
@@ -27,6 +28,7 @@ use crate::verify::VerifyConfig;
 use crate::verify::peer_cache::PeerCache;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -37,13 +39,10 @@ const ROUTING_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(60);
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
-
     let config = Config::from_env();
+
+    let log_dropped = Arc::new(AtomicU64::new(0));
+    let _logging_guard = logging::init(&config, log_dropped.clone());
 
     tracing::info!(
         git_hash = env!("CRAW_GIT_HASH"),
@@ -79,7 +78,7 @@ async fn main() {
         return;
     }
 
-    let metrics = Arc::new(Metrics::new());
+    let metrics = Arc::new(Metrics::new(log_dropped));
     crate::trace::TRACE_CONFIG
         .set(TraceConfig::new(config.trace_sample_rate, config.debug_ih.clone()))
         .unwrap_or(());
@@ -230,6 +229,10 @@ async fn main() {
     batch_writer.flush().await;
     sightings.flush().await;
     tracing::info!("shutdown complete");
+
+    // Let logging guard flush remaining events
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drop(_logging_guard);
 }
 
 async fn utp_socket() -> Option<Arc<librqbit_utp::UtpSocketUdp>> {

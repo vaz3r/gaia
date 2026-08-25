@@ -72,7 +72,7 @@ impl Harvester {
                 self.current.clear();
             }
             self.metrics.unique_infohashes.add(1);
-            crate::trace_lifecycle!(&ih, "discovered", source = source.tag());
+            crate::trace_lifecycle!(&ih, "discovered", stream = "dht", source = source.tag());
             return true;
         }
 
@@ -89,7 +89,7 @@ impl Harvester {
             self.current.clear();
         }
         self.metrics.unique_infohashes.add(1);
-        crate::trace_lifecycle!(&ih, "discovered", source = source.tag());
+        crate::trace_lifecycle!(&ih, "discovered", stream = "dht", source = source.tag());
         true
     }
 

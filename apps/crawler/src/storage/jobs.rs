@@ -32,12 +32,12 @@ impl VerifyStore {
         .bind(ih.as_slice())
         .execute(&self.pool)
         .await?;
-        crate::trace_lifecycle!(&ih, "job_update", status = "verified");
+        crate::trace_lifecycle!(&ih, "job_update", stream = "db", status = "verified");
         Ok(())
     }
 
     pub async fn mark_failed(&self, ih: Infohash, error: &str) -> Result<(), sqlx::Error> {
-        crate::trace_lifecycle!(&ih, "job_update", status = "failed", result = error);
+        crate::trace_lifecycle!(&ih, "job_update", stream = "db", status = "failed", result = error);
         let row = sqlx::query("SELECT retry_count FROM verification_jobs WHERE infohash = $1")
             .bind(ih.as_slice())
             .fetch_optional(&self.pool)
@@ -119,7 +119,7 @@ impl VerifyStore {
             let raw: Vec<u8> = row.get(0);
             let retry_count: i32 = row.get(1);
             if let Ok(ih) = <[u8; 20]>::try_from(raw.as_slice()) {
-                crate::trace_lifecycle!(&ih, "claimed", attempt = retry_count as u32);
+                crate::trace_lifecycle!(&ih, "claimed", stream = "db", attempt = retry_count as u32);
                 out.push(ih);
             }
         }

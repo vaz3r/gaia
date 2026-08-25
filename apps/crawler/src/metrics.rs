@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 #[derive(Default)]
 pub struct Metrics {
@@ -86,11 +87,16 @@ pub struct Metrics {
     pub routing_buckets_used: AtomicU64,
     pub routing_new_ids: AtomicU64,
     pub routing_rejected: AtomicU64,
+    // Logging metrics
+    pub log_dropped: Arc<AtomicU64>,
 }
 
 impl Metrics {
-    pub fn new() -> Self {
-        Metrics::default()
+    pub fn new(log_dropped: Arc<AtomicU64>) -> Self {
+        Metrics {
+            log_dropped,
+            ..Metrics::default()
+        }
     }
 }
 
@@ -180,6 +186,7 @@ pub struct Snapshot {
     pub routing_buckets_used: u64,
     pub routing_new_ids: u64,
     pub routing_rejected: u64,
+    pub log_dropped: u64,
 }
 
 impl Metrics {
@@ -261,6 +268,7 @@ impl Metrics {
             routing_buckets_used: self.routing_buckets_used.load(Ordering::Relaxed),
             routing_new_ids: self.routing_new_ids.load(Ordering::Relaxed),
             routing_rejected: self.routing_rejected.load(Ordering::Relaxed),
+            log_dropped: self.log_dropped.load(Ordering::Relaxed),
         }
     }
 }

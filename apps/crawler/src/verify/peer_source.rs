@@ -39,7 +39,7 @@ pub async fn source_peers(
     let mut succeeded: u64 = 0;
 
     let start_time = std::time::Instant::now();
-    crate::trace_lifecycle!(&info_hash, "source_start");
+    crate::trace_lifecycle!(&info_hash, "source_start", stream = "dht");
 
     // Pipelined iterative get_peers lookup: keep up to ALPHA queries in
     // flight at all times, issuing the next closest unqueried candidate as
@@ -95,6 +95,7 @@ pub async fn source_peers(
                         crate::trace_lifecycle!(
                             &info_hash,
                             "source_response",
+                            stream = "dht",
                             node = node_addr.to_string(),
                             peers_returned = returned_here
                         );
@@ -151,6 +152,7 @@ pub async fn source_peers(
     crate::trace_lifecycle!(
         &info_hash,
         "source_done",
+        stream = "dht",
         peers = peers.len(),
         elapsed_ms = start_time.elapsed().as_millis() as u64
     );
@@ -187,7 +189,7 @@ fn spawn_query(
     metrics.source_queries.add(1);
     set.spawn(async move {
         let node_str = addr.to_string();
-        crate::trace_lifecycle!(&ih, "source_query", node = node_str);
+        crate::trace_lifecycle!(&ih, "source_query", stream = "dht", node = node_str);
         let res = router
             .send_query(GET_PEERS, addr, args, QUERY_TIMEOUT)
             .await;

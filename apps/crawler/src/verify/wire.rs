@@ -253,6 +253,7 @@ impl WireSession {
         crate::trace_lifecycle!(
             &self.info_hash,
             "ext_handshake",
+            stream = "fetch",
             client = client.as_deref().unwrap_or("unknown"),
             ut_metadata = self.ut_metadata as u32,
             metadata_size = self.metadata_size.unwrap_or(0) as usize,
@@ -324,7 +325,7 @@ impl WireSession {
         let mut skipped_non_ext = 0u32;
         let mut skipped_non_metadata = 0u32;
 
-        crate::trace_lifecycle!(&self.info_hash, "metadata_start");
+        crate::trace_lifecycle!(&self.info_hash, "metadata_start", stream = "fetch");
         let start_time = std::time::Instant::now();
 
         self.write_message(self.ut_metadata, &request(piece), timeout)
@@ -340,6 +341,7 @@ impl WireSession {
                             crate::trace_lifecycle!(
                                 &self.info_hash,
                                 "metadata_eof_with_skipped",
+                                stream = "fetch",
                                 skipped_non_ext = skipped_non_ext,
                                 skipped_non_metadata = skipped_non_metadata,
                                 elapsed_ms = start_time.elapsed().as_millis() as u64
@@ -354,6 +356,7 @@ impl WireSession {
                         crate::trace_lifecycle!(
                             &self.info_hash,
                             "metadata_timeout_with_skipped",
+                            stream = "fetch",
                             skipped_non_ext = skipped_non_ext,
                             skipped_non_metadata = skipped_non_metadata,
                             elapsed_ms = start_time.elapsed().as_millis() as u64
@@ -392,6 +395,7 @@ impl WireSession {
             crate::trace_lifecycle!(
                 &self.info_hash,
                 "metadata_piece",
+                stream = "fetch",
                 piece = piece_status.as_str(),
                 status = "ok",
                 elapsed_ms = piece_start.elapsed().as_millis() as u64
@@ -417,6 +421,7 @@ impl WireSession {
         crate::trace_lifecycle!(
             &self.info_hash,
             "metadata_done",
+            stream = "fetch",
             elapsed_ms = start_time.elapsed().as_millis() as u64
         );
         Ok(metadata)

@@ -140,34 +140,34 @@ pub async fn run_pipeline(
             metrics.verify_attempts.add(1);
             match verify_infohash(router, utp, ih, race, metrics.clone(), peer_cache, announce_peer_cache, direct, peer_outcomes, fetch_timeout, source_deadline).await {
                 VerifyResult::Success(meta) if check(&ih, &meta) => {
-                    crate::trace_lifecycle!(&ih, "sha1_check", result = "pass");
+                    crate::trace_lifecycle!(&ih, "sha1_check", stream = "verify", result = "pass");
                     metrics.verify_success.add(1);
                     if is_direct {
                         metrics.announce_success.add(1);
                     }
                     batch_writer.push_torrent(ih, &meta);
-                    crate::trace_lifecycle!(&ih, "persist_torrents", status = "ok");
+                    crate::trace_lifecycle!(&ih, "persist_torrents", stream = "verify", status = "ok");
                     batch_writer.push_verified(ih);
                 }
                 VerifyResult::Success(_) => {
-                    crate::trace_lifecycle!(&ih, "sha1_check", result = "fail");
+                    crate::trace_lifecycle!(&ih, "sha1_check", stream = "verify", result = "fail");
                     metrics.sha1_mismatch.add(1);
                     metrics.verify_fail.add(1);
                     batch_writer.push_failed(ih, "sha1_mismatch");
                 }
                 VerifyResult::NoPeers => {
-                    crate::trace_lifecycle!(&ih, "verify_fail", result = "no_peers");
+                    crate::trace_lifecycle!(&ih, "verify_fail", stream = "verify", result = "no_peers");
                     metrics.source_no_peers.add(1);
                     metrics.verify_fail.add(1);
                     batch_writer.push_failed(ih, "no_peers");
                 }
                 VerifyResult::SourceTimeout => {
-                    crate::trace_lifecycle!(&ih, "verify_fail", result = "source_timeout");
+                    crate::trace_lifecycle!(&ih, "verify_fail", stream = "verify", result = "source_timeout");
                     metrics.verify_fail.add(1);
                     batch_writer.push_failed(ih, "source_timeout");
                 }
                 VerifyResult::MetadataFailed => {
-                    crate::trace_lifecycle!(&ih, "verify_fail", result = "no_metadata");
+                    crate::trace_lifecycle!(&ih, "verify_fail", stream = "verify", result = "no_metadata");
                     metrics.verify_fail.add(1);
                     batch_writer.push_failed(ih, "no_metadata");
                 }

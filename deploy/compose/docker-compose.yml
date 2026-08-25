@@ -28,9 +28,12 @@ services:
       CRAW_FETCH_TIMEOUT_MS: ${CRAW_FETCH_TIMEOUT_MS:-25000}
       CRAW_SOURCE_DEADLINE_MS: ${CRAW_SOURCE_DEADLINE_MS:-25000}
       CRAW_TRACE_SAMPLE_RATE: ${CRAW_TRACE_SAMPLE_RATE:-0.01}
+      CRAW_LOG_JSON: ${CRAW_LOG_JSON:-true}
+      CRAW_LOG_DIR: /data/logs
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
-      - crawler-data:/home/crawler/data
+      - /home/ubuntu/gaia-data/crawler:/home/crawler/data
+      - /home/ubuntu/gaia-data/logs:/data/logs
 
   dashboard:
     build:
@@ -44,7 +47,3 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@${DB_HOST}:${PG_PORT:-5432}/${POSTGRES_DB:-craw}?sslmode=disable
       PORT: ${DASH_PORT:-3000}
-
-volumes:
-  crawler-data:
-    name: gaia-crawler-data

@@ -80,7 +80,7 @@ async fn try_fetch(
     metrics.tcp_attempts.add(1);
 
     let addr_str = addr.to_string();
-    crate::trace_lifecycle!(&ih, "fetch_start", peer = addr_str.clone(), transport = "tcp");
+    crate::trace_lifecycle!(&ih, "fetch_start", stream = "fetch", peer = addr_str.clone(), transport = "tcp");
     let start = std::time::Instant::now();
 
     let mut session = match WireSession::connect_tcp(addr, &ih, &pid, TCP_TIMEOUT).await {
@@ -88,7 +88,7 @@ async fn try_fetch(
             metrics.tcp_connect_ok.add(1);
             metrics.tcp_connect_actual.add(1);
             let result_str = "ok";
-            crate::trace_lifecycle!(&ih, "connect_result", peer = addr_str.clone(), transport = "tcp", result = result_str, elapsed_ms = start.elapsed().as_millis() as u64);
+            crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "tcp", result = result_str, elapsed_ms = start.elapsed().as_millis() as u64);
             s
         }
         Err(tcp_err) => {
@@ -96,18 +96,18 @@ async fn try_fetch(
                 WireError::Timeout => "timeout",
                 _ => "error",
             };
-            crate::trace_lifecycle!(&ih, "connect_result", peer = addr_str.clone(), transport = "tcp", result = result_str, elapsed_ms = start.elapsed().as_millis() as u64);
+            crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "tcp", result = result_str, elapsed_ms = start.elapsed().as_millis() as u64);
             match &utp {
                 Some(sock) => {
                     metrics.utp_attempts.add(1);
-                    crate::trace_lifecycle!(&ih, "fetch_start", peer = addr_str.clone(), transport = "utp");
+                    crate::trace_lifecycle!(&ih, "fetch_start", stream = "fetch", peer = addr_str.clone(), transport = "utp");
                     let utp_start = std::time::Instant::now();
                     match WireSession::connect_utp(sock.clone(), addr, &ih, &pid, UTP_TIMEOUT).await {
                         Ok(s) => {
                             metrics.utp_connect_ok.add(1);
                             metrics.utp_connect_actual.add(1);
                             let result_str = "ok";
-                            crate::trace_lifecycle!(&ih, "connect_result", peer = addr_str.clone(), transport = "utp", result = result_str, elapsed_ms = utp_start.elapsed().as_millis() as u64);
+                            crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "utp", result = result_str, elapsed_ms = utp_start.elapsed().as_millis() as u64);
                             s
                         }
                         Err(utp_err) => {
@@ -115,7 +115,7 @@ async fn try_fetch(
                                 WireError::Timeout => "timeout",
                                 _ => "error",
                             };
-                            crate::trace_lifecycle!(&ih, "connect_result", peer = addr_str.clone(), transport = "utp", result = result_str, elapsed_ms = utp_start.elapsed().as_millis() as u64);
+                            crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "utp", result = result_str, elapsed_ms = utp_start.elapsed().as_millis() as u64);
                             cache.mark_bad(addr);
                             peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: "tcp".to_string(), result: wire_error_to_outcome(&tcp_err).to_string(), client: None });
                             return FetchOutcome::ConnectFailed(addr, tcp_err);
@@ -179,7 +179,7 @@ pub async fn verify_infohash(
         if !peers.contains(&announcer) {
             peers.insert(0, announcer);
             announce_peers.insert(announcer);
-            crate::trace_lifecycle!(&info_hash, "announce_peer_injected", peer = announcer.to_string());
+            crate::trace_lifecycle!(&info_hash, "announce_peer_injected", stream = "fetch", peer = announcer.to_string());
         }
     }
 

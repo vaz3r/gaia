@@ -47,6 +47,9 @@ echo "[2/6] Updating source to $TAG..."
 $SSH "cd $REMOTE_GIT && git fetch origin && git checkout $TAG"
 $SSH "cd $REMOTE_GIT && git log --oneline -1"
 
+# ── 2b. Ensure data directories exist ──
+$SSH "mkdir -p /home/ubuntu/gaia-data/crawler /home/ubuntu/gaia-data/logs"
+
 # ── 3. Verify Docker Compose file exists ──
 if ! $SSH "test -f $REMOTE_COMPOSE/docker-compose.yml"; then
     echo "ERROR: docker-compose.yml not found at $REMOTE_COMPOSE"

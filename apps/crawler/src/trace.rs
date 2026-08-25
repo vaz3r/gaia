@@ -57,12 +57,13 @@ pub fn hex_encode(data: &[u8]) -> String {
 
 #[macro_export]
 macro_rules! trace_lifecycle {
-    ($ih:expr, $stage:expr $(, $key:ident = $val:expr)*) => {
+    ($ih:expr, $stage:expr, stream = $stream:expr $(, $key:ident = $val:expr)*) => {
         if $crate::trace::should_trace($ih) {
             tracing::info!(
                 target: "craw_trace",
                 ih = %$crate::trace::hex_encode($ih),
                 stage = $stage,
+                stream = $stream,
                 $($key = $val),*
             );
         }

@@ -23,10 +23,17 @@ pub struct Config {
     pub utp_enabled: bool,
     pub fetch_timeout_ms: u64,
     pub source_deadline_ms: u64,
+    pub log_dir: PathBuf,
+    pub log_file_max_bytes: u64,
+    pub log_total_max_bytes: u64,
+    pub log_flush_interval_ms: u64,
+    pub log_buffer_capacity: usize,
+    pub log_json: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
+        let data_dir = PathBuf::from("data");
         Config {
             bind_addr: "0.0.0.0:6881".parse().unwrap(),
             external_ip: None,
@@ -47,7 +54,7 @@ impl Default for Config {
             walker_interval_ms: 20,
             global_fetch_limit: 128,
             race_peers: 8,
-            data_dir: PathBuf::from("data"),
+            data_dir: data_dir.clone(),
             rate_limit_per_sec: 8.0,
             trace_sample_rate: 0.0,
             debug_ih: None,
@@ -57,6 +64,12 @@ impl Default for Config {
             utp_enabled: true,
             fetch_timeout_ms: 8000,
             source_deadline_ms: 25000,
+            log_dir: data_dir.join("logs"),
+            log_file_max_bytes: 50_000_000,
+            log_total_max_bytes: 500_000_000,
+            log_flush_interval_ms: 500,
+            log_buffer_capacity: 8192,
+            log_json: false,
         }
     }
 }
@@ -129,6 +142,17 @@ impl Config {
             .unwrap_or(true);
         c.fetch_timeout_ms = env_u64("CRAW_FETCH_TIMEOUT_MS", c.fetch_timeout_ms);
         c.source_deadline_ms = env_u64("CRAW_SOURCE_DEADLINE_MS", c.source_deadline_ms);
+        if let Ok(dir) = std::env::var("CRAW_LOG_DIR") {
+            c.log_dir = PathBuf::from(dir);
+        }
+        c.log_file_max_bytes = env_u64("CRAW_LOG_FILE_MAX", c.log_file_max_bytes);
+        c.log_total_max_bytes = env_u64("CRAW_LOG_TOTAL_MAX", c.log_total_max_bytes);
+        c.log_flush_interval_ms = env_u64("CRAW_LOG_FLUSH_MS", c.log_flush_interval_ms);
+        c.log_buffer_capacity = env_usize("CRAW_LOG_BUFFER", c.log_buffer_capacity);
+        c.log_json = std::env::var("CRAW_LOG_JSON")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
         c
     }
 }
