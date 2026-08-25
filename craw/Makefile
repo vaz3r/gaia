@@ -1,11 +1,14 @@
 HOST      ?= zerone
+DB_HOST   ?= workspace-production
 TAG       := $(shell git rev-parse --short HEAD)
 REMOTE    ?= ubuntu@$(HOST)
+DB_REMOTE ?= core@$(DB_HOST)
 SSH_KEY   ?= zerone
 REMOTE_GIT ?= /home/ubuntu/craw-stack
 REMOTE_DIR ?= $(REMOTE_GIT)/craw
+DB_REMOTE_DIR ?= /home/core/craw-stack
 
-.PHONY: dev down deploy rollback ps logs backup init-remote clean-remote
+.PHONY: dev down deploy deploy-db rollback ps logs backup db-ps db-logs db-backup init-remote clean-remote
 
 # ── Local development ──
 
@@ -49,6 +52,29 @@ backup:
 	ssh -i $(SSH_KEY) -o StrictHostKeyChecking=no $(REMOTE) \
 		"cd $(REMOTE_DIR) && docker compose exec -T db pg_dump -U crawler craw" \
 		> backups/craw-$$(date +%F-%H%M).sql
+
+# ── Database ops (workspace-production) ──
+
+deploy-db:
+	./deploy-db.sh
+
+db-ps:
+	ssh -o StrictHostKeyChecking=no $(DB_REMOTE) \
+		"cd $(DB_REMOTE_DIR) && docker compose ps"
+
+db-logs:
+	ssh -o StrictHostKeyChecking=no $(DB_REMOTE) \
+		"docker logs -f --tail=100 craw-db"
+
+db-backup:
+	mkdir -p backups
+	ssh -o StrictHostKeyChecking=no $(DB_REMOTE) \
+		"docker exec craw-db pg_dump -U crawler craw" \
+		> backups/craw-db-$$(date +%F-%H%M).sql
+
+db-status:
+	ssh -o StrictHostKeyChecking=no $(DB_REMOTE) \
+		"docker exec craw-db psql -U crawler -d craw -c \"SELECT name, setting FROM pg_settings WHERE name IN ('shared_buffers','effective_cache_size','synchronous_commit','max_connections') ORDER BY name;\""
 
 # ── Cleanup stale artifacts on remote ──
 
