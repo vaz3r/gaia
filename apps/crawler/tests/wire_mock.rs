@@ -1,5 +1,5 @@
 use bytes::{BufMut, Bytes, BytesMut};
-use craw::krpc::codec::{BValue, decode_prefix, encode_to_bytes};
+use crawler::krpc::codec::{BValue, decode_prefix, encode_to_bytes};
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -149,9 +149,9 @@ async fn test_non_metadata_extension_before_piece() {
         let _ = stream.shutdown().await;
     });
 
-    let peer_id = craw::verify::wire::gen_peer_id();
+    let peer_id = crawler::verify::wire::gen_peer_id();
     let mut session =
-        craw::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
+        crawler::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
             .await
             .unwrap();
 
@@ -210,16 +210,16 @@ async fn test_wrong_piece_number_returns_bad_piece() {
         let _ = stream.shutdown().await;
     });
 
-    let peer_id = craw::verify::wire::gen_peer_id();
+    let peer_id = crawler::verify::wire::gen_peer_id();
     let mut session =
-        craw::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
+        crawler::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
             .await
             .unwrap();
 
     let result = session
         .fetch_metadata(std::time::Duration::from_secs(5))
         .await;
-    assert!(matches!(result, Err(craw::verify::wire::WireError::BadPiece)));
+    assert!(matches!(result, Err(crawler::verify::wire::WireError::BadPiece)));
 
     server.await.unwrap();
 }
@@ -269,9 +269,9 @@ async fn test_clean_mock_peer_metadata_success() {
         let _ = stream.shutdown().await;
     });
 
-    let peer_id = craw::verify::wire::gen_peer_id();
+    let peer_id = crawler::verify::wire::gen_peer_id();
     let mut session =
-        craw::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
+        crawler::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
             .await
             .unwrap();
 
@@ -318,16 +318,16 @@ async fn test_peer_rejects_metadata_request() {
         let _ = stream.shutdown().await;
     });
 
-    let peer_id = craw::verify::wire::gen_peer_id();
+    let peer_id = crawler::verify::wire::gen_peer_id();
     let mut session =
-        craw::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
+        crawler::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
             .await
             .unwrap();
 
     let result = session
         .fetch_metadata(std::time::Duration::from_secs(5))
         .await;
-    assert!(matches!(result, Err(craw::verify::wire::WireError::Reject)));
+    assert!(matches!(result, Err(crawler::verify::wire::WireError::Reject)));
 
     server.await.unwrap();
 }
@@ -374,9 +374,9 @@ async fn test_multiple_non_metadata_messages_before_piece() {
         let _ = stream.shutdown().await;
     });
 
-    let peer_id = craw::verify::wire::gen_peer_id();
+    let peer_id = crawler::verify::wire::gen_peer_id();
     let mut session =
-        craw::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
+        crawler::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
             .await
             .unwrap();
 
@@ -425,16 +425,16 @@ async fn test_reject_then_piece() {
         let _ = stream.shutdown().await;
     });
 
-    let peer_id = craw::verify::wire::gen_peer_id();
+    let peer_id = crawler::verify::wire::gen_peer_id();
     let mut session =
-        craw::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
+        crawler::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
             .await
             .unwrap();
 
     let result = session
         .fetch_metadata(std::time::Duration::from_secs(5))
         .await;
-    assert!(matches!(result, Err(craw::verify::wire::WireError::Reject)));
+    assert!(matches!(result, Err(crawler::verify::wire::WireError::Reject)));
 
     server.await.unwrap();
 }

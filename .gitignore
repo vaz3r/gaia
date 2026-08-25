@@ -1,11 +1,30 @@
-craw/classifier/data/__pycache__/label_map.cpython-313.pyc
+# Environment
+.env
+craw-stack/
+
+# Build artifacts
+target/
+node_modules/
+dist/
+
+# Data backups
+backup-*.sql
+
+# Session files
 session-*.md
-craw/classifier/data/models/
-craw/classifier/data/predictions/
-craw/classifier/data/*augmented*.jsonl
-craw/classifier/data/labeled_clean.jsonl
-craw/classifier/data/labeled_with_docs.jsonl
-craw/classifier/data/fresh_sample.jsonl
-craw/classifier/data/documentary_candidates*.jsonl
-craw/classifier/data/labeling_template.jsonl
-craw/classifier/data/torrent_sample.jsonl*
+
+# Classifier data (large/generated)
+apps/classifier/data/__pycache__/
+apps/classifier/data/models/
+apps/classifier/data/predictions/
+apps/classifier/data/*augmented*.jsonl
+apps/classifier/data/labeled_clean.jsonl
+apps/classifier/data/labeled_with_docs.jsonl
+apps/classifier/data/fresh_sample.jsonl
+apps/classifier/data/documentary_candidates*.jsonl
+apps/classifier/data/labeling_template.jsonl
+apps/classifier/data/torrent_sample.jsonl*
+
+# Crawler build artifacts
+apps/crawler/target/
+apps/crawler/data/

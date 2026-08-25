@@ -1,5 +1,5 @@
-use craw::dht::routing_table::{NodeInfo, decode_compact, xor};
-use craw::krpc::Infohash;
+use crawler::dht::routing_table::{NodeInfo, decode_compact, xor};
+use crawler::krpc::Infohash;
 use std::net::{Ipv4Addr, SocketAddr};
 
 #[test]

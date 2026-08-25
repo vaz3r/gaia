@@ -1,0 +1,91 @@
+# Local development environment. Usage:
+#   docker compose -f deploy/compose/docker-compose.dev.yml up -d
+#
+# Standalone file (not merged with production compose).
+# Uses bridge networking with service-name DNS.
+
+services:
+  db:
+    image: postgres:16
+    container_name: gaia-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-crawler}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?PG_PASSWORD required}
+      POSTGRES_DB: ${POSTGRES_DB:-craw}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../../deploy/postgres/postgresql.dev.conf:/etc/postgresql.conf:ro
+    command: ["-c", "config_file=/etc/postgresql.conf"]
+    ports:
+      - "0.0.0.0:${PG_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crawler} -d ${POSTGRES_DB:-craw}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    networks:
+      - internal
+
+  crawler:
+    build:
+      context: ../../apps/crawler
+      dockerfile: Dockerfile
+    image: gaia-crawler:dev
+    container_name: gaia-crawler
+    init: true
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@db:5432/${POSTGRES_DB:-craw}?sslmode=disable
+      CRAW_EXTERNAL_IP: ${CRAW_EXTERNAL_IP:-127.0.0.1}
+      CRAW_FETCH_LIMIT: ${CRAW_FETCH_LIMIT:-1200}
+      CRAW_RACE_PEERS: ${CRAW_RACE_PEERS:-12}
+      CRAW_WORKERS: ${CRAW_WORKERS:-8}
+      CRAW_NODES: ${CRAW_NODES:-1}
+      CRAW_SYBILS: ${CRAW_SYBILS:-16}
+      CRAW_RATE_LIMIT: ${CRAW_RATE_LIMIT:-8.0}
+      CRAW_WALKER_ALPHA: ${CRAW_WALKER_ALPHA:-3}
+      CRAW_WALKER_INTERVAL_MS: ${CRAW_WALKER_INTERVAL_MS:-250}
+      CRAW_PORT_BASE: ${CRAW_PORT_BASE:-6881}
+      CRAW_UTP_ENABLED: ${CRAW_UTP_ENABLED:-true}
+      CRAW_FETCH_TIMEOUT_MS: ${CRAW_FETCH_TIMEOUT_MS:-25000}
+      CRAW_SOURCE_DEADLINE_MS: ${CRAW_SOURCE_DEADLINE_MS:-25000}
+      CRAW_TRACE_SAMPLE_RATE: ${CRAW_TRACE_SAMPLE_RATE:-0.01}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - crawler-data:/home/crawler/data
+    networks:
+      - internal
+
+  dashboard:
+    build:
+      context: ../../apps/dashboard
+      dockerfile: Dockerfile
+    image: gaia-dashboard:dev
+    container_name: gaia-dashboard
+    init: true
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@db:5432/${POSTGRES_DB:-craw}?sslmode=disable
+      PORT: ${DASH_PORT:-3000}
+    ports:
+      - "0.0.0.0:${DASH_PORT:-3000}:3000"
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  pgdata:
+    name: gaia-pg-data
+  crawler-data:
+    name: gaia-crawler-data-dev
