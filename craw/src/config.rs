@@ -56,7 +56,7 @@ impl Default for Config {
             port_base: 6881,
             utp_enabled: true,
             fetch_timeout_ms: 8000,
-            source_deadline_ms: 15000,
+            source_deadline_ms: 25000,
         }
     }
 }
