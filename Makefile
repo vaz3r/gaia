@@ -11,7 +11,7 @@ DB_REMOTE_DIR ?= /home/core/gaia
 COMPOSE_FILE ?= deploy/compose/docker-compose.yml
 COMPOSE_DEV  ?= deploy/compose/docker-compose.dev.yml
 
-.PHONY: dev dev-down deploy deploy-db rollback ps logs backup \
+.PHONY: dev dev-down deploy deploy-db rollback restart-config ps logs backup \
         db-ps db-logs db-backup db-status init-remote clean-remote
 
 # ── Local development ──
@@ -29,6 +29,10 @@ deploy:
 
 rollback:
 	./deploy/scripts/deploy.sh $(HOST) $(ROLLBACK_TAG)
+
+# Config-only restart (no rebuild) after a TOML edit + git pull on the host.
+restart-config:
+	./deploy/scripts/config-restart.sh $(HOST)
 
 # ── Production ops ──
 

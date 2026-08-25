@@ -34,6 +34,7 @@ services:
     volumes:
       - /home/ubuntu/gaia-data/crawler:/home/crawler/data
       - /home/ubuntu/gaia-data/logs:/data/logs
+      - /home/ubuntu/gaia/apps/crawler/config:/etc/crawler/config:ro
 
   dashboard:
     build:

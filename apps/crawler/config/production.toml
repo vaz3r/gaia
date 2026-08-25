@@ -1,11 +1,19 @@
 # Production profile (zerone).
 # Only values that differ from default.toml belong here.
 # Everything is env-overridable via CRAW_* vars.
+#
+# NOTE: Env vars (compose CRAW_*) take precedence over these values. Keys that
+# ARE env-overridden in docker-compose.yml: walker_alpha, walker_interval_ms,
+# source_deadline_ms, sybil_count, rate_limit_per_sec, global_fetch_limit,
+# race_peers, metadata_timeout_secs, utp_enabled. Keys NOT env-overridden (true
+# TOML-only tuning surface): source_query_timeout_secs, source_k, source_alpha,
+# tcp/utp_timeout_secs, retry.*, storage.*, cache.*, harvest.*.
 
 [dht]
 walker_alpha = 3
 walker_interval_ms = 250
 source_deadline_ms = 25000
+source_query_timeout_secs = 5
 sybil_count = 16
 rate_limit_per_sec = 8.0
 

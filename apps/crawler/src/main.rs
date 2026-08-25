@@ -262,7 +262,7 @@ async fn main() {
         metrics.clone(),
         sightings.clone(),
         batch_writer.clone(),
-        Duration::from_secs(15),
+        Duration::from_secs(config.report_interval_secs),
     );
     let cache_cleanup = cache_cleanup_loop(
         peer_cache_cleanup,
@@ -295,7 +295,7 @@ async fn main() {
     tracing::info!("shutdown complete");
 
     // Let logging guard flush remaining events
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(config.shutdown_flush_ms)).await;
     drop(_logging_guard);
 }
 
@@ -309,6 +309,8 @@ fn log_effective_config(config: &Config) {
         walker_alpha = config.dht.walker_alpha,
         walker_interval_ms = config.dht.walker_interval_ms,
         source_query_timeout = config.dht.source_query_timeout_secs,
+        source_k = config.dht.source_k,
+        source_alpha = config.dht.source_alpha,
         source_deadline_ms = config.dht.source_deadline_ms,
         rate_limit = config.dht.rate_limit_per_sec,
         rate_limit_burst = config.dht.rate_limit_burst,
@@ -319,8 +321,15 @@ fn log_effective_config(config: &Config) {
         utp_timeout_secs = config.fetch.utp_timeout_secs,
         utp_enabled = config.fetch.utp_enabled,
         max_retries = config.retry.max_retries,
+        scheduler_claim_limit = config.retry.scheduler_claim_limit,
+        scheduler_interval_secs = config.retry.scheduler_interval_secs,
+        pg_pool_max = config.storage.pg_pool_max_connections,
+        pg_pool_acquire_timeout = config.storage.pg_pool_acquire_timeout_secs,
+        batch_flush_interval = config.storage.batch_flush_interval_secs,
         bloom_capacity = config.harvest.bloom_capacity,
         log_json = config.logging.log_json,
+        log_dir = %config.logging.log_dir.display(),
+        profile = %config.profile,
         "effective config"
     );
 }
@@ -414,7 +423,10 @@ async fn spawn_node(
     tokio::spawn(async move {
         walker.run().await;
     });
-    tokio::spawn(limiter_sweep_loop(limiter.clone()));
+    tokio::spawn(limiter_sweep_loop(
+        limiter.clone(),
+        Duration::from_secs(config.rate_limit_sweep_interval_secs),
+    ));
     let snap_path = data_dir.join("routing_table.bin");
     tokio::spawn(routing_snapshot_loop(
         table.clone(),
@@ -492,8 +504,8 @@ async fn flush_sightings(writer: Arc<SightingWriter>, mut rx: mpsc::Receiver<(No
     }
 }
 
-async fn limiter_sweep_loop(limiter: Arc<RateLimiter>) {
-    let mut tick = tokio::time::interval(Duration::from_secs(60));
+async fn limiter_sweep_loop(limiter: Arc<RateLimiter>, interval: Duration) {
+    let mut tick = tokio::time::interval(interval);
     loop {
         tick.tick().await;
         let expired = limiter.sweep_expired();
@@ -609,6 +621,7 @@ async fn report_loop(
             routing_buckets_used = cur.routing_buckets_used,
             routing_new_ids = cur.routing_new_ids,
             routing_rejected = cur.routing_rejected,
+            log_dropped = cur.log_dropped,
         );
         prev = cur;
     }
