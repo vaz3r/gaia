@@ -28,3 +28,16 @@ apps/classifier/data/torrent_sample.jsonl*
 # Crawler build artifacts
 apps/crawler/target/
 apps/crawler/data/
+
+craw/
+apps/classifier/data/edge_cases*.jsonl
+apps/classifier/data/to_label.jsonl
+apps/classifier/data/labeled_150.jsonl
+apps/classifier/data/remote_*.jsonl
+apps/classifier/outputs/
+taxonomy_update_plan.md
+apps/classifier/extract_*.sh
+apps/classifier/train_*.sh
+apps/classifier/data/fix_*.py
+apps/classifier/data/extract_*.sh
+
