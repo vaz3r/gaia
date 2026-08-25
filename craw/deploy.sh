@@ -18,7 +18,13 @@ SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no ubuntu@$HOST"
 
 # ── Load env ──
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ -f "$SCRIPT_DIR/.env" ]; then
+# Production env takes precedence for deploy operations
+if [ -f "$SCRIPT_DIR/craw-stack/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/craw-stack/.env"
+    set +a
+elif [ -f "$SCRIPT_DIR/.env" ]; then
     set -a
     # shellcheck disable=SC1091
     source "$SCRIPT_DIR/.env"
@@ -64,7 +70,7 @@ $SSH "cd $REMOTE_DIR && GIT_COMMIT=$TAG docker compose up -d --force-recreate cr
 # ── 6. Run db-init.sql (idempotent) ──
 echo "[5/6] Ensuring dashboard indexes..."
 scp -i "$SSH_KEY" "$SCRIPT_DIR/dashboard/db-init.sql" "ubuntu@$HOST:/tmp/db-init.sql"
-$SSH "docker run --rm --network host postgres:16 psql '$REMOTE_DB' -f /tmp/db-init.sql"
+$SSH "docker run --rm --network host -v /tmp/db-init.sql:/tmp/db-init.sql:ro postgres:16 psql '$REMOTE_DB' -f /tmp/db-init.sql"
 
 # ── 7. Verify ──
 echo "[6/6] Verifying..."
