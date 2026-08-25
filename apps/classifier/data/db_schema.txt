@@ -1,0 +1,30 @@
+Welcome to Ubuntu 25.04 (GNU/Linux 7.0.6-2-pve x86_64)
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+ * Support:        https://ubuntu.com/pro
+Your Ubuntu release is not supported anymore.
+For upgrade information, please visit:
+http://www.ubuntu.com/releaseendoflife
+
+New release '26.04 LTS' available.
+Run 'do-release-upgrade' to upgrade to it.
+
+                          Table "public.torrents"
+     Column     |           Type           | Collation | Nullable | Default 
+----------------+--------------------------+-----------+----------+---------
+ infohash       | bytea                    |           | not null | 
+ name           | text                     |           |          | 
+ piece_length   | bigint                   |           |          | 
+ total_size     | bigint                   |           |          | 
+ file_count     | integer                  |           |          | 
+ files          | jsonb                    |           |          | 
+ fetch_attempts | integer                  |           | not null | 0
+ verified_at    | timestamp with time zone |           | not null | now()
+Indexes:
+    "torrents_pkey" PRIMARY KEY, btree (infohash)
+    "idx_torrents_file_count" btree (file_count)
+    "idx_torrents_name_trgm" gin (name gin_trgm_ops)
+    "idx_torrents_total_size" btree (total_size)
+    "idx_torrents_verified_at" btree (verified_at DESC)
+

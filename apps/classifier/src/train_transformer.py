@@ -74,7 +74,14 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="data/labeled_augmented.jsonl", help="Training data JSONL")
+    parser.add_argument("--stage", type=int, default=0, help="0=flat, 1=binary keep/reject, 2=7-way keep only")
     args, _ = parser.parse_known_args()
+
+    global OUT_DIR
+    if args.stage == 1:
+        OUT_DIR = Path("data/models/transformer/stage1")
+    elif args.stage == 2:
+        OUT_DIR = Path("data/models/transformer/stage2")
 
     logger.info("Loading labeled data from %s...", args.data)
     records = []
@@ -84,8 +91,16 @@ def main():
                 records.append(json.loads(line))
     logger.info("Loaded %d records", len(records))
 
+    if args.stage == 2:
+        records = [r for r in records if r.get("label_category") not in ("Porn", "Other")]
+        logger.info("Stage 2: filtered to %d keep records", len(records))
+
     texts = [build_input_text(r) for r in records]
-    raw_labels = [r["label_category"] for r in records]
+    
+    if args.stage == 1:
+        raw_labels = [r.get("label_category") if r.get("label_category") in ("Porn", "Other") else "Keep" for r in records]
+    else:
+        raw_labels = [r.get("label_category") for r in records]
 
     # Encode labels
     le = LabelEncoder()

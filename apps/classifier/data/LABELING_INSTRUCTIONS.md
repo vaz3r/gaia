@@ -1,7 +1,7 @@
 # Torrent Labeling Guidelines
 
 Use exactly one of:
-`Movies`, `Television`, `Games`, `Music`, `Applications`, `Anime`, `Documentaries`, `Other`, `Unwanted`
+`Movies`, `Television`, `Games`, `Music`, `Applications`, `Anime`, `Documentaries`, `Other`, `Porn`
 
 ## Rules
 
@@ -41,9 +41,10 @@ Use exactly one of:
 - Feature films, single video file, title with year, no episode markers.
 - Non-English films are still Movies.
 
-### Unwanted
-- Explicit adult/hentai/JAV, malware/spam, fake, password-protected archives, clearly misleading.
-- Legitimate but low-quality or obscure content is NOT Unwanted. Use Other if uncertain.
+### Porn
+- Explicit adult/hentai/JAV, OnlyFans, cam rips, and pornographic material.
 
 ### Other
 - Ambiguous, mixed, low-signal, or does not fit any above.
+- Spam, fake, malware, password-protected, gibberish, ambiguous junk.
+- Legitimate but low-quality or obscure content.

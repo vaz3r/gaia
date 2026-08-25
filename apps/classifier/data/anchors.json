@@ -66,12 +66,14 @@
     "Mixed media torrent with various file types",
     "Unknown or low-signal content",
     "Educational content or tutorial",
-    "Religious or spiritual content"
-  ]},
-  {"category": "Unwanted", "anchors": [
-    "Adult content torrent with explicit keywords",
+    "Religious or spiritual content",
     "Spam or fake torrent with misleading name",
     "Malware torrent with executable and suspicious files",
     "Low-quality or password-protected archive"
+  ]},
+  {"category": "Porn", "anchors": [
+    "Adult content torrent with explicit keywords",
+    "JAV or hentai release",
+    "OnlyFans or cam rip"
   ]}
 ]
