@@ -13,6 +13,9 @@ backup-*.sql
 # Session files
 session-*.md
 
+# Health report history (runtime state, never committed)
+deploy/scripts/health-history/
+
 # Classifier data (large/generated)
 apps/classifier/data/__pycache__/
 apps/classifier/data/models/

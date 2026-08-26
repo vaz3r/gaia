@@ -11,8 +11,8 @@ DB_REMOTE_DIR ?= /home/core/gaia
 COMPOSE_FILE ?= deploy/compose/docker-compose.yml
 COMPOSE_DEV  ?= deploy/compose/docker-compose.dev.yml
 
-.PHONY: dev dev-down deploy deploy-db rollback restart-config ps logs backup \
-        db-ps db-logs db-backup db-status init-remote clean-remote
+.PHONY: dev dev-down deploy deploy-db rollback restart-config ps logs health health-all health-json \
+        backup db-ps db-logs db-backup db-status init-remote clean-remote
 
 # ── Local development ──
 
@@ -43,6 +43,20 @@ ps:
 logs:
 	ssh -i $(SSH_KEY) -o StrictHostKeyChecking=no $(REMOTE) \
 		"cd $(REMOTE_COMPOSE) && docker compose --env-file $(REMOTE_GIT)/.env logs -f --tail=100 crawler dashboard"
+
+# ── Health / metrics ──
+
+# Read-only crawler health collector: compact summary (session-scoped rates).
+health:
+	./deploy/scripts/health.sh $(HOST)
+
+# Minute-bucketed full metric history for replay/deep analysis.
+health-all:
+	./deploy/scripts/health.sh --all $(HOST)
+
+# Machine-readable JSON summary.
+health-json:
+	./deploy/scripts/health.sh --json $(HOST)
 
 # ── One-time remote setup ──
 
