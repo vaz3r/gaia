@@ -1,9 +1,7 @@
 use crate::krpc::Infohash;
 use crate::storage::torrents::parse_info_dict;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use sqlx::PgPool;
-use sqlx::Row;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -21,14 +19,6 @@ pub struct TorrentEntry {
     pub total_size: Option<i64>,
     pub file_count: Option<i64>,
     pub files: Option<serde_json::Value>,
-}
-
-struct ResolvedJob<'a> {
-    ih: &'a [u8],
-    status: &'static str,
-    retry_count: Option<i32>,
-    next_retry_at: Option<DateTime<Utc>>,
-    last_error: Option<&'a str>,
 }
 
 pub struct BatchWriter {
@@ -181,143 +171,104 @@ async fn flush_jobs(
     no_peers_terminal_on_first: bool,
     backoffs: &[Duration],
 ) -> bool {
-    let failed_ihs: Vec<&[u8]> = batch
-        .iter()
-        .filter_map(|u| match u {
-            JobUpdate::Failed(ih, _) => Some(ih.as_slice()),
-            _ => None,
-        })
-        .collect();
-
-    let retry_map: HashMap<Vec<u8>, i32> = if !failed_ihs.is_empty() {
-        let mut map = HashMap::new();
-        for chunk in failed_ihs.chunks(flush_chunk) {
-            let chunk_vec: Vec<Vec<u8>> = chunk.iter().map(|b| b.to_vec()).collect();
-            let rows = sqlx::query(
-                "SELECT infohash, retry_count FROM verification_jobs WHERE infohash = ANY($1)",
-            )
-            .bind(&chunk_vec)
-            .fetch_all(pool)
-            .await;
-            match rows {
-                Ok(rows) => {
-                    for row in rows {
-                        let ih: Vec<u8> = row.get(0);
-                        let rc: i32 = row.get(1);
-                        map.insert(ih, rc);
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "batch: select retry_counts failed");
-                    return false;
-                }
-            }
-        }
-        map
-    } else {
-        HashMap::new()
-    };
-
-    let base_backoff = backoffs.first().copied().unwrap_or(Duration::from_secs(60));
-    let max_backoff = backoffs.last().copied().unwrap_or(Duration::from_secs(43200));
+    let base_backoff = backoffs
+        .first()
+        .copied()
+        .unwrap_or(Duration::from_secs(60))
+        .as_secs_f64();
+    let max_backoff = backoffs
+        .last()
+        .copied()
+        .unwrap_or(Duration::from_secs(43200))
+        .as_secs_f64();
 
     let mut seen_ihs: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
-    for chunk in batch.chunks(flush_chunk) {
-        let mut resolved: Vec<ResolvedJob<'_>> = Vec::with_capacity(chunk.len());
+    let unique_failed: Vec<&JobUpdate> = batch
+        .iter()
+        .filter(|u| match u {
+            JobUpdate::Failed(ih, _) => seen_ihs.insert(ih.as_slice().to_vec()),
+            _ => false,
+        })
+        .copied()
+        .collect();
 
-        for update in chunk {
-            match update {
-                JobUpdate::Failed(ih, error) => {
-                    let raw = ih.as_slice().to_vec();
-                    if !seen_ihs.insert(raw.clone()) {
-                        continue;
-                    }
-                    let current_rc = retry_map.get(&raw).copied().unwrap_or(0);
-                    let new_count = current_rc + 1;
-                    let no_peers_terminal = error == "no_peers"
-                        && (no_peers_terminal_on_first || current_rc >= 1);
-                    let terminal = new_count >= max_retries || no_peers_terminal;
-                    if terminal {
-                        resolved.push(ResolvedJob {
-                            ih: ih.as_slice(),
-                            status: "dead",
-                            retry_count: Some(new_count),
-                            next_retry_at: None,
-                            last_error: Some(error),
-                        });
-                    } else {
-                        let idx = current_rc.max(0) as u32;
-                        let delay = base_backoff
-                            .checked_mul(1u32.checked_shl(idx).unwrap_or(u32::MAX))
-                            .unwrap_or(max_backoff);
-                        let next = Utc::now() + chrono::Duration::from_std(delay).unwrap();
-                        resolved.push(ResolvedJob {
-                            ih: ih.as_slice(),
-                            status: "failed",
-                            retry_count: Some(new_count),
-                            next_retry_at: Some(next),
-                            last_error: Some(error),
-                        });
-                    }
-                }
-                JobUpdate::Verified(_) => {}
-            }
-        }
-
-        if resolved.is_empty() {
-            continue;
-        }
-
-        let now = Utc::now();
-        let n = resolved.len();
-        let param_count = n * 6;
-        let mut sql = String::with_capacity(256 + param_count * 4);
+    let no_peers_terminal = if no_peers_terminal_on_first { "true" } else { "false" };
+    for chunk in unique_failed.chunks(flush_chunk) {
+        let n = chunk.len();
+        let mut sql = String::with_capacity(256 + n * 5 * 4);
         sql.push_str("INSERT INTO verification_jobs (infohash, status, retry_count, next_retry_at, last_error, updated_at) VALUES ");
         for i in 0..n {
-            let base = i * 6;
+            let base = i * 5;
             if i > 0 {
                 sql.push_str(", ");
             }
             sql.push_str(&format!(
-                "(${}, ${}, ${}, ${}, ${}, ${})",
+                "(${}, ${}, ${}, ${}, ${}, now())",
                 base + 1,
                 base + 2,
                 base + 3,
                 base + 4,
                 base + 5,
-                base + 6,
             ));
         }
-        sql.push_str(
+        // Single statement: the retry_count increment, status transition, and
+        // exponential backoff are all computed in PostgreSQL, eliminating the
+        // separate SELECT retry_count round-trip (was a 1.3s slow statement).
+        sql.push_str(&format!(
             " ON CONFLICT (infohash) DO UPDATE SET \
-             status = EXCLUDED.status, \
-             retry_count = COALESCE(EXCLUDED.retry_count, verification_jobs.retry_count), \
-             next_retry_at = EXCLUDED.next_retry_at, \
-             last_error = COALESCE(EXCLUDED.last_error, verification_jobs.last_error), \
+             status = CASE \
+                 WHEN COALESCE(verification_jobs.retry_count, 0) + 1 >= {max_retries} THEN 'dead' \
+                 WHEN EXCLUDED.last_error = 'no_peers' AND ({no_peers_terminal} OR COALESCE(verification_jobs.retry_count, 0) >= 1) THEN 'dead' \
+                 ELSE 'failed' \
+             END, \
+             retry_count = COALESCE(verification_jobs.retry_count, 0) + 1, \
+             next_retry_at = CASE \
+                 WHEN COALESCE(verification_jobs.retry_count, 0) + 1 >= {max_retries} THEN NULL \
+                 WHEN EXCLUDED.last_error = 'no_peers' AND ({no_peers_terminal} OR COALESCE(verification_jobs.retry_count, 0) >= 1) THEN NULL \
+                 ELSE now() + make_interval(secs => LEAST(\
+{base_backoff}::double precision * power(2::double precision, COALESCE(verification_jobs.retry_count, 0)::double precision),\
+{max_backoff}::double precision)) \
+             END, \
+             last_error = EXCLUDED.last_error, \
              updated_at = now()",
-        );
+            max_retries = max_retries,
+            no_peers_terminal = no_peers_terminal,
+            base_backoff = base_backoff,
+            max_backoff = max_backoff
+        ));
 
         let mut q = sqlx::query(&sql);
-        for r in &resolved {
-            q = q
-                .bind(r.ih)
-                .bind(r.status)
-                .bind(r.retry_count)
-                .bind(r.next_retry_at)
-                .bind(r.last_error)
-                .bind(now);
+        for update in chunk {
+            if let JobUpdate::Failed(ih, error) = update {
+                // Initial state used only when the row does not yet exist
+                // (retry_count 0 => first failure): same decisions as the
+                // ON CONFLICT branch but with current_rc = 0.
+                let no_peers_terminal = error == "no_peers" && no_peers_terminal_on_first;
+                let terminal = max_retries <= 1 || no_peers_terminal;
+                let (init_status, init_next) = if terminal {
+                    ("dead", None)
+                } else {
+                    let next = Utc::now()
+                        + chrono::Duration::from_std(Duration::from_secs_f64(base_backoff))
+                            .unwrap_or_else(|_| chrono::Duration::seconds(60));
+                    ("failed", Some(next))
+                };
+                q = q
+                    .bind(ih.as_slice())
+                    .bind(init_status)
+                    .bind(1i32) // retry_count for a fresh insert = 1
+                    .bind(init_next)
+                    .bind(error);
+            }
         }
 
-        match q.execute(pool).await {
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    chunk_size = chunk.len(),
-                    "batch: upsert verification_jobs failed"
-                );
-                return false;
-            }
+        if let Err(e) = q.execute(pool).await {
+            tracing::warn!(
+                error = %e,
+                chunk_size = chunk.len(),
+                "batch: upsert verification_jobs failed"
+            );
+            return false;
         }
     }
     true
