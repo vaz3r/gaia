@@ -30,7 +30,7 @@ use crate::verify::fetch_pool::FetchParams;
 use crate::verify::peer_cache::PeerCache;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -168,6 +168,7 @@ async fn main() {
             scheduler_fresh_ratio: config.retry.scheduler_fresh_ratio,
             stale_verifying_timeout_secs: config.retry.stale_verifying_timeout_secs,
         },
+        metrics.clone(),
     ));
     let retry_run = verify_store
         .clone()
@@ -279,6 +280,26 @@ async fn main() {
         batch_writer.clone(),
         Duration::from_secs(config.report_interval_secs),
     );
+    {
+        // Phase 1 instrumentation: sample verify channel depth (no behavior change).
+        let verify_gauge_tx = verify_tx.clone();
+        let depth_metrics = metrics.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                tick.tick().await;
+                let depth = verify_gauge_tx
+                    .max_capacity()
+                    .saturating_sub(verify_gauge_tx.capacity());
+                depth_metrics
+                    .verify_channel_depth
+                    .store(depth as u64, Ordering::Relaxed);
+                let _ = depth_metrics
+                    .verify_channel_depth_max
+                    .fetch_max(depth as u64, Ordering::Relaxed);
+            }
+        });
+    }
     let cache_cleanup = cache_cleanup_loop(
         peer_cache_cleanup,
         metrics.clone(),
@@ -644,6 +665,14 @@ async fn report_loop(
             routing_new_ids = cur.routing_new_ids,
             routing_rejected = cur.routing_rejected,
             log_dropped = cur.log_dropped,
+            harvest_try_send_dropped = cur.harvest_try_send_dropped,
+            harvest_sighting_tx_dropped = cur.harvest_sighting_tx_dropped,
+            scheduler_send_blocked = cur.scheduler_send_blocked,
+            scheduler_claims = cur.scheduler_claims,
+            scheduler_claimed_fresh = cur.scheduler_claimed_fresh,
+            scheduler_claimed_retry = cur.scheduler_claimed_retry,
+            verify_channel_depth = cur.verify_channel_depth,
+            verify_channel_depth_max = cur.verify_channel_depth_max,
         );
         prev = cur;
     }

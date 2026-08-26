@@ -89,6 +89,15 @@ pub struct Metrics {
     pub routing_rejected: AtomicU64,
     // Logging metrics
     pub log_dropped: Arc<AtomicU64>,
+    // Channel backpressure instrumentation (Phase 1: observe, no behavior change)
+    pub harvest_try_send_dropped: AtomicU64,
+    pub harvest_sighting_tx_dropped: AtomicU64,
+    pub scheduler_send_blocked: AtomicU64,
+    pub scheduler_claims: AtomicU64,
+    pub scheduler_claimed_fresh: AtomicU64,
+    pub scheduler_claimed_retry: AtomicU64,
+    pub verify_channel_depth: AtomicU64,
+    pub verify_channel_depth_max: AtomicU64,
 }
 
 impl Metrics {
@@ -187,6 +196,14 @@ pub struct Snapshot {
     pub routing_new_ids: u64,
     pub routing_rejected: u64,
     pub log_dropped: u64,
+    pub harvest_try_send_dropped: u64,
+    pub harvest_sighting_tx_dropped: u64,
+    pub scheduler_send_blocked: u64,
+    pub scheduler_claims: u64,
+    pub scheduler_claimed_fresh: u64,
+    pub scheduler_claimed_retry: u64,
+    pub verify_channel_depth: u64,
+    pub verify_channel_depth_max: u64,
 }
 
 impl Metrics {
@@ -269,6 +286,20 @@ impl Metrics {
             routing_new_ids: self.routing_new_ids.load(Ordering::Relaxed),
             routing_rejected: self.routing_rejected.load(Ordering::Relaxed),
             log_dropped: self.log_dropped.load(Ordering::Relaxed),
+            harvest_try_send_dropped: self.harvest_try_send_dropped.load(Ordering::Relaxed),
+            harvest_sighting_tx_dropped: self
+                .harvest_sighting_tx_dropped
+                .load(Ordering::Relaxed),
+            scheduler_send_blocked: self.scheduler_send_blocked.load(Ordering::Relaxed),
+            scheduler_claims: self.scheduler_claims.load(Ordering::Relaxed),
+            scheduler_claimed_fresh: self
+                .scheduler_claimed_fresh
+                .load(Ordering::Relaxed),
+            scheduler_claimed_retry: self
+                .scheduler_claimed_retry
+                .load(Ordering::Relaxed),
+            verify_channel_depth: self.verify_channel_depth.load(Ordering::Relaxed),
+            verify_channel_depth_max: self.verify_channel_depth_max.load(Ordering::Relaxed),
         }
     }
 }

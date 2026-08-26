@@ -1,4 +1,5 @@
 use crate::krpc::Infohash;
+use crate::metrics::{Add1, Metrics};
 use sqlx::PgPool;
 use sqlx::Row;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ pub struct VerifyStore {
     claim_limit: i64,
     fresh_ratio: f64,
     stale_verifying_timeout_secs: u64,
+    metrics: Arc<Metrics>,
 }
 
 fn now_secs() -> u64 {
@@ -30,7 +32,7 @@ fn now_secs() -> u64 {
 }
 
 impl VerifyStore {
-    pub fn new(pool: PgPool, cfg: RetryConfig) -> Self {
+    pub fn new(pool: PgPool, cfg: RetryConfig, metrics: Arc<Metrics>) -> Self {
         VerifyStore {
             pool,
             backoffs: cfg.backoffs,
@@ -38,6 +40,7 @@ impl VerifyStore {
             claim_limit: cfg.scheduler_claim_limit,
             fresh_ratio: cfg.scheduler_fresh_ratio,
             stale_verifying_timeout_secs: cfg.stale_verifying_timeout_secs,
+            metrics,
         }
     }
 
@@ -102,20 +105,21 @@ impl VerifyStore {
         Ok(())
     }
 
-    pub async fn claim_due(&self, limit: i64) -> Result<Vec<Infohash>, sqlx::Error> {
+    pub async fn claim_due(&self, limit: i64) -> Result<Vec<(Infohash, bool)>, sqlx::Error> {
         let fresh_ratio = self.fresh_ratio.clamp(0.0, 1.0);
         let fresh_limit = ((limit as f64 * fresh_ratio) as i64).max(1);
         let retry_limit = (limit - fresh_limit).max(1);
-        let rows = sqlx::query(
+        let mut tx = self.pool.begin().await?;
+        let claimed = sqlx::query(
             "WITH fresh AS (
-                SELECT infohash FROM verification_jobs
+                SELECT infohash, true AS is_fresh FROM verification_jobs
                 WHERE status = 'pending'
                 ORDER BY next_retry_at NULLS FIRST
                 LIMIT $1
                 FOR UPDATE SKIP LOCKED
             ),
             retries AS (
-                SELECT infohash FROM verification_jobs
+                SELECT infohash, false AS is_fresh FROM verification_jobs
                 WHERE status = 'failed'
                   AND (next_retry_at IS NULL OR next_retry_at <= now())
                   AND retry_count < $3
@@ -123,23 +127,36 @@ impl VerifyStore {
                 LIMIT $2
                 FOR UPDATE SKIP LOCKED
             )
-            UPDATE verification_jobs SET status = 'verifying', updated_at = now()
-            WHERE infohash IN (SELECT infohash FROM fresh UNION SELECT infohash FROM retries)
-            RETURNING infohash, retry_count",
+            SELECT infohash, is_fresh
+            FROM (SELECT infohash, is_fresh FROM fresh UNION ALL SELECT infohash, is_fresh FROM retries) c",
         )
         .bind(fresh_limit)
         .bind(retry_limit)
         .bind(self.max_retries)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await?;
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
+        let mut out = Vec::with_capacity(claimed.len());
+        for row in &claimed {
             let raw: Vec<u8> = row.get(0);
-            let retry_count: i32 = row.get(1);
+            let fresh: bool = row.get(1);
             if let Ok(ih) = <[u8; 20]>::try_from(raw.as_slice()) {
-                crate::trace_lifecycle!(&ih, "claimed", stream = "db", attempt = retry_count as u32);
-                out.push(ih);
+                out.push((ih, fresh));
             }
+        }
+        if !out.is_empty() {
+            let hashes: Vec<&[u8]> = out.iter().map(|(ih, _)| ih.as_slice()).collect();
+            sqlx::query(
+                "UPDATE verification_jobs SET status = 'verifying', updated_at = now() \
+                 WHERE infohash = ANY($1::bytea[])",
+            )
+            .bind(&hashes)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        for (ih, fresh) in &out {
+            let _ = fresh;
+            crate::trace_lifecycle!(ih, "claimed", stream = "db", is_fresh = *fresh);
         }
         Ok(out)
     }
@@ -174,12 +191,26 @@ impl VerifyStore {
                     match self.claim_due(self.claim_limit).await {
                         Ok(due) => {
                             if !due.is_empty() {
+                                let fresh_cnt = due.iter().filter(|(_, f)| *f).count();
+                                self.metrics.scheduler_claims.add(due.len() as u64);
+                                self.metrics
+                                    .scheduler_claimed_fresh
+                                    .add(fresh_cnt as u64);
+                                self.metrics
+                                    .scheduler_claimed_retry
+                                    .add((due.len() - fresh_cnt) as u64);
                                 tracing::info!(
                                     due = due.len(),
+                                    fresh = fresh_cnt,
+                                    retry = due.len() - fresh_cnt,
                                     "verification scheduler: re-injecting jobs"
                                 );
-                                for ih in due {
+                                for (ih, _) in due {
+                                    let blocked = tx.capacity() == 0;
                                     let _ = tx.send(ih).await;
+                                    if blocked {
+                                        self.metrics.scheduler_send_blocked.add(1);
+                                    }
                                 }
                             }
                         }

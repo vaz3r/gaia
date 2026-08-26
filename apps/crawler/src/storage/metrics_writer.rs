@@ -109,5 +109,14 @@ fn snapshot_rows(s: &Snapshot) -> Vec<(&'static str, u64)> {
         ("metadata_failed_io", s.metadata_failed_io),
         ("metadata_failed_silent", s.metadata_failed_silent),
         ("metadata_timeout", s.metadata_timeout),
+        // Channel backpressure instrumentation
+        ("harvest_try_send_dropped", s.harvest_try_send_dropped),
+        ("harvest_sighting_tx_dropped", s.harvest_sighting_tx_dropped),
+        ("scheduler_send_blocked", s.scheduler_send_blocked),
+        ("scheduler_claims", s.scheduler_claims),
+        ("scheduler_claimed_fresh", s.scheduler_claimed_fresh),
+        ("scheduler_claimed_retry", s.scheduler_claimed_retry),
+        ("verify_channel_depth", s.verify_channel_depth),
+        ("verify_channel_depth_max", s.verify_channel_depth_max),
     ]
 }

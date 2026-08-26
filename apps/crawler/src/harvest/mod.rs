@@ -68,6 +68,7 @@ impl Harvester {
             self.announce_seen.insert(&ih);
             if self.announce_tx.try_send((ih, peer)).is_err() {
                 if self.verify_tx.try_send(ih).is_err() {
+                    self.metrics.harvest_try_send_dropped.add(1);
                     return false;
                 }
             }
@@ -85,9 +86,12 @@ impl Harvester {
             return false;
         }
         if self.verify_tx.try_send(ih).is_err() {
+            self.metrics.harvest_try_send_dropped.add(1);
             return false;
         }
-        let _ = self.discovery_tx.try_send((ih, source));
+        if self.discovery_tx.try_send((ih, source)).is_err() {
+            self.metrics.harvest_sighting_tx_dropped.add(1);
+        }
         self.current.insert(&ih);
         if self.current.inserted() >= self.rotate_at {
             std::mem::swap(&mut self.current, &mut self.previous);
