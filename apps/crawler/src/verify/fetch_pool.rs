@@ -56,6 +56,18 @@ fn wire_error_to_outcome(e: &WireError) -> &'static str {
     }
 }
 
+fn connect_error_to_outcome(e: &WireError) -> &'static str {
+    match e {
+        WireError::Timeout => "timeout",
+        WireError::Io(_) => "io_error",
+        WireError::Handshake => "handshake",
+        WireError::NoExtension => "no_extension",
+        WireError::Eof => "io_error",
+        WireError::Cancelled => "io_error",
+        _ => "io_error",
+    }
+}
+
 enum FetchOutcome {
     ConnectFailed(SocketAddr, WireError),
     MetadataFailed(WireError),
@@ -122,20 +134,18 @@ async fn try_fetch(
                             s
                         }
                         Err(utp_err) => {
-                            let result_str = match &utp_err {
-                                WireError::Timeout => "timeout",
-                                _ => "error",
-                            };
+                            let result_str = connect_error_to_outcome(&utp_err);
                             crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "utp", result = result_str, elapsed_ms = utp_start.elapsed().as_millis() as u64);
                             cache.mark_bad(addr);
-                            peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: "tcp".to_string(), result: wire_error_to_outcome(&tcp_err).to_string(), client: None });
-                            return FetchOutcome::ConnectFailed(addr, tcp_err);
+                            peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: "utp".to_string(), result: result_str.to_string(), client: None, phase: Some("connect".to_string()), elapsed_ms: Some(utp_start.elapsed().as_millis().min(i32::MAX as u128) as i32) });
+                            return FetchOutcome::ConnectFailed(addr, utp_err);
                         }
                     }
                 }
                 None => {
                     cache.mark_bad(addr);
-                    peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: "tcp".to_string(), result: wire_error_to_outcome(&tcp_err).to_string(), client: None });
+                    let result_str = connect_error_to_outcome(&tcp_err);
+                    peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: "tcp".to_string(), result: result_str.to_string(), client: None, phase: Some("connect".to_string()), elapsed_ms: Some(start.elapsed().as_millis().min(i32::MAX as u128) as i32) });
                     return FetchOutcome::ConnectFailed(addr, tcp_err);
                 }
             }
@@ -143,15 +153,19 @@ async fn try_fetch(
     };
 
     let last_client = session.client().map(|s| s.to_string());
+    let transport_str = if session.is_tcp() { "tcp" } else { "utp" };
+    let connect_elapsed = start.elapsed().as_millis().min(i32::MAX as u128) as i32;
+    peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: transport_str.to_string(), result: "ok".to_string(), client: None, phase: Some("connect".to_string()), elapsed_ms: Some(connect_elapsed) });
+    let metadata_start = std::time::Instant::now();
     match session.fetch_metadata(fetch_timeout).await {
         Ok(meta) => {
             if session.is_tcp() { metrics.tcp_metadata_ok.add(1); } else { metrics.utp_metadata_ok.add(1); }
-            peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: if session.is_tcp() { "tcp" } else { "utp" }.to_string(), result: "metadata_ok".to_string(), client: last_client });
+            peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: transport_str.to_string(), result: "metadata_ok".to_string(), client: last_client, phase: Some("metadata".to_string()), elapsed_ms: Some(metadata_start.elapsed().as_millis().min(i32::MAX as u128) as i32) });
             FetchOutcome::Success(meta)
         }
         Err(e) => {
             metrics.metadata_failed_io.add(1);
-            peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: if session.is_tcp() { "tcp" } else { "utp" }.to_string(), result: wire_error_to_outcome(&e).to_string(), client: last_client });
+            peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: transport_str.to_string(), result: wire_error_to_outcome(&e).to_string(), client: last_client, phase: Some("metadata".to_string()), elapsed_ms: Some(metadata_start.elapsed().as_millis().min(i32::MAX as u128) as i32) });
             FetchOutcome::MetadataFailed(e)
         }
     }

@@ -11,6 +11,8 @@ pub struct PeerOutcome {
     pub transport: String,
     pub result: String,
     pub client: Option<String>,
+    pub phase: Option<String>,
+    pub elapsed_ms: Option<i32>,
 }
 
 pub struct PeerOutcomeWriter {
@@ -69,11 +71,13 @@ impl PeerOutcomeWriter {
             let transports: Vec<&str> = chunk.iter().map(|o| o.transport.as_str()).collect();
             let results: Vec<&str> = chunk.iter().map(|o| o.result.as_str()).collect();
             let clients: Vec<Option<&str>> = chunk.iter().map(|o| o.client.as_deref()).collect();
+            let phases: Vec<Option<&str>> = chunk.iter().map(|o| o.phase.as_deref()).collect();
+            let elapsed: Vec<Option<i32>> = chunk.iter().map(|o| o.elapsed_ms).collect();
             let _ = sqlx::query(
-                "INSERT INTO fetch_peer_outcomes (infohash, peer, source, transport, result, client) \
-                 SELECT u.ih, u.peer, u.source, u.transport, u.result, u.client \
-                 FROM UNNEST($1::bytea[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[]) \
-                 AS u(ih, peer, source, transport, result, client)",
+                "INSERT INTO fetch_peer_outcomes (infohash, peer, source, transport, result, client, phase, elapsed_ms) \
+                 SELECT u.ih, u.peer, u.source, u.transport, u.result, u.client, u.phase, u.elapsed_ms \
+                 FROM UNNEST($1::bytea[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::int4[]) \
+                 AS u(ih, peer, source, transport, result, client, phase, elapsed_ms)",
             )
             .bind(&ihs)
             .bind(&peers)
@@ -81,6 +85,8 @@ impl PeerOutcomeWriter {
             .bind(&transports)
             .bind(&results)
             .bind(&clients)
+            .bind(&phases)
+            .bind(&elapsed)
             .execute(&mut *tx)
             .await;
             if let Err(e) = tx.commit().await {
