@@ -175,85 +175,57 @@ def run_transformer_mode(torrents: list[dict], config: dict, output_f):
     from src.backends.transformer_onnx_backend import TransformerOnnxBackend
     from src.core.text_builder import build_input_text
     import re
+    import joblib
 
-    PORN_REGEX = re.compile(
-        r'\b(?:jav|javguru|caribbeancom|tokyo-hot|heyzo|1pondo|xxx|onlyfans|hentai|porn|blowjob|cumshot|anal|creampie|webcam|chaturbate|camsoda)\b|'
-        r'\b(?:brazzers|bangbros|naughty|evilangel|realitykings|mofos|x-art|tushy|blacked|vixen|milf|teenslovehugecocks|hustler|peter north|bigtits)\b|'
-        r'(?<![A-Z])[A-Z]{2,5}-\d{2,5}(?!\d)|'
-        r'\[(?:JAV|Hentai|Adult|Ecchi)\]', 
-        re.IGNORECASE
-    )
+    # Kept for potential future dashboard filtering, but not used in core classification
+    # PORN_REGEX = re.compile(
+    #     r'\b(?:jav|javguru|caribbeancom|tokyo-hot|heyzo|1pondo|xxx|onlyfans|hentai|porn|blowjob|cumshot|anal|creampie|webcam|chaturbate|camsoda)\b|'
+    #     r'\b(?:brazzers|bangbros|naughty|evilangel|realitykings|mofos|x-art|tushy|blacked|vixen|milf|teenslovehugecocks|hustler|peter north|bigtits)\b|'
+    #     r'(?<![A-Z])[A-Z]{2,5}-\d{2,5}(?!\d)|'
+    #     r'\[(?:JAV|Hentai|Adult|Ecchi)\]', 
+    #     re.IGNORECASE
+    # )
 
     tr_cfg = config.get("transformer", {})
     batch_size = tr_cfg.get("batch_size", 32)
-    max_length = tr_cfg.get("max_length", 128)
+    max_length = tr_cfg.get("max_length", 256)
 
-    # Load Stage 1
-    backend1 = TransformerOnnxBackend(
-        model_path="data/models/transformer/stage1/model_int8.onnx",
-        tokenizer_path="data/models/transformer/stage1/tokenizer",
+    # Load Single Stage
+    backend = TransformerOnnxBackend(
+        model_path="data/models/transformer/single_stage/model_int8.onnx",
+        tokenizer_path="data/models/transformer/single_stage/tokenizer",
         max_length=max_length,
     )
-    import joblib
-    le1 = joblib.load("data/models/transformer/stage1/label_encoder.joblib")
-    classes1 = le1.classes_
-
-    # Load Stage 2
-    backend2 = TransformerOnnxBackend(
-        model_path="data/models/transformer/stage2/model_int8.onnx",
-        tokenizer_path="data/models/transformer/stage2/tokenizer",
-        max_length=max_length,
-    )
-    le2 = joblib.load("data/models/transformer/stage2/label_encoder.joblib")
-    classes2 = le2.classes_
+    le = joblib.load("data/models/transformer/single_stage/label_encoder.joblib")
+    classes = le.classes_
 
     texts = [build_input_text(row, config) for row in torrents]
-    logger.info("Classifying %d texts with two-stage transformer ONNX...", len(texts))
+    logger.info("Classifying %d texts with single-stage transformer ONNX...", len(texts))
     t0 = time.time()
 
-    probs1, predictions1 = backend1.predict(texts, batch_size=batch_size)
-    probs2, predictions2 = backend2.predict(texts, batch_size=batch_size)
+    probs, predictions = backend.predict(texts, batch_size=batch_size)
     elapsed = time.time() - t0
 
     for i, row in enumerate(torrents):
-        # Pre-filter for Porn
-        if PORN_REGEX.search(texts[i]):
-            category = "Porn"
-            confidence = 1.0
-            top_candidates = [{"category": "Porn", "confidence": 1.0}]
+        pred_idx = int(predictions[i])
+        if float(probs[i][pred_idx]) < 0.00:
+            category = "Other"
         else:
-            # Check Stage 1
-            pred1_idx = int(predictions1[i])
-            cat1 = classes1[pred1_idx]
-            prob1 = float(probs1[i][pred1_idx])
-            
-            # Use a threshold for non-Keep classes
-            if cat1 == "Porn" and prob1 >= 0.50:
-                category = "Porn"
-                confidence = prob1
-                top_candidates = [{"category": category, "confidence": round(confidence, 4)}]
-            elif cat1 == "Other" and prob1 >= 0.50:
-                category = "Other"
-                confidence = prob1
-                top_candidates = [{"category": category, "confidence": round(confidence, 4)}]
-            else:
-                # Stage 2
-                pred2_idx = int(predictions2[i])
-                category = classes2[pred2_idx]
-                confidence = float(probs2[i][pred2_idx])
-                top_idx = np.argsort(probs2[i])[::-1]
-                top_candidates = [
-                    {"category": classes2[idx], "confidence": round(float(probs2[i][idx]), 4)}
-                    for idx in top_idx[:3]
-                ]
+            category = classes[pred_idx]
+        confidence = float(probs[i][pred_idx])
+        top_idx = np.argsort(probs[i])[::-1]
+        top_candidates = [
+            {"category": classes[idx], "confidence": round(float(probs[i][idx]), 4)}
+            for idx in top_idx[:3]
+        ]
 
         entry = {
             "infohash": row.get("infohash", row.get("id", "")),
             "category": category,
             "confidence": round(confidence, 4),
-            "method": "transformer_onnx_twostage",
-            "model": "distilbert-int8",
-            "classifier": "stage2",
+            "method": "transformer_onnx_singlestage",
+            "model": "minilm-l12-int8",
+            "classifier": "single_stage",
             "top_candidates": top_candidates,
         }
         output_f.write(json.dumps(entry) + "\n")
@@ -263,7 +235,7 @@ def run_transformer_mode(torrents: list[dict], config: dict, output_f):
     logger.info("[%d/%d] time=%.1fs throughput=%.0f it/s",
                 n_total, n_total, elapsed, n_total / elapsed if elapsed > 0 else 0)
 
-    print(f"\n=== Classification Complete (Two-Stage ONNX) ===")
+    print(f"\n=== Classification Complete (Single-Stage ONNX) ===")
     print(f"Total:        {n_total}")
     print(f"Total time:   {elapsed:.1f}s")
     print(f"Throughput:   {n_total/elapsed:.0f} it/s")

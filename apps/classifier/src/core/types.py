@@ -9,7 +9,6 @@ ALLOWED_CATEGORIES = frozenset({
     "Anime",
     "Documentaries",
     "Other",
-    "Porn",
 })
 
 

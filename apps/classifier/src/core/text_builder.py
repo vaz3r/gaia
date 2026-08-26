@@ -92,16 +92,20 @@ def build_input_text(torrent: dict | TorrentInput, config: dict | None = None) -
         total_size = torrent.get("total_size", torrent.get("total_size_bytes", 0))
         files = torrent.get("top_dirs", torrent.get("files", [])) or []
 
-    if isinstance(files, list) and len(files) > 0 and isinstance(files[0], dict):
-        # Flatten dict structure to paths
-        str_files = []
-        for f in files:
-            path = f.get('path', [])
-            if isinstance(path, list):
-                str_files.append("/".join(str(p) for p in path))
-            else:
-                str_files.append(str(path))
-        files = str_files
+    if isinstance(files, list) and len(files) > 0:
+        if isinstance(files[0], dict):
+            # Flatten dict structure to paths
+            str_files = []
+            for f in files:
+                path = f.get('path', [])
+                if isinstance(path, list):
+                    str_files.append("/".join(str(p) for p in path))
+                else:
+                    str_files.append(str(path))
+            files = str_files
+        elif isinstance(files[0], list):
+            # Flatten list of lists (PostgreSQL jsonb array format)
+            files = ["/".join(str(p) for p in f) for f in files]
 
     name = name[:max_name_chars]
     top_dirs = files[:max_files]

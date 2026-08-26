@@ -1,241 +1,156 @@
-#!/usr/bin/env python3
-"""Fine-tune DistilBERT for torrent classification on Mac M1 (MPS)."""
-
-import sys
+import argparse
 import json
-import time
 import logging
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, stream=sys.stderr, format='%(asctime)s %(levelname)s %(message)s')
-logger = logging.getLogger('train_transformer')
-
 import numpy as np
-import joblib
 import torch
-from torch.utils.data import Dataset, DataLoader
-from transformers import (
-    AutoTokenizer,
-    AutoModelForSequenceClassification,
-    get_linear_schedule_with_warmup,
-)
-from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader, Dataset
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import get_linear_schedule_with_warmup
+from torch.optim import AdamW
 from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+import joblib
 from sklearn.utils.class_weight import compute_class_weight
 
-sys.path.insert(0, '.')
-from src.core.text_builder import build_input_text
-from src.core.types import ALLOWED_CATEGORIES
+from core.text_builder import build_input_text
 
-# ── Config ──────────────────────────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
 
-MODEL_NAME = "distilbert-base-uncased"
-MAX_LENGTH = 128
-BATCH_SIZE = 8
-NUM_EPOCHS = 8
-LR = 3e-5
-WARMUP_RATIO = 0.1
-WEIGHT_DECAY = 0.01
-SEED = 42
-OUT_DIR = Path("data/models/transformer")
-
-# ── Dataset ─────────────────────────────────────────────────────────────────
+MAX_LENGTH = 256
+BATCH_SIZE = 16
 
 class TorrentDataset(Dataset):
-    def __init__(self, texts, labels, tokenizer, max_length):
-        self.encodings = tokenizer(
-            texts,
-            truncation=True,
-            padding="max_length",
-            max_length=max_length,
-            return_tensors="pt",
-        )
-        self.labels = torch.tensor(labels, dtype=torch.long)
+    def __init__(self, encodings, labels):
+        self.encodings = encodings
+        self.labels = labels
+
+    def __getitem__(self, idx):
+        item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+        item["labels"] = torch.tensor(self.labels[idx], dtype=torch.long)
+        return item
 
     def __len__(self):
         return len(self.labels)
 
-    def __getitem__(self, idx):
-        item = {k: v[idx] for k, v in self.encodings.items()}
-        item["labels"] = self.labels[idx]
-        return item
+def load_data(path, label_encoder=None, fit_le=False):
+    texts, labels = [], []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip(): continue
+            row = json.loads(line)
+            txt = build_input_text(row)
+            if not txt.strip(): continue
+            texts.append(txt)
+            labels.append(row["label_category"])
+            
+    if fit_le:
+        label_encoder = LabelEncoder()
+        labels_encoded = label_encoder.fit_transform(labels)
+        return texts, labels_encoded, label_encoder
+    else:
+        labels_encoded = label_encoder.transform(labels)
+        return texts, labels_encoded
 
-
-# ── Main ────────────────────────────────────────────────────────────────────
+def evaluate(model, dataloader, device, label_encoder):
+    model.eval()
+    all_preds, all_labels = [], []
+    with torch.no_grad():
+        for batch in dataloader:
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
+            
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+            preds = torch.argmax(outputs.logits, dim=1)
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+            
+    acc = accuracy_score(all_labels, all_preds)
+    p, r, f1, _ = precision_recall_fscore_support(all_labels, all_preds, average='macro', zero_division=0)
+    return acc, f1
 
 def main():
-    torch.manual_seed(SEED)
-    np.random.seed(SEED)
-
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-    logger.info("Device: %s", device)
-
-    # Load data
-    import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="data/labeled_augmented.jsonl", help="Training data JSONL")
-    parser.add_argument("--stage", type=int, default=0, help="0=flat, 1=binary keep/reject, 2=7-way keep only")
-    args, _ = parser.parse_known_args()
+    parser.add_argument("--data", required=True, help="JSONL with true manual labels")
+    parser.add_argument("--out_dir", default="data/models/transformer/single_stage")
+    args = parser.parse_args()
 
-    global OUT_DIR
-    if args.stage == 1:
-        OUT_DIR = Path("data/models/transformer/stage1")
-    elif args.stage == 2:
-        OUT_DIR = Path("data/models/transformer/stage2")
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Loading labeled data from %s...", args.data)
-    records = []
-    with open(args.data) as f:
-        for line in f:
-            if line.strip():
-                records.append(json.loads(line))
-    logger.info("Loaded %d records", len(records))
-
-    if args.stage == 2:
-        records = [r for r in records if r.get("label_category") not in ("Porn", "Other")]
-        logger.info("Stage 2: filtered to %d keep records", len(records))
-
-    texts = [build_input_text(r) for r in records]
+    logger.info("Loading true dataset...")
+    true_texts, true_labels, le = load_data(args.data, fit_le=True)
+    joblib.dump(le, out_dir / "label_encoder.joblib")
     
-    if args.stage == 1:
-        raw_labels = [r.get("label_category") if r.get("label_category") in ("Porn", "Other") else "Keep" for r in records]
-    else:
-        raw_labels = [r.get("label_category") for r in records]
-
-    # Encode labels
-    le = LabelEncoder()
-    labels = le.fit_transform(raw_labels)
-    num_labels = len(le.classes_)
-    logger.info("Classes (%d): %s", num_labels, list(le.classes_))
-
-    # Class distribution
-    unique, counts = np.unique(labels, return_counts=True)
-    for idx, cnt in zip(unique, counts):
-        logger.info("  %s: %d (%.1f%%)", le.classes_[idx], cnt, cnt / len(labels) * 100)
-
-    # Compute class weights for imbalanced data
-    class_weights = compute_class_weight("balanced", classes=np.arange(num_labels), y=labels)
-    class_weights_tensor = torch.tensor(class_weights, dtype=torch.float32).to(device)
-    logger.info("Class weights: %s", {le.classes_[i]: f"{w:.2f}" for i, w in enumerate(class_weights)})
-
-    # Split
-    X_train, X_val, y_train, y_val = train_test_split(
-        texts, labels, test_size=0.2, random_state=SEED, stratify=labels
+    from sklearn.model_selection import train_test_split
+    t_train_texts, t_val_texts, t_train_labels, t_val_labels = train_test_split(
+        true_texts, true_labels, test_size=0.2, stratify=true_labels, random_state=42
     )
-    logger.info("Split: train=%d val=%d", len(X_train), len(X_val))
 
-    # Tokenizer + model
-    logger.info("Loading %s...", MODEL_NAME)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    logger.info("Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L12-v2")
+    tokenizer.save_pretrained(str(out_dir / "tokenizer"))
+
+    logger.info("Encoding true datasets...")
+    t_train_enc = tokenizer(t_train_texts, truncation=True, padding="max_length", max_length=MAX_LENGTH)
+    t_val_enc = tokenizer(t_val_texts, truncation=True, padding="max_length", max_length=MAX_LENGTH)
+
+    t_train_ds = TorrentDataset(t_train_enc, t_train_labels)
+    t_val_ds = TorrentDataset(t_val_enc, t_val_labels)
+    t_val_dl = DataLoader(t_val_ds, batch_size=BATCH_SIZE)
+    t_train_dl = DataLoader(t_train_ds, batch_size=BATCH_SIZE, shuffle=True)
+
+    # Moderate Capped Class Weights
+    weights = compute_class_weight('balanced', classes=np.unique(t_train_labels), y=t_train_labels)
+    weights = np.clip(weights, 0.5, 3.0)
+    
+    # Gently increase weight for 'Other' to improve recall
+    if 'Other' in le.classes_:
+        other_idx = list(le.classes_).index('Other')
+        weights[other_idx] = weights[other_idx] * 1.2
+        
+    class_weights_tensor = torch.tensor(weights, dtype=torch.float32)
+
     model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_NAME, num_labels=num_labels
-    ).to(device)
-    logger.info("Model params: %d", sum(p.numel() for p in model.parameters()))
+        "sentence-transformers/all-MiniLM-L12-v2", num_labels=len(le.classes_)
+    )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    class_weights_tensor = class_weights_tensor.to(device)
 
-    # Datasets + loaders
-    train_dataset = TorrentDataset(X_train, y_train, tokenizer, MAX_LENGTH)
-    val_dataset = TorrentDataset(X_val, y_val, tokenizer, MAX_LENGTH)
-
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE * 2)
-
-    # Optimizer + scheduler
-    no_decay = ["bias", "LayerNorm.weight"]
-    optimizer_grouped_params = [
-        {
-            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
-            "weight_decay": WEIGHT_DECAY,
-        },
-        {
-            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
-            "weight_decay": 0.0,
-        },
-    ]
-    optimizer = torch.optim.AdamW(optimizer_grouped_params, lr=LR)
-    total_steps = len(train_loader) * NUM_EPOCHS
-    warmup_steps = int(total_steps * WARMUP_RATIO)
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps)
-
-    logger.info("Training: %d epochs, %d steps, %d warmup steps", NUM_EPOCHS, total_steps, warmup_steps)
-
-    # Training loop
-    best_val_f1 = 0.0
-    for epoch in range(NUM_EPOCHS):
-        # Train
+    logger.info("=== Phase: True Fine-tuning (4 Epochs) ===")
+    optimizer = AdamW(model.parameters(), lr=2e-5)
+    epochs = 4
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=len(t_train_dl)//10, num_training_steps=len(t_train_dl)*epochs)
+    
+    best_f1 = 0
+    for epoch in range(epochs):
         model.train()
-        total_loss = 0.0
-        t0 = time.time()
-        for batch_idx, batch in enumerate(train_loader):
-            batch = {k: v.to(device) for k, v in batch.items()}
-            outputs = model(**batch)
-
-            # Weighted loss
+        total_loss = 0
+        for step, batch in enumerate(t_train_dl):
+            optimizer.zero_grad()
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
+            
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
             loss_fct = torch.nn.CrossEntropyLoss(weight=class_weights_tensor)
-            logits = outputs.logits
-            loss = loss_fct(logits, batch["labels"])
-
+            loss = loss_fct(outputs.logits.view(-1, len(le.classes_)), labels.view(-1))
+            
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             scheduler.step()
-            optimizer.zero_grad()
-
             total_loss += loss.item()
-            if (batch_idx + 1) % 20 == 0:
-                logger.info("  [%d/%d] loss=%.4f", batch_idx + 1, len(train_loader), total_loss / (batch_idx + 1))
-
-        avg_loss = total_loss / len(train_loader)
-        train_time = time.time() - t0
-
-        # Validate
-        model.eval()
-        all_preds = []
-        all_labels = []
-        with torch.no_grad():
-            for batch in val_loader:
-                batch = {k: v.to(device) for k, v in batch.items()}
-                outputs = model(**batch)
-                preds = torch.argmax(outputs.logits, dim=-1)
-                all_preds.extend(preds.cpu().numpy())
-                all_labels.extend(batch["labels"].cpu().numpy())
-
-        all_preds = np.array(all_preds)
-        all_labels = np.array(all_labels)
-        accuracy = (all_preds == all_labels).mean()
-
-        # Per-class F1
-        from sklearn.metrics import classification_report, f1_score
-        report = classification_report(
-            all_labels, all_preds,
-            target_names=le.classes_,
-            zero_division=0,
-            output_dict=True,
-        )
-        macro_f1 = report["macro avg"]["f1-score"]
-
-        logger.info(
-            "Epoch %d/%d: loss=%.4f acc=%.3f macro_f1=%.3f time=%.1fs",
-            epoch + 1, NUM_EPOCHS, avg_loss, accuracy, macro_f1, train_time,
-        )
-        logger.info("\n%s", classification_report(all_labels, all_preds, target_names=le.classes_, zero_division=0))
-
-        # Save best
-        if macro_f1 > best_val_f1:
-            best_val_f1 = macro_f1
-            save_dir = OUT_DIR
-            save_dir.mkdir(parents=True, exist_ok=True)
-
-            model.save_pretrained(str(save_dir / "model"))
-            tokenizer.save_pretrained(str(save_dir / "tokenizer"))
-            joblib.dump(le, save_dir / "label_encoder.joblib")
-
-            with open(save_dir / "training_report.txt", "w") as f:
-                f.write(classification_report(all_labels, all_preds, target_names=le.classes_, zero_division=0))
-
-            logger.info("Saved best model (macro_f1=%.3f)", best_val_f1)
-
-    logger.info("Done. Best macro_f1=%.3f", best_val_f1)
-
+            
+        acc, f1 = evaluate(model, t_val_dl, device, le)
+        logger.info(f"Epoch {epoch+1} Validation: Acc={acc:.3f}, MacroF1={f1:.3f}")
+        if f1 > best_f1:
+            best_f1 = f1
+            model.save_pretrained(out_dir / "model")
+            logger.info("Saved best model")
 
 if __name__ == "__main__":
     main()

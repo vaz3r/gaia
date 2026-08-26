@@ -68,6 +68,9 @@ class TransformerOnnxBackend:
                 "input_ids": enc["input_ids"].astype(np.int64),
                 "attention_mask": enc["attention_mask"].astype(np.int64),
             }
+            if "token_type_ids" in enc and any(i.name == "token_type_ids" for i in self.session.get_inputs()):
+                inputs["token_type_ids"] = enc["token_type_ids"].astype(np.int64)
+
             logits = self.session.run(None, inputs)[0]  # (batch, num_classes)
 
             # Softmax

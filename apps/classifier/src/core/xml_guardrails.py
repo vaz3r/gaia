@@ -24,6 +24,8 @@ def build_torrent_xml(torrent: TorrentInput, config: dict | None = None) -> str:
 
     file_elements = []
     for f in files:
+        if isinstance(f, list):
+            f = str(f[0])
         file_elements.append(f"  <file>{safe_xml_text(f, max_file_chars)}</file>")
     files_block = "\n".join(file_elements)
 
