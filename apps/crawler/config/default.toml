@@ -30,6 +30,7 @@ source_k = 8
 source_alpha = 3
 source_query_timeout_secs = 5
 source_deadline_ms = 25000
+source_max_queries = 24
 routing_snapshot_interval_secs = 60
 tx_cleanup_interval_secs = 10
 tx_entry_ttl_secs = 30

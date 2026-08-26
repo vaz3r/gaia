@@ -21,6 +21,7 @@ pub struct FetchParams {
     pub source_k: usize,
     pub source_alpha: usize,
     pub source_query_timeout: Duration,
+    pub source_max_queries: usize,
     pub race_peers: usize,
     pub failed_peer_sample_rate: u64,
 }
@@ -178,6 +179,7 @@ pub async fn verify_infohash(
         params.source_k,
         params.source_alpha,
         params.source_query_timeout,
+        params.source_max_queries,
     )
     .await
     {

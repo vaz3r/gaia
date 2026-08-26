@@ -26,6 +26,7 @@ pub async fn source_peers(
     k: usize,
     alpha: usize,
     query_timeout: Duration,
+    max_queries: usize,
 ) -> SourceResult {
     let k = k.max(1);
     let alpha = alpha.max(1);
@@ -50,10 +51,14 @@ pub async fn source_peers(
     let mut set: JoinSet<(SocketAddr, Result<Message, QueryError>)> = JoinSet::new();
     let mut inflight: usize = 0;
     let mut new_nodes: Vec<NodeInfo> = Vec::new();
+    let mut total_queries: usize = 0;
 
     let lookup = async {
         // Prime the pipeline with up to ALPHA initial queries.
         while inflight < alpha {
+            if total_queries >= max_queries {
+                break;
+            }
             let idx = candidates
                 .iter()
                 .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr));
@@ -62,6 +67,7 @@ pub async fn source_peers(
             };
             queried.insert(node.addr);
             inflight += 1;
+            total_queries += 1;
             spawn_query(&mut set, &router, info_hash, node, &metrics, query_timeout);
         }
 
@@ -125,6 +131,9 @@ pub async fn source_peers(
             }
 
             while inflight < alpha {
+                if total_queries >= max_queries {
+                    break;
+                }
                 let idx = candidates
                     .iter()
                     .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr));
@@ -133,6 +142,7 @@ pub async fn source_peers(
                 };
                 queried.insert(node.addr);
                 inflight += 1;
+                total_queries += 1;
                 spawn_query(&mut set, &router, info_hash, node, &metrics, query_timeout);
             }
         }

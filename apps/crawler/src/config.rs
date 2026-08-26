@@ -49,6 +49,7 @@ pub struct DhtConfig {
     pub source_alpha: usize,
     pub source_query_timeout_secs: u64,
     pub source_deadline_ms: u64,
+    pub source_max_queries: usize,
     pub routing_snapshot_interval_secs: u64,
     pub tx_cleanup_interval_secs: u64,
     pub tx_entry_ttl_secs: u64,
@@ -188,6 +189,7 @@ impl Default for DhtConfig {
             source_alpha: 3,
             source_query_timeout_secs: 5,
             source_deadline_ms: 25000,
+            source_max_queries: 24,
             routing_snapshot_interval_secs: 60,
             tx_cleanup_interval_secs: 10,
             tx_entry_ttl_secs: 30,
@@ -461,6 +463,9 @@ impl Config {
         if self.dht.source_alpha == 0 {
             return Err("dht.source_alpha must be > 0".into());
         }
+        if self.dht.source_max_queries == 0 {
+            return Err("dht.source_max_queries must be > 0".into());
+        }
         if self.storage.pg_pool_max_connections == 0 {
             return Err("storage.pg_pool_max_connections must be > 0".into());
         }
@@ -551,6 +556,8 @@ struct PartialDht {
     source_query_timeout_secs: Option<u64>,
     #[serde(default)]
     source_deadline_ms: Option<u64>,
+    #[serde(default)]
+    source_max_queries: Option<usize>,
     #[serde(default)]
     routing_snapshot_interval_secs: Option<u64>,
     #[serde(default)]
@@ -802,6 +809,9 @@ impl PartialDht {
         if let Some(v) = self.source_deadline_ms {
             cfg.source_deadline_ms = v;
         }
+        if let Some(v) = self.source_max_queries {
+            cfg.source_max_queries = v;
+        }
         if let Some(v) = self.routing_snapshot_interval_secs {
             cfg.routing_snapshot_interval_secs = v;
         }
@@ -1031,6 +1041,7 @@ mod tests {
         assert_eq!(c.dht.walker_alpha, 3);
         assert_eq!(c.dht.walker_interval_ms, 250);
         assert_eq!(c.dht.source_deadline_ms, 25000);
+        assert_eq!(c.dht.source_max_queries, 24);
         assert_eq!(c.dht.source_query_timeout_secs, 5);
         assert_eq!(c.fetch.race_peers, 8);
         assert_eq!(c.dht.rate_limit_per_sec, 8.0);
