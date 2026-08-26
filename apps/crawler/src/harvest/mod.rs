@@ -71,12 +71,8 @@ impl Harvester {
             self.announce_seen.insert(&ih);
             if self.announce_tx.try_send((ih, peer)).is_err() {
                 if self.fresh_verify_tx.try_send(ih).is_err() {
-                    if self.verify_tx.try_send(ih).is_ok() {
-                        self.metrics.harvest_try_send_dropped.add(1);
-                    } else {
-                        self.metrics.fresh_channel_dropped.add(1);
-                        return false;
-                    }
+                    self.metrics.fresh_channel_dropped.add(1);
+                    return false;
                 }
             }
             self.current.insert(&ih);
@@ -93,12 +89,8 @@ impl Harvester {
             return false;
         }
         if self.fresh_verify_tx.try_send(ih).is_err() {
-            if self.verify_tx.try_send(ih).is_ok() {
-                self.metrics.harvest_try_send_dropped.add(1);
-            } else {
-                self.metrics.fresh_channel_dropped.add(1);
-                return false;
-            }
+            self.metrics.fresh_channel_dropped.add(1);
+            return false;
         }
         if self.discovery_tx.try_send((ih, source)).is_err() {
             self.metrics.harvest_sighting_tx_dropped.add(1);
