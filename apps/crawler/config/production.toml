@@ -12,7 +12,7 @@
 [dht]
 walker_alpha = 3
 walker_interval_ms = 250
-source_deadline_ms = 25000
+source_deadline_ms = 15000
 source_max_queries = 24
 source_query_timeout_secs = 5
 sybil_count = 16
