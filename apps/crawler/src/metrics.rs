@@ -98,6 +98,10 @@ pub struct Metrics {
     pub scheduler_claimed_retry: AtomicU64,
     pub verify_channel_depth: AtomicU64,
     pub verify_channel_depth_max: AtomicU64,
+    pub fresh_channel_dropped: AtomicU64,
+    pub fresh_channel_depth: AtomicU64,
+    pub fresh_channel_depth_max: AtomicU64,
+    pub scheduler_skipped_backpressure: AtomicU64,
 }
 
 impl Metrics {
@@ -204,6 +208,10 @@ pub struct Snapshot {
     pub scheduler_claimed_retry: u64,
     pub verify_channel_depth: u64,
     pub verify_channel_depth_max: u64,
+    pub fresh_channel_dropped: u64,
+    pub fresh_channel_depth: u64,
+    pub fresh_channel_depth_max: u64,
+    pub scheduler_skipped_backpressure: u64,
 }
 
 impl Metrics {
@@ -300,6 +308,12 @@ impl Metrics {
                 .load(Ordering::Relaxed),
             verify_channel_depth: self.verify_channel_depth.load(Ordering::Relaxed),
             verify_channel_depth_max: self.verify_channel_depth_max.load(Ordering::Relaxed),
+            fresh_channel_dropped: self.fresh_channel_dropped.load(Ordering::Relaxed),
+            fresh_channel_depth: self.fresh_channel_depth.load(Ordering::Relaxed),
+            fresh_channel_depth_max: self.fresh_channel_depth_max.load(Ordering::Relaxed),
+            scheduler_skipped_backpressure: self
+                .scheduler_skipped_backpressure
+                .load(Ordering::Relaxed),
         }
     }
 }

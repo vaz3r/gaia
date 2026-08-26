@@ -103,6 +103,7 @@ impl ConnLimiter {
 
 pub async fn run_pipeline(
     mut rx: mpsc::Receiver<Infohash>,
+    mut fresh_rx: mpsc::Receiver<Infohash>,
     mut announce_rx: mpsc::Receiver<(Infohash, SocketAddr)>,
     node_routers: Arc<Vec<Arc<Router>>>,
     utp: Option<Arc<UtpSocketUdp>>,
@@ -122,12 +123,28 @@ pub async fn run_pipeline(
         };
 
         let (ih, direct) = tokio::select! {
+            biased;
             item = announce_rx.recv() => {
                 match item {
                     Some((ih, addr)) => (ih, Some(addr)),
-                    None => match rx.recv().await {
+                    None => match fresh_rx.recv().await {
                         Some(ih) => (ih, None),
-                        None => break,
+                        None => match rx.recv().await {
+                            Some(ih) => (ih, None),
+                            None => break,
+                        },
+                    },
+                }
+            }
+            item = fresh_rx.recv() => {
+                match item {
+                    Some(ih) => (ih, None),
+                    None => match announce_rx.recv().await {
+                        Some((ih, addr)) => (ih, Some(addr)),
+                        None => match rx.recv().await {
+                            Some(ih) => (ih, None),
+                            None => break,
+                        },
                     },
                 }
             }
@@ -136,7 +153,10 @@ pub async fn run_pipeline(
                     Some(ih) => (ih, None),
                     None => match announce_rx.recv().await {
                         Some((ih, addr)) => (ih, Some(addr)),
-                        None => break,
+                        None => match fresh_rx.recv().await {
+                            Some(ih) => (ih, None),
+                            None => break,
+                        },
                     },
                 }
             }

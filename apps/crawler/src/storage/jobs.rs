@@ -188,6 +188,10 @@ impl VerifyStore {
         loop {
             tokio::select! {
                 _ = tick.tick() => {
+                    if (tx.capacity() as i64) < self.claim_limit {
+                        self.metrics.scheduler_skipped_backpressure.add(1);
+                        continue;
+                    }
                     match self.claim_due(self.claim_limit).await {
                         Ok(due) => {
                             if !due.is_empty() {

@@ -118,5 +118,9 @@ fn snapshot_rows(s: &Snapshot) -> Vec<(&'static str, u64)> {
         ("scheduler_claimed_retry", s.scheduler_claimed_retry),
         ("verify_channel_depth", s.verify_channel_depth),
         ("verify_channel_depth_max", s.verify_channel_depth_max),
+        ("fresh_channel_dropped", s.fresh_channel_dropped),
+        ("fresh_channel_depth", s.fresh_channel_depth),
+        ("fresh_channel_depth_max", s.fresh_channel_depth_max),
+        ("scheduler_skipped_backpressure", s.scheduler_skipped_backpressure),
     ]
 }

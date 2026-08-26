@@ -97,7 +97,9 @@ async fn main() {
         .unwrap_or(());
 
     let channel_capacity = config.channel_capacity.max(1);
+    let fresh_capacity = config.fetch.fresh_channel_capacity.max(1);
     let (discovery_tx, discovery_rx) = mpsc::channel(channel_capacity);
+    let (fresh_verify_tx, fresh_verify_rx) = mpsc::channel(fresh_capacity);
     let (verify_tx, verify_rx) = mpsc::channel(channel_capacity);
     let (announce_tx, announce_rx) = mpsc::channel(channel_capacity);
 
@@ -107,6 +109,7 @@ async fn main() {
         config.harvest.announce_bloom_ratio,
         config.harvest.announce_bloom_min,
         discovery_tx,
+        fresh_verify_tx.clone(),
         verify_tx.clone(),
         announce_tx,
         metrics.clone(),
@@ -248,6 +251,7 @@ async fn main() {
 
     let pipeline = verify::run_pipeline(
         verify_rx,
+        fresh_verify_rx,
         announce_rx,
         node_routers,
         if config.fetch.utp_enabled { utp_socket().await } else { None },
@@ -296,6 +300,24 @@ async fn main() {
                     .store(depth as u64, Ordering::Relaxed);
                 let _ = depth_metrics
                     .verify_channel_depth_max
+                    .fetch_max(depth as u64, Ordering::Relaxed);
+            }
+        });
+        // Phase 2: fresh channel gauge (high-priority discovery queue).
+        let fresh_gauge_tx = fresh_verify_tx.clone();
+        let fresh_depth_metrics = metrics.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                tick.tick().await;
+                let depth = fresh_gauge_tx
+                    .max_capacity()
+                    .saturating_sub(fresh_gauge_tx.capacity());
+                fresh_depth_metrics
+                    .fresh_channel_depth
+                    .store(depth as u64, Ordering::Relaxed);
+                let _ = fresh_depth_metrics
+                    .fresh_channel_depth_max
                     .fetch_max(depth as u64, Ordering::Relaxed);
             }
         });
@@ -354,6 +376,7 @@ fn log_effective_config(config: &Config) {
         global_fetch_limit = config.fetch.global_fetch_limit,
         race_peers = config.fetch.race_peers,
         max_conns_per_ip = config.fetch.max_connections_per_ip,
+        fresh_channel_capacity = config.fetch.fresh_channel_capacity,
         metadata_timeout_secs = config.fetch.metadata_timeout_secs,
         tcp_timeout_secs = config.fetch.tcp_timeout_secs,
         utp_timeout_secs = config.fetch.utp_timeout_secs,
@@ -673,6 +696,10 @@ async fn report_loop(
             scheduler_claimed_retry = cur.scheduler_claimed_retry,
             verify_channel_depth = cur.verify_channel_depth,
             verify_channel_depth_max = cur.verify_channel_depth_max,
+            fresh_channel_dropped = cur.fresh_channel_dropped,
+            fresh_channel_depth = cur.fresh_channel_depth,
+            fresh_channel_depth_max = cur.fresh_channel_depth_max,
+            scheduler_skipped_backpressure = cur.scheduler_skipped_backpressure,
         );
         prev = cur;
     }

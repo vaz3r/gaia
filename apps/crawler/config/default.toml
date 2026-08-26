@@ -48,6 +48,7 @@ race_peers = 8
 global_fetch_limit = 1200
 max_connections_per_ip = 4
 utp_enabled = true
+fresh_channel_capacity = 65536
 max_message_len = 16777216
 max_pieces = 4096
 failed_peer_sample_rate = 500

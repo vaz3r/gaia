@@ -72,6 +72,7 @@ pub struct FetchConfig {
     pub max_message_len: usize,
     pub max_pieces: usize,
     pub failed_peer_sample_rate: u64,
+    pub fresh_channel_capacity: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -215,6 +216,7 @@ impl Default for FetchConfig {
             max_message_len: 16 * 1024 * 1024,
             max_pieces: 4096,
             failed_peer_sample_rate: 500,
+            fresh_channel_capacity: 65536,
         }
     }
 }
@@ -454,6 +456,9 @@ impl Config {
         if self.fetch.race_peers == 0 {
             return Err("fetch.race_peers must be > 0".into());
         }
+        if self.fetch.fresh_channel_capacity == 0 {
+            return Err("fetch.fresh_channel_capacity must be > 0".into());
+        }
         if self.retry.backoff_sequence_secs.is_empty() {
             return Err("retry.backoff_sequence_secs must not be empty".into());
         }
@@ -598,6 +603,8 @@ struct PartialFetch {
     max_pieces: Option<usize>,
     #[serde(default)]
     failed_peer_sample_rate: Option<u64>,
+    #[serde(default)]
+    fresh_channel_capacity: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -871,6 +878,9 @@ impl PartialFetch {
         if let Some(v) = self.failed_peer_sample_rate {
             cfg.failed_peer_sample_rate = v;
         }
+        if let Some(v) = self.fresh_channel_capacity {
+            cfg.fresh_channel_capacity = v;
+        }
     }
 }
 
@@ -1047,6 +1057,7 @@ mod tests {
         assert_eq!(c.dht.rate_limit_per_sec, 8.0);
         assert_eq!(c.dht.rate_limit_burst, 64.0);
         assert_eq!(c.channel_capacity, 65536);
+        assert_eq!(c.fetch.fresh_channel_capacity, 65536);
         assert_eq!(c.report_interval_secs, 15);
         assert_eq!(c.rate_limit_sweep_interval_secs, 60);
         assert_eq!(c.shutdown_flush_ms, 500);
