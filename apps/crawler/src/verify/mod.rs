@@ -117,49 +117,79 @@ pub async fn run_pipeline(
 ) {
     let global = Arc::new(Semaphore::new(config.global_limit.max(1)));
     let next_router = AtomicUsize::new(0);
-    loop {
+    // Fair-drain batch: after this many consecutive fresh/announce items, force
+    // one retry-channel item so a backlogged verify queue is never starved.
+    let fresh_batch: usize = 8;
+    let mut fresh_streak: usize = 0;
+    'pipeline: loop {
         let Ok(_permit) = global.clone().acquire_owned().await else {
             break;
         };
 
-        let (ih, direct) = tokio::select! {
-            biased;
-            item = announce_rx.recv() => {
-                match item {
-                    Some((ih, addr)) => (ih, Some(addr)),
-                    None => match fresh_rx.recv().await {
-                        Some(ih) => (ih, None),
-                        None => match rx.recv().await {
-                            Some(ih) => (ih, None),
-                            None => break,
-                        },
-                    },
+        let (ih, direct) = loop {
+            // 1) Announce (direct peer) has top priority.
+            match announce_rx.try_recv() {
+                Ok((ih, addr)) => break (ih, Some(addr)),
+                Err(_) => {}
+            }
+            // 2) Fresh discoveries, batched so they cannot monopolize the queue.
+            if fresh_streak < fresh_batch {
+                match fresh_rx.try_recv() {
+                    Ok(ih) => {
+                        fresh_streak += 1;
+                        break (ih, None);
+                    }
+                    Err(_) => {}
                 }
             }
-            item = fresh_rx.recv() => {
-                match item {
-                    Some(ih) => (ih, None),
-                    None => match announce_rx.recv().await {
-                        Some((ih, addr)) => (ih, Some(addr)),
-                        None => match rx.recv().await {
-                            Some(ih) => (ih, None),
-                            None => break,
-                        },
-                    },
+            // 3) Retry channel: guaranteed slot after every fresh_batch.
+            match rx.try_recv() {
+                Ok(ih) => {
+                    fresh_streak = 0;
+                    break (ih, None);
                 }
+                Err(_) => {}
             }
-            item = rx.recv() => {
-                match item {
-                    Some(ih) => (ih, None),
-                    None => match announce_rx.recv().await {
+            // 4) Everything momentarily empty: block on the first producer.
+            break tokio::select! {
+                biased;
+                item = announce_rx.recv() => {
+                    match item {
                         Some((ih, addr)) => (ih, Some(addr)),
                         None => match fresh_rx.recv().await {
                             Some(ih) => (ih, None),
-                            None => break,
+                            None => match rx.recv().await {
+                                Some(ih) => (ih, None),
+                                None => break 'pipeline,
+                            },
                         },
-                    },
+                    }
                 }
-            }
+                item = fresh_rx.recv() => {
+                    match item {
+                        Some(ih) => (ih, None),
+                        None => match announce_rx.recv().await {
+                            Some((ih, addr)) => (ih, Some(addr)),
+                            None => match rx.recv().await {
+                                Some(ih) => (ih, None),
+                                None => break 'pipeline,
+                            },
+                        },
+                    }
+                }
+                item = rx.recv() => {
+                    match item {
+                        Some(ih) => (ih, None),
+                        None => match announce_rx.recv().await {
+                            Some((ih, addr)) => (ih, Some(addr)),
+                            None => match fresh_rx.recv().await {
+                                Some(ih) => (ih, None),
+                                None => break 'pipeline,
+                            },
+                        },
+                    }
+                }
+            };
         };
 
         // Store the announcing peer for this infohash so verify_infohash can use it.
