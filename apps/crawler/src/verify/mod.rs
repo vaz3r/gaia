@@ -126,10 +126,10 @@ pub async fn run_pipeline(
             break;
         };
 
-        let (ih, direct) = loop {
+let (ih, direct, came_from_scheduler) = loop {
             // 1) Announce (direct peer) has top priority.
             match announce_rx.try_recv() {
-                Ok((ih, addr)) => break (ih, Some(addr)),
+                Ok((ih, addr)) => break (ih, Some(addr), false),
                 Err(_) => {}
             }
             // 2) Fresh discoveries, batched so they cannot monopolize the queue.
@@ -137,7 +137,7 @@ pub async fn run_pipeline(
                 match fresh_rx.try_recv() {
                     Ok(ih) => {
                         fresh_streak += 1;
-                        break (ih, None);
+                        break (ih, None, false);
                     }
                     Err(_) => {}
                 }
@@ -146,7 +146,7 @@ pub async fn run_pipeline(
             match rx.try_recv() {
                 Ok(ih) => {
                     fresh_streak = 0;
-                    break (ih, None);
+                    break (ih, None, true);
                 }
                 Err(_) => {}
             }
@@ -155,11 +155,17 @@ pub async fn run_pipeline(
                 biased;
                 item = announce_rx.recv() => {
                     match item {
-                        Some((ih, addr)) => (ih, Some(addr)),
+                        Some((ih, addr)) => (ih, Some(addr), false),
                         None => match fresh_rx.recv().await {
-                            Some(ih) => (ih, None),
+                            Some(ih) => {
+                                fresh_streak = 0;
+                                (ih, None, false)
+                            }
                             None => match rx.recv().await {
-                                Some(ih) => (ih, None),
+                                Some(ih) => {
+                                    fresh_streak = 0;
+                                    (ih, None, true)
+                                }
                                 None => break 'pipeline,
                             },
                         },
@@ -167,11 +173,17 @@ pub async fn run_pipeline(
                 }
                 item = fresh_rx.recv() => {
                     match item {
-                        Some(ih) => (ih, None),
+                        Some(ih) => {
+                            fresh_streak = 0;
+                            (ih, None, false)
+                        }
                         None => match announce_rx.recv().await {
-                            Some((ih, addr)) => (ih, Some(addr)),
+                            Some((ih, addr)) => (ih, Some(addr), false),
                             None => match rx.recv().await {
-                                Some(ih) => (ih, None),
+                                Some(ih) => {
+                                    fresh_streak = 0;
+                                    (ih, None, true)
+                                }
                                 None => break 'pipeline,
                             },
                         },
@@ -179,11 +191,17 @@ pub async fn run_pipeline(
                 }
                 item = rx.recv() => {
                     match item {
-                        Some(ih) => (ih, None),
+                        Some(ih) => {
+                            fresh_streak = 0;
+                            (ih, None, true)
+                        }
                         None => match announce_rx.recv().await {
-                            Some((ih, addr)) => (ih, Some(addr)),
+                            Some((ih, addr)) => (ih, Some(addr), false),
                             None => match fresh_rx.recv().await {
-                                Some(ih) => (ih, None),
+                                Some(ih) => {
+                                    fresh_streak = 0;
+                                    (ih, None, false)
+                                }
                                 None => break 'pipeline,
                             },
                         },
@@ -222,7 +240,12 @@ pub async fn run_pipeline(
                     }
                     batch_writer.push_torrent(ih, &meta);
                     crate::trace_lifecycle!(&ih, "persist_torrents", stream = "verify", status = "ok");
-                    batch_writer.push_verified(ih);
+                    // Only scheduler-sourced infohashes have a verification_jobs
+                    // row worth deleting; fresh successes never wrote one, so
+                    // skip the no-op DELETE.
+                    if came_from_scheduler {
+                        batch_writer.push_verified(ih);
+                    }
                 }
                 VerifyResult::Success(_) => {
                     crate::trace_lifecycle!(&ih, "sha1_check", stream = "verify", result = "fail");

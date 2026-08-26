@@ -99,6 +99,7 @@ async fn try_fetch(
     fetch_timeout: Duration,
     tcp_timeout: Duration,
     utp_timeout: Duration,
+    limiter: Arc<crate::verify::ConnLimiter>,
 ) -> FetchOutcome {
     metrics.tcp_attempts.add(1);
 
@@ -106,31 +107,33 @@ async fn try_fetch(
     crate::trace_lifecycle!(&ih, "fetch_start", stream = "fetch", peer = addr_str.clone(), transport = "tcp");
     let start = std::time::Instant::now();
 
+    // Per-IP permit bounds only the connect+handshake phase. Releasing it
+    // here (before metadata transfer) prevents a hot multi-port seedbox from
+    // holding a permit up to the full 25s metadata timeout.
+    let _permit = limiter.acquire(addr.ip()).await;
+
+    let transport_str: &'static str;
     let mut session = match WireSession::connect_tcp(addr, &ih, &pid, tcp_timeout).await {
         Ok(s) => {
             metrics.tcp_connect_ok.add(1);
             metrics.tcp_connect_actual.add(1);
-            let result_str = "ok";
-            crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "tcp", result = result_str, elapsed_ms = start.elapsed().as_millis() as u64);
+            crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "tcp", result = "ok", elapsed_ms = start.elapsed().as_millis() as u64);
+            transport_str = "tcp";
             s
         }
         Err(tcp_err) => {
-            let result_str = match &tcp_err {
-                WireError::Timeout => "timeout",
-                _ => "error",
-            };
-            crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "tcp", result = result_str, elapsed_ms = start.elapsed().as_millis() as u64);
-            match &utp {
+            crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "tcp", result = "error", elapsed_ms = start.elapsed().as_millis() as u64);
+            match utp {
                 Some(sock) => {
                     metrics.utp_attempts.add(1);
                     crate::trace_lifecycle!(&ih, "fetch_start", stream = "fetch", peer = addr_str.clone(), transport = "utp");
                     let utp_start = std::time::Instant::now();
-                    match WireSession::connect_utp(sock.clone(), addr, &ih, &pid, utp_timeout).await {
+                    match WireSession::connect_utp(sock, addr, &ih, &pid, utp_timeout).await {
                         Ok(s) => {
                             metrics.utp_connect_ok.add(1);
                             metrics.utp_connect_actual.add(1);
-                            let result_str = "ok";
-                            crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "utp", result = result_str, elapsed_ms = utp_start.elapsed().as_millis() as u64);
+                            crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "utp", result = "ok", elapsed_ms = utp_start.elapsed().as_millis() as u64);
+                            transport_str = "utp";
                             s
                         }
                         Err(utp_err) => {
@@ -149,13 +152,13 @@ async fn try_fetch(
                     return FetchOutcome::ConnectFailed(addr, tcp_err);
                 }
             }
-        }
+}
     };
+    drop(_permit);
 
-    let last_client = session.client().map(|s| s.to_string());
-    let transport_str = if session.is_tcp() { "tcp" } else { "utp" };
     let connect_elapsed = start.elapsed().as_millis().min(i32::MAX as u128) as i32;
     peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: transport_str.to_string(), result: "ok".to_string(), client: None, phase: Some("connect".to_string()), elapsed_ms: Some(connect_elapsed) });
+    let last_client = session.client().map(|s| s.to_string());
     let metadata_start = std::time::Instant::now();
     match session.fetch_metadata(fetch_timeout).await {
         Ok(meta) => {
@@ -242,8 +245,7 @@ pub async fn verify_infohash(
         let utp_timeout = params.utp_timeout;
         let limiter = conn_limiter.clone();
         set.spawn(async move {
-            let _permit = limiter.acquire(addr.ip()).await;
-            try_fetch(addr, ih, pid, metrics, cache, utp, po, source, fetch_timeout, tcp_timeout, utp_timeout).await
+            try_fetch(addr, ih, pid, metrics, cache, utp, po, source, fetch_timeout, tcp_timeout, utp_timeout, limiter).await
         });
     }
 
