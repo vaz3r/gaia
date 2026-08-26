@@ -186,120 +186,173 @@ pub async fn verify_infohash(
     peer_outcomes: Arc<PeerOutcomeWriter>,
     conn_limiter: Arc<crate::verify::ConnLimiter>,
 ) -> VerifyResult {
-    let race_peers = params.race_peers;
-    let (mut peers, state) = match source_peers(
-        router,
-        info_hash,
-        race_peers.max(1),
-        metrics.clone(),
-        params.source_deadline,
-        params.source_k,
-        params.source_alpha,
-        params.source_query_timeout,
-        params.source_max_queries,
-    )
-    .await
-    {
-        SourceResult::Peers(p) => (p, SourceState::Peers),
-        SourceResult::NoPeers => (Vec::new(), SourceState::NoPeers),
-        SourceResult::AllTimeout => (Vec::new(), SourceState::Timeout),
-    };
+    let race_peers = params.race_peers.max(1);
+    let peer_id = gen_peer_id();
+    let fetch_timeout = params.metadata_timeout;
+    let tcp_timeout = params.tcp_timeout;
+    let utp_timeout = params.utp_timeout;
 
-    // Prepend the cached announcing peer if available (highest quality signal).
-    let mut announce_peers = std::collections::HashSet::new();
+    let mut set: JoinSet<FetchOutcome> = JoinSet::new();
+    let mut peers_seen: std::collections::HashSet<SocketAddr> = std::collections::HashSet::new();
+
+    // 1) Immediately spawn the highest-quality leads: a cached announcing peer
+    //    and/or the direct announce_peer. These are raced against the DHT
+    //    lookup below so we never wait up to source_deadline behind querying
+    //    mostly-dead DHT nodes for a peer that is live right now.
     if let Some(announcer) = announce_peer_cache.get(&info_hash) {
-        if !peers.contains(&announcer) {
-            peers.insert(0, announcer);
-            announce_peers.insert(announcer);
+        if peers_seen.insert(announcer) {
             crate::trace_lifecycle!(&info_hash, "announce_peer_injected", stream = "fetch", peer = announcer.to_string());
         }
     }
-
     if let Some(d) = direct {
-        if !peers.contains(&d) {
-            peers.insert(0, d);
-            announce_peers.insert(d);
-        }
+        peers_seen.insert(d);
     }
-    peers.truncate(race_peers.max(1));
-    if peers.is_empty() {
-        return match state {
-            SourceState::NoPeers => VerifyResult::NoPeers,
-            _ => VerifyResult::SourceTimeout,
-        };
-    }
-
-    metrics.fetch_attempts.add(peers.len() as u64);
-    let peer_id = gen_peer_id();
-    let mut set = JoinSet::new();
-    for addr in peers {
+    for &addr in &peers_seen {
         let ih = info_hash;
         let pid = peer_id;
         let metrics = metrics.clone();
         let cache = peer_cache.clone();
         let utp = utp.clone();
         let po = peer_outcomes.clone();
-        let source = if announce_peers.contains(&addr) { "announce_peer" } else { "get_peers" };
-        let fetch_timeout = params.metadata_timeout;
-        let tcp_timeout = params.tcp_timeout;
-        let utp_timeout = params.utp_timeout;
         let limiter = conn_limiter.clone();
+        metrics.fetch_attempts.add(1);
         set.spawn(async move {
-            try_fetch(addr, ih, pid, metrics, cache, utp, po, source, fetch_timeout, tcp_timeout, utp_timeout, limiter).await
+            try_fetch(addr, ih, pid, metrics, cache, utp, po, "announce_peer", fetch_timeout, tcp_timeout, utp_timeout, limiter).await
         });
     }
 
+    // 2) Spawn the DHT lookup concurrently so it never blocks the direct race.
+    let router_clone = router.clone();
+    let metrics_clone = metrics.clone();
+    let source_deadline = params.source_deadline;
+    let source_k = params.source_k;
+    let source_alpha = params.source_alpha;
+    let source_query_timeout = params.source_query_timeout;
+    let source_max_queries = params.source_max_queries;
+    let mut source_fut = tokio::spawn(async move {
+        source_peers(
+            router_clone,
+            info_hash,
+            race_peers,
+            metrics_clone,
+            source_deadline,
+            source_k,
+            source_alpha,
+            source_query_timeout,
+            source_max_queries,
+        )
+        .await
+    });
+
+    let mut source_state = SourceState::Timeout;
+    let mut dht_done = false;
     let mut result = None;
-    while let Some(res) = set.join_next().await {
-        match res {
-            Ok(FetchOutcome::Success(meta)) => {
-                result = Some(meta);
+
+    // 3) Race fetches against the DHT lookup; inject DHT-returned peers as they
+    //    arrive, capped at race_peers total.
+    loop {
+        tokio::select! {
+            res = set.join_next(), if !set.is_empty() => {
+                match res {
+                    Some(Ok(FetchOutcome::Success(meta))) => {
+                        result = Some(meta);
+                        break;
+                    }
+                    Some(Ok(outcome)) => {
+                        match outcome {
+                            FetchOutcome::ConnectFailed(_addr, WireError::Timeout) => {
+                                metrics.fetch_connect_timeout.add(1);
+                                metrics.verify_timeouts.add(1);
+                            }
+                            FetchOutcome::ConnectFailed(_addr, WireError::Io(_)) => {
+                                metrics.fetch_connect_io.add(1);
+                                sample_failed_peer(&info_hash, &_addr, &metrics, params.failed_peer_sample_rate.max(1));
+                            }
+                            FetchOutcome::ConnectFailed(_addr, _) => {
+                                metrics.fetch_connect_io.add(1);
+                                sample_failed_peer(&info_hash, &_addr, &metrics, params.failed_peer_sample_rate.max(1));
+                            }
+                            FetchOutcome::MetadataFailed(WireError::Timeout) => {
+                                metrics.fetch_io.add(1);
+                                metrics.verify_timeouts.add(1);
+                            }
+                            FetchOutcome::MetadataFailed(WireError::Handshake) => {
+                                metrics.fetch_handshake.add(1);
+                            }
+                            FetchOutcome::MetadataFailed(WireError::NoExtension) => {
+                                metrics.fetch_no_extension.add(1);
+                            }
+                            FetchOutcome::MetadataFailed(WireError::Reject) => {
+                                metrics.fetch_reject.add(1);
+                            }
+                            FetchOutcome::MetadataFailed(WireError::BadPiece) => {
+                                metrics.fetch_bad_piece.add(1);
+                            }
+                            FetchOutcome::MetadataFailed(WireError::Io(_)) => {
+                                metrics.fetch_io.add(1);
+                            }
+                            FetchOutcome::MetadataFailed(WireError::Eof) => {
+                                metrics.fetch_io.add(1);
+                            }
+                            FetchOutcome::MetadataFailed(WireError::Cancelled) => {
+                                metrics.fetch_io.add(1);
+                            }
+                            FetchOutcome::MetadataFailed(WireError::NoMetadataSize) => {}
+                            FetchOutcome::Success(_) => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            dht_res = &mut source_fut, if !dht_done => {
+                dht_done = true;
+                if let Ok(lookup_res) = dht_res {
+                    let (new_peers, state) = match lookup_res {
+                        SourceResult::Peers(p) => (p, SourceState::Peers),
+                        SourceResult::NoPeers => (Vec::new(), SourceState::NoPeers),
+                        SourceResult::AllTimeout => (Vec::new(), SourceState::Timeout),
+                    };
+                    source_state = state;
+                    for addr in new_peers {
+                        if peers_seen.len() >= race_peers {
+                            break;
+                        }
+                        if peers_seen.insert(addr) {
+                            let ih = info_hash;
+                            let pid = peer_id;
+                            let metrics = metrics.clone();
+                            let cache = peer_cache.clone();
+                            let utp = utp.clone();
+                            let po = peer_outcomes.clone();
+                            let limiter = conn_limiter.clone();
+                            metrics.fetch_attempts.add(1);
+                            set.spawn(async move {
+                                try_fetch(addr, ih, pid, metrics, cache, utp, po, "get_peers", fetch_timeout, tcp_timeout, utp_timeout, limiter).await
+                            });
+                        }
+                    }
+                }
+            }
+            else => {
                 break;
             }
-            Ok(FetchOutcome::ConnectFailed(_addr, WireError::Timeout)) => {
-                metrics.fetch_connect_timeout.add(1);
-                metrics.verify_timeouts.add(1);
-            }
-            Ok(FetchOutcome::ConnectFailed(_addr, WireError::Io(_))) => {
-                metrics.fetch_connect_io.add(1);
-                sample_failed_peer(&info_hash, &_addr, &metrics, params.failed_peer_sample_rate.max(1));
-            }
-            Ok(FetchOutcome::ConnectFailed(_addr, _)) => {
-                metrics.fetch_connect_io.add(1);
-                sample_failed_peer(&info_hash, &_addr, &metrics, params.failed_peer_sample_rate.max(1));
-            }
-            Ok(FetchOutcome::MetadataFailed(WireError::Timeout)) => {
-                metrics.fetch_io.add(1);
-                metrics.verify_timeouts.add(1);
-            }
-            Ok(FetchOutcome::MetadataFailed(WireError::Handshake)) => {
-                metrics.fetch_handshake.add(1);
-            }
-            Ok(FetchOutcome::MetadataFailed(WireError::NoExtension)) => {
-                metrics.fetch_no_extension.add(1);
-            }
-            Ok(FetchOutcome::MetadataFailed(WireError::Reject)) => {
-                metrics.fetch_reject.add(1);
-            }
-            Ok(FetchOutcome::MetadataFailed(WireError::BadPiece)) => {
-                metrics.fetch_bad_piece.add(1);
-            }
-            Ok(FetchOutcome::MetadataFailed(WireError::Io(_))) => {
-                metrics.fetch_io.add(1);
-            }
-            Ok(FetchOutcome::MetadataFailed(WireError::Eof)) => {
-                metrics.fetch_io.add(1);
-            }
-            Ok(FetchOutcome::MetadataFailed(WireError::Cancelled)) => {
-                metrics.fetch_io.add(1);
-            }
-            Ok(FetchOutcome::MetadataFailed(WireError::NoMetadataSize)) => {}
-            Err(_) => {}
         }
     }
+
     set.abort_all();
+    source_fut.abort();
+
     match result {
         Some(meta) => VerifyResult::Success(meta),
-        None => VerifyResult::MetadataFailed,
+        None => {
+            if peers_seen.is_empty() {
+                match source_state {
+                    SourceState::NoPeers => VerifyResult::NoPeers,
+                    _ => VerifyResult::SourceTimeout,
+                }
+            } else {
+                VerifyResult::MetadataFailed
+            }
+        }
     }
 }
