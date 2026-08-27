@@ -185,6 +185,7 @@ async fn main() {
         retry_backoffs.clone(),
         config.retry.max_retries,
         config.retry.no_peers_terminal_on_first,
+        config.retry.no_metadata_max_retries,
         config.storage.batch_flush_chunk,
         config.storage.torrent_batch_chunk,
     ));
@@ -383,6 +384,7 @@ fn log_effective_config(config: &Config) {
         utp_enabled = config.fetch.utp_enabled,
         max_retries = config.retry.max_retries,
         no_peers_terminal_on_first = config.retry.no_peers_terminal_on_first,
+        no_metadata_max_retries = config.retry.no_metadata_max_retries,
         scheduler_claim_limit = config.retry.scheduler_claim_limit,
         scheduler_interval_secs = config.retry.scheduler_interval_secs,
         pg_pool_max = config.storage.pg_pool_max_connections,

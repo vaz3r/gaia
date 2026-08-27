@@ -61,6 +61,7 @@ scheduler_claim_limit = 1000
 scheduler_fresh_ratio = 0.7
 stale_verifying_timeout_secs = 300
 no_peers_terminal_on_first = true
+no_metadata_max_retries = 1
 
 [storage]
 pg_pool_max_connections = 128

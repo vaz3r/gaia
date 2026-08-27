@@ -84,6 +84,7 @@ pub struct RetryConfig {
     pub scheduler_fresh_ratio: f64,
     pub stale_verifying_timeout_secs: u64,
     pub no_peers_terminal_on_first: bool,
+    pub no_metadata_max_retries: i32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -231,6 +232,7 @@ impl Default for RetryConfig {
             scheduler_fresh_ratio: 0.7,
             stale_verifying_timeout_secs: 300,
             no_peers_terminal_on_first: true,
+            no_metadata_max_retries: 1,
         }
     }
 }
@@ -623,6 +625,8 @@ struct PartialRetry {
     stale_verifying_timeout_secs: Option<u64>,
     #[serde(default)]
     no_peers_terminal_on_first: Option<bool>,
+    #[serde(default)]
+    no_metadata_max_retries: Option<i32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -906,6 +910,9 @@ impl PartialRetry {
         }
         if let Some(v) = self.no_peers_terminal_on_first {
             cfg.no_peers_terminal_on_first = v;
+        }
+        if let Some(v) = self.no_metadata_max_retries {
+            cfg.no_metadata_max_retries = v;
         }
     }
 }

@@ -28,6 +28,7 @@ pub struct BatchWriter {
     backoffs: Vec<Duration>,
     max_retries: i32,
     no_peers_terminal_on_first: bool,
+    no_metadata_max_retries: i32,
     flush_chunk: usize,
     torrent_flush_chunk: usize,
     flushing: AtomicBool,
@@ -41,6 +42,7 @@ impl BatchWriter {
         backoffs: Vec<Duration>,
         max_retries: i32,
         no_peers_terminal_on_first: bool,
+        no_metadata_max_retries: i32,
         flush_chunk: usize,
         torrent_flush_chunk: usize,
     ) -> Self {
@@ -51,6 +53,7 @@ impl BatchWriter {
             backoffs,
             max_retries,
             no_peers_terminal_on_first,
+            no_metadata_max_retries,
             flush_chunk: flush_chunk.max(1),
             torrent_flush_chunk: torrent_flush_chunk.max(1),
             flushing: AtomicBool::new(false),
@@ -121,6 +124,7 @@ impl BatchWriter {
                     self.flush_chunk,
                     self.max_retries,
                     self.no_peers_terminal_on_first,
+                    self.no_metadata_max_retries,
                     &self.backoffs,
                 )
                 .await
@@ -169,6 +173,7 @@ async fn flush_jobs(
     flush_chunk: usize,
     max_retries: i32,
     no_peers_terminal_on_first: bool,
+    no_metadata_max_retries: i32,
     backoffs: &[Duration],
 ) -> bool {
     let base_backoff = backoffs
@@ -193,6 +198,7 @@ async fn flush_jobs(
         .collect();
 
     let no_peers_terminal = if no_peers_terminal_on_first { "true" } else { "false" };
+    let no_metadata_limit = no_metadata_max_retries.max(0);
     for chunk in unique_failed.chunks(flush_chunk) {
         let n = chunk.len();
         let mut sql = String::with_capacity(256 + n * 5 * 4);
@@ -219,12 +225,14 @@ async fn flush_jobs(
              status = CASE \
                  WHEN COALESCE(verification_jobs.retry_count, 0) + 1 >= {max_retries} THEN 'dead' \
                  WHEN EXCLUDED.last_error = 'no_peers' AND ({no_peers_terminal} OR COALESCE(verification_jobs.retry_count, 0) >= 1) THEN 'dead' \
+                 WHEN EXCLUDED.last_error = 'no_metadata' AND {no_metadata_limit} >= 0 AND COALESCE(verification_jobs.retry_count, 0) >= {no_metadata_limit} THEN 'dead' \
                  ELSE 'failed' \
              END, \
              retry_count = COALESCE(verification_jobs.retry_count, 0) + 1, \
              next_retry_at = CASE \
                  WHEN COALESCE(verification_jobs.retry_count, 0) + 1 >= {max_retries} THEN NULL \
                  WHEN EXCLUDED.last_error = 'no_peers' AND ({no_peers_terminal} OR COALESCE(verification_jobs.retry_count, 0) >= 1) THEN NULL \
+                 WHEN EXCLUDED.last_error = 'no_metadata' AND {no_metadata_limit} >= 0 AND COALESCE(verification_jobs.retry_count, 0) >= {no_metadata_limit} THEN NULL \
                  ELSE now() + make_interval(secs => LEAST(\
 {base_backoff}::double precision * power(2::double precision, COALESCE(verification_jobs.retry_count, 0)::double precision),\
 {max_backoff}::double precision)) \
@@ -233,6 +241,7 @@ async fn flush_jobs(
              updated_at = now()",
             max_retries = max_retries,
             no_peers_terminal = no_peers_terminal,
+            no_metadata_limit = no_metadata_limit,
             base_backoff = base_backoff,
             max_backoff = max_backoff
         ));
@@ -244,7 +253,8 @@ async fn flush_jobs(
                 // (retry_count 0 => first failure): same decisions as the
                 // ON CONFLICT branch but with current_rc = 0.
                 let no_peers_terminal = error == "no_peers" && no_peers_terminal_on_first;
-                let terminal = max_retries <= 1 || no_peers_terminal;
+                let no_metadata_terminal = error == "no_metadata" && no_metadata_max_retries >= 0;
+                let terminal = max_retries <= 1 || no_peers_terminal || no_metadata_terminal;
                 let (init_status, init_next) = if terminal {
                     ("dead", None)
                 } else {
