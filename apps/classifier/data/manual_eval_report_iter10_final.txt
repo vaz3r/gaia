@@ -1,0 +1,28 @@
+=== Classification Report ===
+Total:       1000
+Evaluated:   1000
+Parse fail:  0 (0.0%)
+Accuracy:    858/1000 (85.8%)
+
+Category                  P      R     F1  Support
+----------------------------------------------------
+Anime                 0.470  1.000  0.639       31
+Applications          0.120  1.000  0.214        3
+Documentaries         0.667  0.750  0.706        8
+Games                 0.364  1.000  0.533        4
+Movies                0.604  0.795  0.686      117
+Other                 0.988  0.835  0.905      686
+Television            0.987  0.980  0.983      151
+----------------------------------------------------
+Macro avg             0.600  0.909  0.667
+
+Confusion matrix (gold rows, pred cols):
+Gold/Pred               Anime Applicat Document    Games   Movies    Music    Other Televisi MALFORME
+Anime                      31        0        0        0        0        0        0        0        0
+Applications                0        3        0        0        0        0        0        0        0
+Documentaries               0        0        6        0        0        0        2        0        0
+Games                       0        0        0        4        0        0        0        0        0
+Movies                     21        0        0        0       93        0        3        0        0
+Music                       0        0        0        0        0        0        0        0        0
+Other                      13       22        3        7       61        5      573        2        0
+Television                  1        0        0        0        0        0        2      148        0

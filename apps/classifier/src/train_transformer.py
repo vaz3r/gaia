@@ -19,6 +19,13 @@ from core.text_builder import build_input_text
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+# Reproducibility
+SEED = 42
+torch.manual_seed(SEED)
+np.random.seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
+
 MAX_LENGTH = 256
 BATCH_SIZE = 16
 
