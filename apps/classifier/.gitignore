@@ -143,6 +143,7 @@ data/manual_eval_set_200.csv
 data/manual_eval_report.txt
 data/manual_eval_report_iter*.txt
 data/manual_eval_report_threshold.txt
+data/manual_eval_report_balanced_benchmark_v12.txt
 
 # ── OS / IDE ──────────────────────────────────────────────────────────────────
 .DS_Store
