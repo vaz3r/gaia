@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api } from './api.js'
+import { api, loadTrackers } from './api.js'
 import TorrentBrowser from './components/TorrentBrowser.jsx'
 import MetricsPanel from './components/MetricsPanel.jsx'
 import { formatNum, formatUptime } from './utils.js'
@@ -19,6 +19,7 @@ export default function App() {
   const [stats, setStats] = useState(null)
 
   useEffect(() => {
+    loadTrackers()
     api('/api/stats').then(setStats).catch(() => {})
     const id = setInterval(() => api('/api/stats').then(setStats).catch(() => {}), 15000)
     return () => clearInterval(id)
