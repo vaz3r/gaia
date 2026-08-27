@@ -62,6 +62,10 @@ $SSH "cd $REMOTE_GIT && git log --oneline -1"
 REMOTE_DATA="${DEPLOY_REMOTE_DATA:?DEPLOY_REMOTE_DATA required}"
 $SSH "sudo mkdir -p ${REMOTE_DATA}/crawler ${REMOTE_DATA}/logs && sudo chown -R 10001:10001 ${REMOTE_DATA}"
 
+# Services to deploy (e.g. "crawler" alone on crawler-only hosts, or
+# "crawler dashboard" where the dashboard also runs).
+DEPLOY_SERVICES="${DEPLOY_SERVICES:-crawler dashboard}"
+
 # ── 3. Verify Docker Compose file exists ──
 if ! $SSH "test -f $REMOTE_COMPOSE/docker-compose.yml"; then
     echo "ERROR: docker-compose.yml not found at $REMOTE_COMPOSE"
@@ -70,16 +74,20 @@ fi
 
 # ── 4. Build images ──
 echo "[3/6] Building images..."
-$SSH "cd $REMOTE_COMPOSE && GIT_COMMIT=$TAG docker compose --env-file $REMOTE_GIT/.env build crawler dashboard"
+$SSH "cd $REMOTE_COMPOSE && GIT_COMMIT=$TAG docker compose --env-file $REMOTE_GIT/.env build $DEPLOY_SERVICES"
 
 # ── 5. Recreate containers ──
 echo "[4/6] Recreating services..."
-$SSH "cd $REMOTE_COMPOSE && GIT_COMMIT=$TAG docker compose --env-file $REMOTE_GIT/.env up -d --force-recreate crawler dashboard"
+$SSH "cd $REMOTE_COMPOSE && GIT_COMMIT=$TAG docker compose --env-file $REMOTE_GIT/.env up -d --force-recreate $DEPLOY_SERVICES"
 
-# ── 6. Run db-init.sql (idempotent) ──
-echo "[5/6] Ensuring dashboard indexes..."
-scp -i "$SSH_KEY" "$REPO_ROOT/apps/dashboard/db-init.sql" "$SSH_USER@$HOST:/tmp/db-init.sql"
-$SSH "docker run --rm --network host -v /tmp/db-init.sql:/tmp/db-init.sql:ro postgres:16 psql '$REMOTE_DB' -f /tmp/db-init.sql"
+# ── 6. Run db-init.sql (idempotent, only when dashboard is deployed) ──
+if [[ " $DEPLOY_SERVICES " == *" dashboard "* ]]; then
+    echo "[5/6] Ensuring dashboard indexes..."
+    scp -i "$SSH_KEY" "$REPO_ROOT/apps/dashboard/db-init.sql" "$SSH_USER@$HOST:/tmp/db-init.sql"
+    $SSH "docker run --rm --network host -v /tmp/db-init.sql:/tmp/db-init.sql:ro postgres:16 psql '$REMOTE_DB' -f /tmp/db-init.sql"
+else
+    echo "[5/6] Skipping dashboard indexes (dashboard not in DEPLOY_SERVICES)..."
+fi
 
 # ── 7. Verify ──
 echo "[6/6] Verifying..."
