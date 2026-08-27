@@ -298,14 +298,14 @@ export default function MetricsPanel() {
             <div>
               <div className="flex justify-between items-center">
                 <span className="text-xs text-slate-400">Verify channel</span>
-                <span className="text-sm text-slate-200 tabular-nums">{fmtNum(verifyDepth)} / {fmtNum(verifyMax)}</span>
+                <span className="text-sm text-slate-200 tabular-nums">{formatNum(verifyDepth)} / {formatNum(verifyMax)}</span>
               </div>
               <PctBar value={verifyDepth} total={verifyMax} />
             </div>
             <div>
               <div className="flex justify-between items-center">
                 <span className="text-xs text-slate-400">Fresh channel</span>
-                <span className="text-sm text-slate-200 tabular-nums">{fmtNum(freshDepth)} / {fmtNum(freshMax)}</span>
+                <span className="text-sm text-slate-200 tabular-nums">{formatNum(freshDepth)} / {formatNum(freshMax)}</span>
               </div>
               <PctBar value={freshDepth} total={freshMax} color="bg-emerald-400" />
             </div>
@@ -354,7 +354,7 @@ export default function MetricsPanel() {
               <Metric
                 label="Hit rate"
                 value={`${cacheHitRate.toFixed(1)}%`}
-                sub={`${fmtNum(cacheHits)} hits`}
+                sub={`${formatNum(cacheHits)} hits`}
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
