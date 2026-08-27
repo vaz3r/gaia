@@ -420,7 +420,7 @@ if docker_ps:
     print(f"  docker   : {docker_ps}")
 if effcfg:
     import re
-    keys = ["source_deadline_ms","source_max_queries","global_fetch_limit","pipeline_limit","race_peers",
+    keys = ["source_deadline_ms","source_max_queries","global_fetch_limit","pipeline_limit","connect_deadline_ms","race_peers",
             "tcp_timeout_secs","utp_timeout_secs","metadata_timeout_secs",
             "max_conns_per_ip","no_peers_terminal_on_first","fresh_channel_capacity"]
     vals = []

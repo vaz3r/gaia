@@ -146,7 +146,7 @@ impl Default for Config {
     fn default() -> Self {
         let data_dir = PathBuf::from("data");
         Config {
-            bind_addr: "0.0.0.0:6881".parse().unwrap(),
+            bind_addr: "0.0.0.0:6882".parse().unwrap(),
             external_ip: None,
             bootstrap: vec![
                 "router.bittorrent.com:6881".to_string(),
@@ -159,7 +159,7 @@ impl Default for Config {
                 .map(|n| n.get())
                 .unwrap_or(4),
             nodes: 1,
-            port_base: 6881,
+            port_base: 6882,
             data_dir: data_dir.clone(),
             trace_sample_rate: 0.0,
             debug_ih: None,
@@ -222,8 +222,8 @@ impl Default for FetchConfig {
             failed_peer_sample_rate: 500,
             fresh_channel_capacity: 65536,
             transport_race_concurrent: true,
-            connect_deadline_ms: 20000,
-            pipeline_limit: 8000,
+            connect_deadline_ms: 10000,
+            pipeline_limit: 4000,
         }
     }
 }
@@ -1113,8 +1113,8 @@ mod tests {
         assert_eq!(c.storage.janitor_interval_secs, 1800);
         assert_eq!(c.storage.janitor_batch_size, 25000);
         assert_eq!(c.fetch.transport_race_concurrent, true);
-        assert_eq!(c.fetch.connect_deadline_ms, 20000);
-        assert_eq!(c.fetch.pipeline_limit, 8000);
+        assert_eq!(c.fetch.connect_deadline_ms, 10000);
+        assert_eq!(c.fetch.pipeline_limit, 4000);
     }
 
     #[test]
