@@ -123,7 +123,7 @@ docker ps --filter name=gaia-crawler --format '{{.Names}}${{.Status}}${{.Image}}
 
 if [ "$NO_LOGS" != "1" ]; then
 echo "=== EFFECTIVE_CONFIG ==="
-ls -t /home/ubuntu/gaia-data/logs/crawler-*.jsonl 2>/dev/null | head -3 | xargs grep -h '"effective config"' 2>/dev/null | tail -1 || echo "(none)"
+ls -t /home/ubuntu/gaia-data/logs/crawler-*.jsonl 2>/dev/null | head -3 | xargs grep -h '"effective config"' 2>/dev/null | head -1 || echo "(none)"
 
 echo "=== LOG_ANOMALIES ==="
 python3 - /home/ubuntu/gaia-data/logs "$FROM_TS" <<'PY'
