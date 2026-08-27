@@ -35,10 +35,11 @@ pub async fn worker(sock: Arc<UdpSocket>, router: Arc<Router>) {
             Err(_) => continue,
         };
         router.handle_datagram(&buf[..n], from);
-        loop {
+        // Bounded drain: absorb short bursts in the same poll, then always
+        // yield via the outer .await so the executor can service other tasks.
+        for _ in 0..32 {
             match sock.try_recv_from(&mut buf) {
                 Ok((n, from)) => router.handle_datagram(&buf[..n], from),
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(_) => break,
             }
         }
