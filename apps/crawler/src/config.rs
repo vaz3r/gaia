@@ -431,6 +431,7 @@ impl Config {
             env_u64("CRAW_SOURCE_QUERY_TIMEOUT", self.dht.source_query_timeout_secs);
         self.dht.rate_limit_per_sec = env_f64("CRAW_RATE_LIMIT", self.dht.rate_limit_per_sec);
         self.dht.token_window_secs = env_u64("CRAW_TOKEN_WINDOW", self.dht.token_window_secs);
+        self.dht.find_node_response_percent = env_u64("CRAW_FIND_NODE_RESPONSE_PERCENT", self.dht.find_node_response_percent as u64) as u8;
 
         // fetch
         self.fetch.global_fetch_limit =
