@@ -635,7 +635,6 @@ async fn report_loop(
             inbound_ping = cur.inbound_ping,
             inbound_find_node = cur.inbound_find_node,
             inbound_find_node_dropped = cur.inbound_find_node_dropped,
-            inbound_find_node_dropped = cur.inbound_find_node_dropped,
             inbound_get_peers = cur.inbound_get_peers,
             inbound_announce_peer = cur.inbound_announce_peer,
             inbound_invalid = cur.inbound_invalid,
