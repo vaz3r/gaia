@@ -24,6 +24,8 @@ pub struct FetchParams {
     pub source_max_queries: usize,
     pub race_peers: usize,
     pub failed_peer_sample_rate: u64,
+    pub transport_race_concurrent: bool,
+    pub connect_deadline: Duration,
 }
 
 fn sample_failed_peer(ih: &Infohash, addr: &SocketAddr, metrics: &Metrics, rate: u64) {
@@ -68,6 +70,68 @@ fn connect_error_to_outcome(e: &WireError) -> &'static str {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub enum Transport {
+    Tcp,
+    Utp,
+}
+
+/// Race two connection futures concurrently under an outer deadline.
+/// Returns the first success, or the error from the last transport to fail
+/// if both fail. `on_result` is called for each transport that actually
+/// completes (not cancelled by a win), with `(transport, outcome, elapsed_ms)`.
+async fn race_transports<S: Send>(
+    tcp_fut: impl std::future::Future<Output = Result<S, WireError>> + Send,
+    utp_fut: impl std::future::Future<Output = Result<S, WireError>> + Send,
+    deadline: Duration,
+    mut on_result: impl FnMut(Transport, &'static str, u64),
+) -> Result<(Transport, S), WireError> {
+    tokio::pin!(tcp_fut);
+    tokio::pin!(utp_fut);
+    let mut tcp_done = false;
+    let mut utp_done = false;
+    let mut last_err = None;
+    let start = std::time::Instant::now();
+
+    tokio::time::timeout(deadline, async {
+        loop {
+            tokio::select! {
+                res = &mut tcp_fut, if !tcp_done => {
+                    tcp_done = true;
+                    let elapsed_ms = start.elapsed().as_millis() as u64;
+                    match res {
+                        Ok(s) => {
+                            on_result(Transport::Tcp, "ok", elapsed_ms);
+                            break Ok((Transport::Tcp, s));
+                        }
+                        Err(e) => {
+                            on_result(Transport::Tcp, connect_error_to_outcome(&e), elapsed_ms);
+                            if utp_done { break Err(e); }
+                            last_err = Some(e);
+                        }
+                    }
+                }
+                res = &mut utp_fut, if !utp_done => {
+                    utp_done = true;
+                    let elapsed_ms = start.elapsed().as_millis() as u64;
+                    match res {
+                        Ok(s) => {
+                            on_result(Transport::Utp, "ok", elapsed_ms);
+                            break Ok((Transport::Utp, s));
+                        }
+                        Err(e) => {
+                            on_result(Transport::Utp, connect_error_to_outcome(&e), elapsed_ms);
+                            if tcp_done { break Err(last_err.unwrap_or(e)); }
+                        }
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|_| WireError::Timeout)?
+}
+
 enum FetchOutcome {
     ConnectFailed(SocketAddr, WireError),
     MetadataFailed(WireError),
@@ -100,6 +164,8 @@ async fn try_fetch(
     tcp_timeout: Duration,
     utp_timeout: Duration,
     limiter: Arc<crate::verify::ConnLimiter>,
+    transport_race_concurrent: bool,
+    connect_deadline: Duration,
 ) -> FetchOutcome {
     metrics.tcp_attempts.add(1);
 
@@ -113,46 +179,104 @@ async fn try_fetch(
     let _permit = limiter.acquire(addr.ip()).await;
 
     let transport_str: &'static str;
-    let mut session = match WireSession::connect_tcp(addr, &ih, &pid, tcp_timeout).await {
-        Ok(s) => {
-            metrics.tcp_connect_ok.add(1);
-            metrics.tcp_connect_actual.add(1);
-            crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "tcp", result = "ok", elapsed_ms = start.elapsed().as_millis() as u64);
-            transport_str = "tcp";
-            s
+    let mut session = if transport_race_concurrent && utp.is_some() {
+        metrics.utp_attempts.add(1);
+        crate::trace_lifecycle!(&ih, "fetch_start", stream = "fetch", peer = addr_str.clone(), transport = "utp");
+
+        let tcp_fut = WireSession::connect_tcp(addr, &ih, &pid, tcp_timeout);
+        let utp_sock = utp.clone().unwrap();
+        let utp_fut = WireSession::connect_utp(utp_sock, addr, &ih, &pid, utp_timeout);
+
+        let po = peer_outcomes.clone();
+        let ih_clone = ih;
+        let addr_clone = addr;
+        let source_clone = source.to_string();
+        let addr_str_clone = addr_str.clone();
+
+        match race_transports(
+            tcp_fut,
+            utp_fut,
+            connect_deadline,
+            move |transport, result, elapsed_ms| {
+                let transport_str = match transport {
+                    Transport::Tcp => "tcp",
+                    Transport::Utp => "utp",
+                };
+                crate::trace_lifecycle!(&ih_clone, "connect_result", stream = "fetch", peer = addr_str_clone.clone(), transport = transport_str, result = result, elapsed_ms = elapsed_ms);
+                po.push(PeerOutcome {
+                    ih: ih_clone,
+                    peer: addr_clone.to_string(),
+                    source: source_clone.clone(),
+                    transport: transport_str.to_string(),
+                    result: result.to_string(),
+                    client: None,
+                    phase: Some("connect".to_string()),
+                    elapsed_ms: Some(elapsed_ms.min(i32::MAX as u64) as i32),
+                });
+            },
+        )
+        .await
+        {
+            Ok((Transport::Tcp, s)) => {
+                metrics.tcp_connect_ok.add(1);
+                metrics.tcp_connect_actual.add(1);
+                transport_str = "tcp";
+                s
+            }
+            Ok((Transport::Utp, s)) => {
+                metrics.utp_connect_ok.add(1);
+                metrics.utp_connect_actual.add(1);
+                transport_str = "utp";
+                s
+            }
+            Err(e) => {
+                cache.mark_bad(addr);
+                return FetchOutcome::ConnectFailed(addr, e);
+            }
         }
-        Err(tcp_err) => {
-            crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "tcp", result = "error", elapsed_ms = start.elapsed().as_millis() as u64);
-            match utp {
-                Some(sock) => {
-                    metrics.utp_attempts.add(1);
-                    crate::trace_lifecycle!(&ih, "fetch_start", stream = "fetch", peer = addr_str.clone(), transport = "utp");
-                    let utp_start = std::time::Instant::now();
-                    match WireSession::connect_utp(sock, addr, &ih, &pid, utp_timeout).await {
-                        Ok(s) => {
-                            metrics.utp_connect_ok.add(1);
-                            metrics.utp_connect_actual.add(1);
-                            crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "utp", result = "ok", elapsed_ms = utp_start.elapsed().as_millis() as u64);
-                            transport_str = "utp";
-                            s
-                        }
-                        Err(utp_err) => {
-                            let result_str = connect_error_to_outcome(&utp_err);
-                            crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "utp", result = result_str, elapsed_ms = utp_start.elapsed().as_millis() as u64);
-                            cache.mark_bad(addr);
-                            peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: "utp".to_string(), result: result_str.to_string(), client: None, phase: Some("connect".to_string()), elapsed_ms: Some(utp_start.elapsed().as_millis().min(i32::MAX as u128) as i32) });
-                            return FetchOutcome::ConnectFailed(addr, utp_err);
+    } else {
+        // Sequential path: TCP first, uTP fallback on failure (original logic).
+        match WireSession::connect_tcp(addr, &ih, &pid, tcp_timeout).await {
+            Ok(s) => {
+                metrics.tcp_connect_ok.add(1);
+                metrics.tcp_connect_actual.add(1);
+                crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "tcp", result = "ok", elapsed_ms = start.elapsed().as_millis() as u64);
+                transport_str = "tcp";
+                s
+            }
+            Err(tcp_err) => {
+                crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "tcp", result = "error", elapsed_ms = start.elapsed().as_millis() as u64);
+                let result_str = connect_error_to_outcome(&tcp_err);
+                peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: "tcp".to_string(), result: result_str.to_string(), client: None, phase: Some("connect".to_string()), elapsed_ms: Some(start.elapsed().as_millis().min(i32::MAX as u128) as i32) });
+                match utp {
+                    Some(sock) => {
+                        metrics.utp_attempts.add(1);
+                        crate::trace_lifecycle!(&ih, "fetch_start", stream = "fetch", peer = addr_str.clone(), transport = "utp");
+                        let utp_start = std::time::Instant::now();
+                        match WireSession::connect_utp(sock, addr, &ih, &pid, utp_timeout).await {
+                            Ok(s) => {
+                                metrics.utp_connect_ok.add(1);
+                                metrics.utp_connect_actual.add(1);
+                                crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "utp", result = "ok", elapsed_ms = utp_start.elapsed().as_millis() as u64);
+                                transport_str = "utp";
+                                s
+                            }
+                            Err(utp_err) => {
+                                let result_str = connect_error_to_outcome(&utp_err);
+                                crate::trace_lifecycle!(&ih, "connect_result", stream = "fetch", peer = addr_str.clone(), transport = "utp", result = result_str, elapsed_ms = utp_start.elapsed().as_millis() as u64);
+                                peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: "utp".to_string(), result: result_str.to_string(), client: None, phase: Some("connect".to_string()), elapsed_ms: Some(utp_start.elapsed().as_millis().min(i32::MAX as u128) as i32) });
+                                cache.mark_bad(addr);
+                                return FetchOutcome::ConnectFailed(addr, utp_err);
+                            }
                         }
                     }
-                }
-                None => {
-                    cache.mark_bad(addr);
-                    let result_str = connect_error_to_outcome(&tcp_err);
-                    peer_outcomes.push(PeerOutcome { ih, peer: addr.to_string(), source: source.to_string(), transport: "tcp".to_string(), result: result_str.to_string(), client: None, phase: Some("connect".to_string()), elapsed_ms: Some(start.elapsed().as_millis().min(i32::MAX as u128) as i32) });
-                    return FetchOutcome::ConnectFailed(addr, tcp_err);
+                    None => {
+                        cache.mark_bad(addr);
+                        return FetchOutcome::ConnectFailed(addr, tcp_err);
+                    }
                 }
             }
-}
+        }
     };
     drop(_permit);
 
@@ -191,6 +315,8 @@ pub async fn verify_infohash(
     let fetch_timeout = params.metadata_timeout;
     let tcp_timeout = params.tcp_timeout;
     let utp_timeout = params.utp_timeout;
+    let transport_race_concurrent = params.transport_race_concurrent;
+    let connect_deadline = params.connect_deadline;
 
     let mut set: JoinSet<FetchOutcome> = JoinSet::new();
     let mut peers_seen: std::collections::HashSet<SocketAddr> = std::collections::HashSet::new();
@@ -217,7 +343,7 @@ pub async fn verify_infohash(
         let limiter = conn_limiter.clone();
         metrics.fetch_attempts.add(1);
         set.spawn(async move {
-            try_fetch(addr, ih, pid, metrics, cache, utp, po, "announce_peer", fetch_timeout, tcp_timeout, utp_timeout, limiter).await
+            try_fetch(addr, ih, pid, metrics, cache, utp, po, "announce_peer", fetch_timeout, tcp_timeout, utp_timeout, limiter, transport_race_concurrent, connect_deadline).await
         });
     }
 
@@ -327,7 +453,7 @@ pub async fn verify_infohash(
                             let limiter = conn_limiter.clone();
                             metrics.fetch_attempts.add(1);
                             set.spawn(async move {
-                                try_fetch(addr, ih, pid, metrics, cache, utp, po, "get_peers", fetch_timeout, tcp_timeout, utp_timeout, limiter).await
+                                try_fetch(addr, ih, pid, metrics, cache, utp, po, "get_peers", fetch_timeout, tcp_timeout, utp_timeout, limiter, transport_race_concurrent, connect_deadline).await
                             });
                         }
                     }
@@ -354,5 +480,175 @@ pub async fn verify_infohash(
                 VerifyResult::MetadataFailed
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Mutex;
+
+    fn ok_after(ms: u64) -> impl std::future::Future<Output = Result<(), WireError>> {
+        async move {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+            Ok(())
+        }
+    }
+
+    fn fail_after(ms: u64, err: WireError) -> impl std::future::Future<Output = Result<(), WireError>> {
+        async move {
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+            Err(err)
+        }
+    }
+
+    fn immediate_ok() -> impl std::future::Future<Output = Result<(), WireError>> {
+        std::future::ready(Ok(()))
+    }
+
+    fn immediate_fail(err: WireError) -> impl std::future::Future<Output = Result<(), WireError>> {
+        std::future::ready(Err(err))
+    }
+
+    struct OutcomeRecord {
+        transport: Transport,
+        result: &'static str,
+    }
+
+    fn collector() -> (Arc<Mutex<Vec<OutcomeRecord>>>, impl FnMut(Transport, &'static str, u64)) {
+        let records = Arc::new(Mutex::new(Vec::new()));
+        let r = records.clone();
+        let cb = move |transport: Transport, result: &'static str, _elapsed: u64| {
+            r.lock().unwrap().push(OutcomeRecord { transport, result });
+        };
+        (records, cb)
+    }
+
+    #[tokio::test]
+    async fn race_tcp_wins_cancels_utp() {
+        let (records, cb) = collector();
+        let res = race_transports(
+            ok_after(10),
+            ok_after(500),
+            Duration::from_secs(5),
+            cb,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(res.0, Transport::Tcp));
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let recs = records.lock().unwrap();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].result, "ok");
+    }
+
+    #[tokio::test]
+    async fn race_utp_wins_when_tcp_fails() {
+        let (records, cb) = collector();
+        let res = race_transports(
+            immediate_fail(WireError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused"))),
+            ok_after(20),
+            Duration::from_secs(5),
+            cb,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(res.0, Transport::Utp));
+        let recs = records.lock().unwrap();
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[0].transport, Transport::Tcp);
+        assert_eq!(recs[0].result, "io_error");
+        assert_eq!(recs[1].transport, Transport::Utp);
+        assert_eq!(recs[1].result, "ok");
+    }
+
+    #[tokio::test]
+    async fn race_both_fail_returns_tcp_error() {
+        let (records, cb) = collector();
+        let res = race_transports(
+            immediate_fail(WireError::Timeout),
+            fail_after(20, WireError::Io(std::io::Error::new(std::io::ErrorKind::Other, "err"))),
+            Duration::from_secs(5),
+            cb,
+        )
+        .await;
+        assert!(res.is_err());
+        assert!(matches!(res.unwrap_err(), WireError::Timeout));
+        let recs = records.lock().unwrap();
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[0].transport, Transport::Tcp);
+        assert_eq!(recs[0].result, "timeout");
+        assert_eq!(recs[1].transport, Transport::Utp);
+    }
+
+    #[tokio::test]
+    async fn race_both_fail_utp_first() {
+        let (records, cb) = collector();
+        let res = race_transports(
+            fail_after(40, WireError::Timeout),
+            immediate_fail(WireError::Io(std::io::Error::new(std::io::ErrorKind::Other, "err"))),
+            Duration::from_secs(5),
+            cb,
+        )
+        .await;
+        assert!(res.is_err());
+        assert!(matches!(res.unwrap_err(), WireError::Timeout));
+        let recs = records.lock().unwrap();
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[0].transport, Transport::Utp);
+        assert_eq!(recs[1].transport, Transport::Tcp);
+    }
+
+    #[tokio::test]
+    async fn race_deadline_fires() {
+        let (records, cb) = collector();
+        let res = race_transports(
+            ok_after(1000),
+            ok_after(1000),
+            Duration::from_millis(20),
+            cb,
+        )
+        .await;
+        assert!(matches!(res, Err(WireError::Timeout)));
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        let recs = records.lock().unwrap();
+        assert_eq!(recs.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn race_tcp_success_no_utp_outcome_recorded() {
+        let (records, cb) = collector();
+        let res = race_transports(
+            immediate_ok(),
+            ok_after(500),
+            Duration::from_secs(5),
+            cb,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(res.0, Transport::Tcp));
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let recs = records.lock().unwrap();
+        assert_eq!(recs.len(), 1, "only the winner should be recorded");
+        assert_eq!(recs[0].result, "ok");
+    }
+
+    #[tokio::test]
+    async fn race_tcp_fast_fail_utp_slow_ok() {
+        let (records, cb) = collector();
+        let res = race_transports(
+            immediate_fail(WireError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused"))),
+            ok_after(100),
+            Duration::from_secs(5),
+            cb,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(res.0, Transport::Utp));
+        let recs = records.lock().unwrap();
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[0].result, "io_error");
+        assert_eq!(recs[1].result, "ok");
     }
 }

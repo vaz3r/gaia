@@ -275,6 +275,8 @@ async fn main() {
                 source_max_queries: config.dht.source_max_queries,
                 race_peers: config.fetch.race_peers,
                 failed_peer_sample_rate: config.fetch.failed_peer_sample_rate,
+                transport_race_concurrent: config.fetch.transport_race_concurrent,
+                connect_deadline: Duration::from_millis(config.fetch.connect_deadline_ms),
             },
         },
     );
@@ -385,6 +387,8 @@ fn log_effective_config(config: &Config) {
         max_retries = config.retry.max_retries,
         no_peers_terminal_on_first = config.retry.no_peers_terminal_on_first,
         no_metadata_max_retries = config.retry.no_metadata_max_retries,
+        transport_race_concurrent = config.fetch.transport_race_concurrent,
+        connect_deadline_ms = config.fetch.connect_deadline_ms,
         scheduler_claim_limit = config.retry.scheduler_claim_limit,
         scheduler_interval_secs = config.retry.scheduler_interval_secs,
         pg_pool_max = config.storage.pg_pool_max_connections,

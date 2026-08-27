@@ -73,6 +73,8 @@ pub struct FetchConfig {
     pub max_pieces: usize,
     pub failed_peer_sample_rate: u64,
     pub fresh_channel_capacity: usize,
+    pub transport_race_concurrent: bool,
+    pub connect_deadline_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -218,6 +220,8 @@ impl Default for FetchConfig {
             max_pieces: 4096,
             failed_peer_sample_rate: 500,
             fresh_channel_capacity: 65536,
+            transport_race_concurrent: true,
+            connect_deadline_ms: 20000,
         }
     }
 }
@@ -429,6 +433,10 @@ impl Config {
         self.fetch.metadata_timeout_secs =
             env_u64("CRAW_FETCH_TIMEOUT_MS", self.fetch.metadata_timeout_secs * 1000) / 1000;
         self.fetch.utp_enabled = env_bool("CRAW_UTP_ENABLED", self.fetch.utp_enabled);
+        self.fetch.transport_race_concurrent =
+            env_bool("CRAW_TRANSPORT_RACE_CONCURRENT", self.fetch.transport_race_concurrent);
+        self.fetch.connect_deadline_ms =
+            env_u64("CRAW_CONNECT_DEADLINE_MS", self.fetch.connect_deadline_ms);
 
         // logging
         if let Ok(dir) = std::env::var("CRAW_LOG_DIR") {
@@ -607,6 +615,10 @@ struct PartialFetch {
     failed_peer_sample_rate: Option<u64>,
     #[serde(default)]
     fresh_channel_capacity: Option<usize>,
+    #[serde(default)]
+    transport_race_concurrent: Option<bool>,
+    #[serde(default)]
+    connect_deadline_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -885,6 +897,12 @@ impl PartialFetch {
         if let Some(v) = self.fresh_channel_capacity {
             cfg.fresh_channel_capacity = v;
         }
+        if let Some(v) = self.transport_race_concurrent {
+            cfg.transport_race_concurrent = v;
+        }
+        if let Some(v) = self.connect_deadline_ms {
+            cfg.connect_deadline_ms = v;
+        }
     }
 }
 
@@ -1076,6 +1094,8 @@ mod tests {
         assert_eq!(c.storage.torrent_batch_chunk, 2000);
         assert_eq!(c.storage.janitor_interval_secs, 1800);
         assert_eq!(c.storage.janitor_batch_size, 25000);
+        assert_eq!(c.fetch.transport_race_concurrent, true);
+        assert_eq!(c.fetch.connect_deadline_ms, 20000);
     }
 
     #[test]
