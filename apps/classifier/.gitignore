@@ -32,9 +32,12 @@ data/models/
 # ── Large data files ──────────────────────────────────────────────────────────
 # Raw/unlabeled pools (60 MB+, regenerated from DB)
 data/unlabeled_pool.jsonl
+data/unlabeled_pool_*.jsonl
 data/unlabeled_20k.jsonl
 data/unlabeled_20k_iter8.jsonl
 data/natural_test_set_2000.jsonl
+data/pseudo_labels_*.jsonl
+data/al_candidates_*.jsonl
 
 # AL working batches (intermediate, large)
 data/al_batch*.jsonl
@@ -59,6 +62,7 @@ data/training_combined_v7_true.jsonl
 data/training_combined_v8_true.jsonl
 data/training_combined_v9_true.jsonl
 data/training_combined_v11_true.jsonl
+data/training_semi_supervised_*.jsonl
 data/train_v10_80pct.jsonl
 data/val_v10_20pct.jsonl
 data/manual_eval_set_2_1000.jsonl
@@ -117,10 +121,10 @@ run_eval_iter5.sh
 run_pipeline.sh
 
 # Merge/select helper scripts (one-off)
-merge_*.py
-select_*.py
-split_*.py
-prompt_al.txt
+/merge_*.py
+/select_*.py
+/split_*.py
+/prompt_al.txt
 
 # ── Intermediate CSVs / JSONs ────────────────────────────────────────────────
 data/active_learning_batch1.csv
