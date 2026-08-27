@@ -1,7 +1,18 @@
+# Phase 3: Active Sybil Weaponization & BEP-51
+
 ## Goal Description
-This plan actively weaponizes the crawler's Sybil identities rather than treating them passively. By expanding the Sybil swarm, actively seeding them into remote routing tables, distributing outbound query origins, and introducing BEP-51 `sample_infohashes` support, the crawler will attract substantially more `announce_peer` messages. 
+Now that the crawler's CPU is no longer starved by DHT floods (Phase 2), we are ready to scale discovery throughput astronomically. 
+
+**The Tradeoff:** As observed post-throttle, dropping 95% of inbound `find_node` queries causes remote nodes to fail their "liveness checks" against us, leading to our eviction from their routing tables. This causes a decay in passive `inbound_get_peers` discovery (dropping from ~3.1M/10min to ~1.2M/10min). 
+
+To completely counteract this and break through the natural limit of a single Node ID, we will implement **Active Sybil Weaponization** combined with **BEP-51 (DHT Infohash Indexing)**. By expanding the Sybil swarm, actively seeding them into remote routing tables, distributing outbound query origins, and introducing BEP-51 `sample_infohashes` support, the crawler will attract substantially more `announce_peer` and `get_peers` messages. 
 
 Crucially, it overhauls the `RoutingTable` to a **Multi-Sybil Routing Table**. The current single Kademlia tree forces distant buckets to drop nodes beyond `K=8`. By maintaining a routing table for each Sybil ID, we map the entire keyspace natively. This ensures that when an infohash lookup starts, we instantly provide starting nodes that are mathematically adjacent to the target, reducing lookup hops from 15 seconds to milliseconds.
+
+## Configurability (The Kill Switch)
+The entire Sybil architecture will be fully configurable via the `.env` file using the `CRAW_SYBILS` variable.
+*   **ON (`CRAW_SYBILS=128`)**: The crawler spawns 128 virtual identities. The `RoutingTable` provisions 129 internal tables, and outbound queries dynamically rotate through the Sybil IDs to aggressively blanket the network.
+*   **OFF (`CRAW_SYBILS=0`)**: The crawler boots as a classic, single-node Kademlia client. The `RoutingTable` allocates exactly 1 internal table, and all queries use your primary `self_id`. This allows you to instantly toggle the weaponization off if you ever need to revert to Phase 2 behavior.
 
 ## User Review Required
 > [!IMPORTANT]
@@ -129,5 +140,5 @@ Run standard crate tests to ensure syntax and base logic are sound:
 Monitor the deployment using `health.sh` and production logs:
 1. **Routing Table Growth**: The routing table size metric should explode from ~300 to tens of thousands of nodes.
 2. **Lookup Hops**: `source_timeout` and `source_deadline_hits` should plummet because lookups complete instantly.
-3. **Inbound Announce Rate**: Observe `inbound_announce_peer` increasing significantly from the 2.6k/15m baseline.
+3. **Inbound Announce/Get Peers Rate**: Observe `inbound_get_peers` and `inbound_announce_peer` recovering from the throttle decay and multiplying far beyond their previous ceilings.
 4. **BEP-51 Quality**: Track the number of infohashes discovered via BEP-51.
