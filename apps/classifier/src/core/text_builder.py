@@ -41,30 +41,42 @@ def _detect_features(name: str, files: list[str]) -> str:
         if tags:
             parts.append("Media: " + ", ".join(tags))
 
+    # Anime / Fansub release patterns
+    is_fansub = bool(re.search(r"\[(Erai-raws|SubsPlease|HorribleSubs|Judas|DKB|ASW|Commie|FFF|Coalgirls|Anime\s*Time|NeoAE|Baha|ANi|VCB-Studio|Kawaiika-Raws|Golumpa)\]", name, re.IGNORECASE))
+    is_anime_ep = bool(re.search(r"\s-\s\d{1,4}(\s*v\d)?\s*\[", name))
+    
     if re.search(r"S\d{1,2}E\d{1,3}", name, re.IGNORECASE):
-        if re.search(r"\b(ANi|Baha|WEB-DL|BDRip|AMZN|NF|AT-X)\b", name, re.IGNORECASE):
+        if is_fansub or re.search(r"\b(ANi|Baha|AT-X|Tokyo\s*MX|BS11)\b", name, re.IGNORECASE):
             parts.append("Type: Anime episode")
         else:
             parts.append("Type: TV episode")
+    elif is_fansub or (is_anime_ep and re.search(r"\b(1080p|720p|480p|CR|B-Global|ADN|Baha)\b", name, re.IGNORECASE)):
+        parts.append("Type: Anime episode")
     elif re.search(r"Season\s+\d|S\d{1,2}\s", name, re.IGNORECASE):
         parts.append("Type: TV season")
-    elif re.search(r"\b(19|20)\d{2}\b", name) and re.search(r"\b(1080p|720p|4K|BluRay|WEBRip|BDRip|HDRip|WEB-DL|x264|x265)\b", name, re.IGNORECASE):
+    elif re.search(r"\b(19|20)\d{2}\b", name) and re.search(r"\b(1080p|720p|4K|BluRay|WEBRip|BDRip|HDRip|WEB-DL|x264|x265|HEVC)\b", name, re.IGNORECASE):
         parts.append("Type: Movie release")
     elif re.search(r"\bmkv$|\.avi$|\.mp4$", name, re.IGNORECASE):
         parts.append("Type: Video file")
+        
     if re.search(r"\b(anime|batch|fansub)\b", name, re.IGNORECASE):
         parts.append("Type: Anime")
-    if re.search(r"\bFLAC\b", name, re.IGNORECASE):
-        parts.append("Format: FLAC audio")
-    elif re.search(r"\b(MP3|320kbps)\b", name, re.IGNORECASE):
-        parts.append("Format: MP3 audio")
+        
+    # Audio formatting (only if not an obvious video container)
+    is_video_container = bool(re.search(r"\.(mkv|mp4|avi|ts|m4v|webm)$", name, re.IGNORECASE))
+    if not is_video_container:
+        if re.search(r"\bFLAC\b", name, re.IGNORECASE):
+            parts.append("Format: FLAC audio")
+        elif re.search(r"\b(MP3|320kbps)\b", name, re.IGNORECASE):
+            parts.append("Format: MP3 audio")
+            
     if re.search(r"\b(dub|dubbed|VO|VOSTFR|VOST)\b", name, re.IGNORECASE):
         parts.append("Audio: dubbed")
-    if re.search(r"\b(sub|subbed|subs|softsub)\b", name, re.IGNORECASE):
+    if re.search(r"\b(sub|subbed|subs|softsub|MultiSub)\b", name, re.IGNORECASE):
         parts.append("Subtitled")
     if re.search(r"\b(crack|keygen|patch|serial)\b", name, re.IGNORECASE):
         parts.append("DRM: cracked")
-    if re.search(r"\b(repack|fitgirl|corepack)\b", name, re.IGNORECASE):
+    if re.search(r"\b(repack|fitgirl|corepack|dodi)\b", name, re.IGNORECASE):
         parts.append("Format: repack")
 
     return "; ".join(parts)

@@ -76,11 +76,11 @@ data/val_seed.jsonl
 data/labeled.jsonl
 
 # ── What to KEEP in data/ ─────────────────────────────────────────────────────
-# data/training_combined_v10_true.jsonl ← canonical training set (tracked)
-# data/manual_eval_set_1000.jsonl       ← golden test set (tracked)
-# data/manual_eval_set_200.jsonl        ← original test set (tracked)
-# data/manual_seed_1800.csv             ← seed labels (tracked)
-# data/manual_eval_report_final_v10.txt  ← final report (tracked)
+# data/training_combined_v10_true.jsonl     ← canonical training set (tracked)
+# data/manual_eval_set_1000.jsonl           ← natural test set (tracked)
+# data/manual_eval_set_balanced_2000.jsonl  ← balanced benchmark (tracked)
+# data/manual_eval_set_200.jsonl            ← original test set (tracked)
+# data/manual_seed_1800.csv                 ← seed labels (tracked)
 
 # ── Scratch / one-off scripts ─────────────────────────────────────────────────
 /scratch_*.py
