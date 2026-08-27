@@ -151,20 +151,34 @@ app.get('/api/metrics/current', async (req, res) => {
               c.metric_value AS current_value,
               c.ts,
               COALESCE(prev.metric_value, 0) AS value_1h_ago,
-              EXTRACT(EPOCH FROM (c.ts - prev.ts)) / 3600.0 AS hours_elapsed
+              EXTRACT(EPOCH FROM (c.ts - prev.ts)) / 3600.0 AS hours_elapsed,
+              COALESCE(session_val.metric_value, 0) AS value_at_session_start,
+              (SELECT ts FROM session_start) AS session_start_ts
        FROM cur c
        LEFT JOIN LATERAL (
            SELECT metric_value, ts FROM metrics m
            WHERE m.metric_name = c.metric_name
              AND m.ts <= c.ts - interval '1 hour'
+             AND m.ts >= (SELECT ts FROM session_start)
            ORDER BY m.ts DESC LIMIT 1
          ) prev ON true
+       LEFT JOIN LATERAL (
+           SELECT metric_value FROM metrics m
+           WHERE m.metric_name = c.metric_name
+             AND m.ts >= (SELECT ts FROM session_start)
+           ORDER BY m.ts ASC LIMIT 1
+         ) session_val ON true
        ORDER BY c.metric_name`
     );
     const snapshot = {};
     const rates = {};
+    const sessionStartTs = r.rows[0]?.session_start_ts;
+    const sessionHours = sessionStartTs
+      ? (Date.now() - new Date(sessionStartTs).getTime()) / 3600000
+      : 0;
     r.rows.forEach((row) => {
       snapshot[row.metric_name] = Number(row.current_value);
+      // Try 1h rate first (within current session)
       if (
         row.hours_elapsed &&
         row.hours_elapsed > 0 &&
@@ -172,6 +186,14 @@ app.get('/api/metrics/current', async (req, res) => {
       ) {
         rates[row.metric_name] = Number(
           (row.current_value - row.value_1h_ago) / row.hours_elapsed
+        );
+      } else if (
+        sessionHours > 0 &&
+        row.current_value >= row.value_at_session_start
+      ) {
+        // Fall back to session-average rate
+        rates[row.metric_name] = Number(
+          (row.current_value - row.value_at_session_start) / sessionHours
         );
       } else {
         rates[row.metric_name] = null;
