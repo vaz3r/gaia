@@ -32,14 +32,20 @@ workspace-production (DB)
 
 ## Pre-Migration Checklist
 
-- [ ] Create OVH VPS-1 instance
-- [ ] Create user account (recommend `ubuntu` for script compatibility)
-- [ ] Install Docker + Docker Compose
-- [ ] Install Tailscale, authenticate to workspace-production network
-- [ ] Install Git
-- [ ] Add SSH key from local machine
-- [ ] Verify Tailscale connectivity to workspace-production: `ping <DB_TAILSCALE_IP>`
-- [ ] Verify PostgreSQL is reachable: `psql 'postgres://crawler:<password>@<DB_TAILSCALE_IP>:5432/craw?sslmode=disable'`
+- [x] Create OVH VPS-1 instance
+- [x] Create user account (recommend `ubuntu` for script compatibility)
+- [x] Install Docker + Docker Compose
+- [x] Install Tailscale, authenticate to workspace-production network
+- [x] Install Git
+- [x] Add SSH key from local machine
+- [x] Set hostname to `gaia`
+- [x] Add `ubuntu` to docker group
+- [x] Set up GitHub credentials on gaia (`.git-credentials`)
+- [x] Clone repo to `/home/ubuntu/gaia`
+- [x] Create data dirs (UID 10001): `/home/ubuntu/gaia-data/{crawler,logs}`
+- [x] Open UDP 6882 in OVH Control Panel firewall
+- [x] Verify Tailscale connectivity to workspace-production
+- [x] Verify PostgreSQL is reachable
 
 ## File Changes Required
 
@@ -47,9 +53,18 @@ workspace-production (DB)
 
 | Variable | Current Value | New Value |
 |---|---|---|
-| `CRAW_EXTERNAL_IP` | `132.145.189.201` | `<new VPS public IP>` |
-| `DB_HOST` | `100.87.194.112` | `<Tailscale IP of workspace-production>` |
+| `DEPLOY_USER` | (new) | `ubuntu` |
+| `CRAW_EXTERNAL_IP` | `132.145.189.201` | `135.125.131.176` (gaia public IP) |
+| `DB_HOST` | `100.87.194.112` | `100.87.194.112` (unchanged, workspace-production) |
 | `CRAW_WORKERS` | `8` | `4` (match 2 vCores) |
+
+### 1b. `deploy/config.env` (Deployment Infrastructure)
+
+| Variable | New Value |
+|---|---|
+| `DEPLOY_HOST` | `gaia` |
+| `DEPLOY_SERVICES` | `crawler` (dashboard stays on zerone) |
+| `DEPLOY_SSH_KEY` | `${HOME}/.ssh/zerone` (same key reused) |
 
 ### 2. `deploy/scripts/deploy.sh`
 
@@ -207,3 +222,28 @@ ssh gaia 'docker run --rm postgres:16 psql "postgres://crawler:<password>@<DB_IP
 - Crawler already consumes 1.3-1.7 cores
 - PostgreSQL introduces unpredictable CPU, memory, disk I/O spikes
 - RAM might fit but CPU contention would be worse
+
+## Migration Status (2026-08-27)
+
+**COMPLETE.** Crawler migrated from zerone (Oracle ARM64) to gaia (OVH VPS-1, x86-64).
+
+### What Changed
+- **Dockerfile**: removed hardcoded `--platform=linux/arm64`, builds natively per host
+- **`deploy/config.env`**: `DEPLOY_HOST=gaia`, `DEPLOY_SERVICES=crawler` (crawler-only host)
+- **`deploy.sh`**: builds/recreates configurable `$DEPLOY_SERVICES`; skips dashboard index init when dashboard not deployed
+- **`.env`**: `CRAW_EXTERNAL_IP=135.125.131.176`, `CRAW_WORKERS=4`
+- **SSH config**: added `gaia` alias (Tailscale IP `100.66.211.64`, reuses zerone key)
+- **gaia setup**: hostname set, docker group added, GitHub credentials, repo cloned, data dirs (UID 10001), port UDP 6882 opened in OVH panel
+
+### Verified Working
+- Crawler binds 4x UDP sockets on `0.0.0.0:6882` (matches `CRAW_WORKERS=4`)
+- Public DHT reachability confirmed (probe from outside: ~5% find_node responses matching `find_node_response_percent=5`)
+- Inbound traffic flowing: `inbound_find_node=545`, `inbound_get_peers=1144`
+- Harvesting + verifying: `harvested=1184`, routing table 187 nodes, `verified_per_hour=480`
+- `health.sh` targets gaia correctly via `deploy/config.env`
+
+### Post-Migration Notes
+- Only `gaia-crawler` runs on gaia; dashboard remains on zerone
+- DB stays on workspace-production (via Tailscale)
+- Run `docker compose up -d --force-recreate --no-build crawler` (config-restart.sh) for config-only changes
+- Monitor CPU: 2 shared vCores, `CRAW_FIND_NODE_RESPONSE_PERCENT=5` keeps CPU manageable
