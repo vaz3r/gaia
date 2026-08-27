@@ -14,7 +14,7 @@ use crate::config::Config;
 use crate::trace::TraceConfig;
 use crate::dht::routing_table::{NodeInfo, RoutingTable};
 use crate::dht::walker::Walker;
-use crate::harvest::{Harvester, Source};
+use crate::harvest::{HarvestEvent, Harvester, Source};
 use crate::krpc::NodeId;
 use crate::krpc::token::TokenGenerator;
 use crate::krpc::tx_state::TxTable;
@@ -103,7 +103,9 @@ async fn main() {
     let (verify_tx, verify_rx) = mpsc::channel(channel_capacity);
     let (announce_tx, announce_rx) = mpsc::channel(channel_capacity);
 
-    let harvester = Arc::new(Mutex::new(Harvester::new(
+    let harvest_channel_capacity = config.harvest.harvest_channel_capacity.max(1);
+    let (harvest_tx, harvest_rx) = mpsc::channel(harvest_channel_capacity);
+    let harvester = Harvester::new(
         config.harvest.bloom_capacity,
         config.harvest.bloom_fp_rate,
         config.harvest.announce_bloom_ratio,
@@ -113,7 +115,8 @@ async fn main() {
         verify_tx.clone(),
         announce_tx,
         metrics.clone(),
-    )));
+    );
+    tokio::spawn(crate::harvest::run_harvester(harvest_rx, harvester));
 
     let peer_cache = Arc::new(PeerCache::new(
         Duration::from_secs(config.cache.peer_cache_ttl_secs),
@@ -142,7 +145,7 @@ async fn main() {
             i,
             &bootstrap,
             metrics.clone(),
-            harvester.clone(),
+            harvest_tx.clone(),
             &mut node_routers,
         ).await;
         tracing::info!(node = i, "dht node started");
@@ -401,6 +404,7 @@ fn log_effective_config(config: &Config) {
         janitor_interval_secs = config.storage.janitor_interval_secs,
         janitor_batch_size = config.storage.janitor_batch_size,
         bloom_capacity = config.harvest.bloom_capacity,
+        harvest_channel_capacity = config.harvest.harvest_channel_capacity,
         log_json = config.logging.log_json,
         log_dir = %config.logging.log_dir.display(),
         profile = %config.profile,
@@ -423,7 +427,7 @@ async fn spawn_node(
     node_index: usize,
     bootstrap: &[SocketAddr],
     metrics: Arc<Metrics>,
-    harvester: Arc<Mutex<Harvester>>,
+    harvest_tx: mpsc::Sender<HarvestEvent>,
     node_routers: &mut Vec<Arc<Router>>,
 ) {
     let data_dir = config.data_dir.join(format!("node_{node_index}"));
@@ -469,7 +473,7 @@ async fn spawn_node(
         tx_table.clone(),
         token.clone(),
         table.clone(),
-        harvester.clone(),
+        harvest_tx.clone(),
         metrics.clone(),
     );
 

@@ -34,6 +34,18 @@ pub struct Harvester {
     metrics: Arc<Metrics>,
 }
 
+pub struct HarvestEvent {
+    pub ih: Infohash,
+    pub source: Source,
+    pub direct: Option<SocketAddr>,
+}
+
+pub async fn run_harvester(mut rx: mpsc::Receiver<HarvestEvent>, mut harvester: Harvester) {
+    while let Some(ev) = rx.recv().await {
+        harvester.harvest(ev.ih, ev.source, ev.direct);
+    }
+}
+
 impl Harvester {
     pub fn new(
         capacity: usize,

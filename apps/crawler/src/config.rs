@@ -128,6 +128,7 @@ pub struct HarvestConfig {
     pub bloom_fp_rate: f64,
     pub announce_bloom_ratio: f64,
     pub announce_bloom_min: usize,
+    pub harvest_channel_capacity: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -288,6 +289,7 @@ impl Default for HarvestConfig {
             bloom_fp_rate: 0.001,
             announce_bloom_ratio: 0.25,
             announce_bloom_min: 64,
+            harvest_channel_capacity: 10_000,
         }
     }
 }
@@ -442,6 +444,10 @@ impl Config {
         self.fetch.pipeline_limit =
             env_usize("CRAW_PIPELINE_LIMIT", self.fetch.pipeline_limit);
 
+        // harvest
+        self.harvest.harvest_channel_capacity =
+            env_usize("CRAW_HARVEST_CHANNEL_CAPACITY", self.harvest.harvest_channel_capacity);
+
         // logging
         if let Ok(dir) = std::env::var("CRAW_LOG_DIR") {
             self.logging.log_dir = PathBuf::from(dir);
@@ -502,6 +508,9 @@ impl Config {
         }
         if self.harvest.bloom_capacity == 0 {
             return Err("harvest.bloom_capacity must be > 0".into());
+        }
+        if self.harvest.harvest_channel_capacity == 0 {
+            return Err("harvest.harvest_channel_capacity must be > 0".into());
         }
         if self.logging.log_buffer_capacity == 0 {
             return Err("logging.log_buffer_capacity must be > 0".into());
@@ -722,6 +731,8 @@ struct PartialHarvest {
     announce_bloom_ratio: Option<f64>,
     #[serde(default)]
     announce_bloom_min: Option<usize>,
+    #[serde(default)]
+    harvest_channel_capacity: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1049,6 +1060,9 @@ impl PartialHarvest {
         if let Some(v) = self.announce_bloom_min {
             cfg.announce_bloom_min = v;
         }
+        if let Some(v) = self.harvest_channel_capacity {
+            cfg.harvest_channel_capacity = v;
+        }
     }
 }
 
@@ -1115,6 +1129,7 @@ mod tests {
         assert_eq!(c.fetch.transport_race_concurrent, true);
         assert_eq!(c.fetch.connect_deadline_ms, 10000);
         assert_eq!(c.fetch.pipeline_limit, 4000);
+        assert_eq!(c.harvest.harvest_channel_capacity, 10_000);
     }
 
     #[test]

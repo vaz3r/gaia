@@ -1,6 +1,6 @@
 use crate::dht::node_id::SybilPool;
 use crate::dht::routing_table::{NodeInfo, RoutingTable, encode_compact, xor};
-use crate::harvest::Harvester;
+use crate::harvest::{HarvestEvent, Source};
 use crate::krpc::codec::BValue;
 use crate::krpc::message::{ANNOUNCE_PEER, FIND_NODE, GET_PEERS, Kind, Message, PING};
 use crate::krpc::token::TokenGenerator;
@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug)]
 pub enum QueryError {
@@ -44,7 +44,7 @@ pub struct Router {
     tx: Arc<TxTable>,
     token: Arc<RwLock<TokenGenerator>>,
     table: Arc<Mutex<RoutingTable>>,
-    harvest: Arc<Mutex<Harvester>>,
+    harvest_tx: mpsc::Sender<HarvestEvent>,
     metrics: Arc<Metrics>,
 }
 
@@ -59,7 +59,7 @@ impl Router {
         tx: Arc<TxTable>,
         token: Arc<RwLock<TokenGenerator>>,
         table: Arc<Mutex<RoutingTable>>,
-        harvest: Arc<Mutex<Harvester>>,
+        harvest_tx: mpsc::Sender<HarvestEvent>,
         metrics: Arc<Metrics>,
     ) -> Arc<Self> {
         Arc::new(Router {
@@ -72,7 +72,7 @@ impl Router {
             tx,
             token,
             table,
-            harvest,
+            harvest_tx,
             metrics,
         })
     }
@@ -243,12 +243,19 @@ impl Router {
         self.send_response(t, from, r);
     }
 
-    fn do_harvest(&self, ih: Infohash, source: crate::harvest::Source, direct: Option<SocketAddr>) {
+    fn do_harvest(&self, ih: Infohash, source: Source, direct: Option<SocketAddr>) {
         self.metrics.infohashes_harvested.add(1);
-        self.harvest
-            .lock()
-            .expect("harvester poisoned")
-            .harvest(ih, source, direct);
+        if self
+            .harvest_tx
+            .try_send(HarvestEvent {
+                ih,
+                source,
+                direct,
+            })
+            .is_err()
+        {
+            self.metrics.harvest_try_send_dropped.add(1);
+        }
     }
 
     fn handle_reply(&self, msg: Message) {
