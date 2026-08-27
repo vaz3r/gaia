@@ -23,7 +23,9 @@ app.use(express.json());
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const METRICS_CACHE_MS = parseInt(process.env.METRICS_CACHE_MS || '15000', 10);
+const STATS_CACHE_MS = parseInt(process.env.STATS_CACHE_MS || '30000', 10);
 let metricsCache = { ts: 0, data: null };
+let statsCache = { ts: 0, data: null };
 
 const SORTS = { verified_at: 'verified_at', size: 'total_size', files: 'file_count', name: 'name' };
 const INTERVALS = ['minute', 'hour', 'day'];
@@ -155,7 +157,6 @@ app.get('/api/metrics/current', async (req, res) => {
            SELECT metric_value, ts FROM metrics m
            WHERE m.metric_name = c.metric_name
              AND m.ts <= c.ts - interval '1 hour'
-             AND m.ts >= (SELECT ts FROM session_start)
            ORDER BY m.ts DESC LIMIT 1
          ) prev ON true
        ORDER BY c.metric_name`
@@ -217,9 +218,13 @@ app.get('/api/metrics/history', async (req, res) => {
 
 // GET /api/stats
 app.get('/api/stats', async (req, res) => {
+  const now = Date.now();
+  if (statsCache.ts && now - statsCache.ts < STATS_CACHE_MS) {
+    return res.json(statsCache.data);
+  }
   try {
-    const [total, v1h, v24h, seen1h, new1h, jobs, heart] = await Promise.all([
-      query(`SELECT reltuples::bigint AS est FROM pg_class WHERE oid = 'torrents'::regclass`),
+    const [total, v1h, v24h, seen1h, new1h, jobs, heart, sessionUp] = await Promise.all([
+      query(`SELECT count(*) AS n FROM torrents`),
       query(`SELECT count(*) AS n FROM torrents WHERE verified_at > now() - interval '1 hour'`),
       query(`SELECT count(*) AS n FROM torrents WHERE verified_at > now() - interval '24 hours'`),
       query(`SELECT count(*) AS n FROM infohash_sightings WHERE last_seen > now() - interval '1 hour'`),
@@ -230,21 +235,25 @@ app.get('/api/stats', async (req, res) => {
          FROM verification_jobs`
       ),
       query(`SELECT max(ts) AS ts FROM metrics`),
+      query(`SELECT EXTRACT(EPOCH FROM (now() - ts))::int AS uptime_s
+             FROM metrics WHERE metric_name = '_session_start' ORDER BY ts DESC LIMIT 1`),
     ]);
 
     const heartbeat = heart.rows[0].ts ? new Date(heart.rows[0].ts) : null;
-    res.json({
-      total_torrents: parseInt(total.rows[0].est, 10),
+    const data = {
+      total_torrents: parseInt(total.rows[0].n, 10),
       verified_last_1h: parseInt(v1h.rows[0].n ?? 0, 10),
       verified_last_24h: parseInt(v24h.rows[0].n ?? 0, 10),
       seen_last_1h: parseInt(seen1h.rows[0].n ?? 0, 10),
       new_last_1h: parseInt(new1h.rows[0].n ?? 0, 10),
       queue_backlog: parseInt(jobs.rows[0].backlog, 10),
       verifying: parseInt(jobs.rows[0].verifying, 10),
-      verified_total: parseInt(total.rows[0].est, 10),
       crawler_heartbeat_ts: heartbeat,
       crawler_stale_s: heartbeat ? Math.round((Date.now() - heartbeat.getTime()) / 1000) : null,
-    });
+      session_uptime_s: sessionUp.rows[0]?.uptime_s ?? null,
+    };
+    statsCache = { ts: Date.now(), data };
+    res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

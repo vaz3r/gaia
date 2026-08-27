@@ -25,6 +25,30 @@ export function formatTime(ts) {
   })
 }
 
+export function formatRate(n) {
+  if (n === null || n === undefined) return '—'
+  const abs = Math.abs(n)
+  let formatted
+  if (abs >= 1e6) formatted = `${(n / 1e6).toFixed(1)}M`
+  else if (abs >= 1e3) formatted = `${(n / 1e3).toFixed(1)}k`
+  else formatted = String(Math.round(n))
+  return `${formatted}/hr`
+}
+
+export function formatPct(n, total) {
+  if (!total || total === 0) return '—'
+  return `${((n / total) * 100).toFixed(1)}%`
+}
+
+export function formatUptime(s) {
+  if (s === null || s === undefined) return '—'
+  if (s < 60) return `${Math.round(s)}s`
+  if (s < 3600) return `${Math.round(s / 60)}m`
+  const h = Math.floor(s / 3600)
+  const m = Math.round((s % 3600) / 60)
+  return m > 0 ? `${h}h ${m}m` : `${h}h`
+}
+
 /* Cumulative counters → per-hour rate series from evenly-bucketed points. */
 export function toRates(data) {
   const out = []
