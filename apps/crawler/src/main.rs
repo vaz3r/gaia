@@ -373,6 +373,7 @@ fn log_effective_config(config: &Config) {
         channel_capacity = config.channel_capacity,
         walker_alpha = config.dht.walker_alpha,
         walker_interval_ms = config.dht.walker_interval_ms,
+        find_node_response_percent = config.dht.find_node_response_percent,
         source_query_timeout = config.dht.source_query_timeout_secs,
         source_k = config.dht.source_k,
         source_alpha = config.dht.source_alpha,
@@ -475,6 +476,7 @@ async fn spawn_node(
         table.clone(),
         harvest_tx.clone(),
         metrics.clone(),
+        config.dht.find_node_response_percent,
     );
 
     for sock in sockets {
@@ -632,6 +634,8 @@ async fn report_loop(
             metadata_written = batch_writer.torrents_written(),
             inbound_ping = cur.inbound_ping,
             inbound_find_node = cur.inbound_find_node,
+            inbound_find_node_dropped = cur.inbound_find_node_dropped,
+            inbound_find_node_dropped = cur.inbound_find_node_dropped,
             inbound_get_peers = cur.inbound_get_peers,
             inbound_announce_peer = cur.inbound_announce_peer,
             inbound_invalid = cur.inbound_invalid,

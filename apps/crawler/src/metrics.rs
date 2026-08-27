@@ -5,6 +5,7 @@ use std::sync::Arc;
 pub struct Metrics {
     pub inbound_ping: AtomicU64,
     pub inbound_find_node: AtomicU64,
+    pub inbound_find_node_dropped: AtomicU64,
     pub inbound_get_peers: AtomicU64,
     pub inbound_announce_peer: AtomicU64,
     pub inbound_invalid: AtomicU64,
@@ -127,6 +128,7 @@ impl Add1 for AtomicU64 {
 pub struct Snapshot {
     pub inbound_ping: u64,
     pub inbound_find_node: u64,
+    pub inbound_find_node_dropped: u64,
     pub inbound_get_peers: u64,
     pub inbound_announce_peer: u64,
     pub inbound_invalid: u64,
@@ -219,6 +221,7 @@ impl Metrics {
         Snapshot {
             inbound_ping: self.inbound_ping.load(Ordering::Relaxed),
             inbound_find_node: self.inbound_find_node.load(Ordering::Relaxed),
+            inbound_find_node_dropped: self.inbound_find_node_dropped.load(Ordering::Relaxed),
             inbound_get_peers: self.inbound_get_peers.load(Ordering::Relaxed),
             inbound_announce_peer: self.inbound_announce_peer.load(Ordering::Relaxed),
             inbound_invalid: self.inbound_invalid.load(Ordering::Relaxed),

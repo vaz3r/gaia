@@ -46,6 +46,7 @@ pub struct Router {
     table: Arc<Mutex<RoutingTable>>,
     harvest_tx: mpsc::Sender<HarvestEvent>,
     metrics: Arc<Metrics>,
+    find_node_response_percent: u8,
 }
 
 impl Router {
@@ -61,6 +62,7 @@ impl Router {
         table: Arc<Mutex<RoutingTable>>,
         harvest_tx: mpsc::Sender<HarvestEvent>,
         metrics: Arc<Metrics>,
+    find_node_response_percent: u8,
     ) -> Arc<Self> {
         Arc::new(Router {
             self_id,
@@ -74,6 +76,7 @@ impl Router {
             table,
             harvest_tx,
             metrics,
+            find_node_response_percent,
         })
     }
 
@@ -163,6 +166,13 @@ impl Router {
         match self.classify_pool(&target) {
             SybilPool::Bep42 => self.metrics.inbound_find_node_bep42.add(1),
             SybilPool::Random => self.metrics.inbound_find_node_random.add(1),
+        }
+
+        if self.find_node_response_percent < 100
+            && !should_answer(self.find_node_response_percent, rand::random::<u16>())
+        {
+            self.metrics.inbound_find_node_dropped.add(1);
+            return;
         }
         let nodes = self.closest_phantom(&target, 8);
         let r = BValue::dict(vec![
@@ -395,4 +405,30 @@ fn extract_id20(a: &BValue, key: &[u8]) -> Option<[u8; 20]> {
     let mut out = [0u8; 20];
     out.copy_from_slice(b);
     Some(out)
+}
+
+fn should_answer(percent: u8, roll: u16) -> bool {
+    (roll % 100) < (percent as u16)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_answer() {
+        assert!(should_answer(100, 50));
+        assert!(should_answer(100, 0));
+        assert!(should_answer(100, 99));
+        
+        assert!(should_answer(5, 4));
+        assert!(!should_answer(5, 5));
+        assert!(!should_answer(5, 99));
+
+        assert!(should_answer(1, 0));
+        assert!(!should_answer(1, 1));
+        
+        assert!(!should_answer(0, 0));
+        assert!(!should_answer(0, 50));
+    }
 }

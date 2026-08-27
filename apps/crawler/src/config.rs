@@ -44,6 +44,7 @@ pub struct DhtConfig {
     pub walker_self_explore_prob: f64,
     pub sybil_count: usize,
     pub sybil_bep42_ratio: f64,
+    pub find_node_response_percent: u8,
     pub routing_k: usize,
     pub source_k: usize,
     pub source_alpha: usize,
@@ -190,6 +191,7 @@ impl Default for DhtConfig {
             walker_self_explore_prob: 0.1,
             sybil_count: 16,
             sybil_bep42_ratio: 1.0 / 3.0,
+            find_node_response_percent: 100,
             routing_k: 8,
             source_k: 8,
             source_alpha: 3,
@@ -515,6 +517,12 @@ impl Config {
         if self.logging.log_buffer_capacity == 0 {
             return Err("logging.log_buffer_capacity must be > 0".into());
         }
+        if self.dht.find_node_response_percent > 100 {
+            return Err("dht.find_node_response_percent must be <= 100".into());
+        }
+        if self.dht.find_node_response_percent == 0 {
+            return Err("dht.find_node_response_percent must be > 0".into());
+        }
         Ok(())
     }
 }
@@ -583,6 +591,7 @@ struct PartialDht {
     sybil_count: Option<usize>,
     #[serde(default)]
     sybil_bep42_ratio: Option<f64>,
+    find_node_response_percent: Option<u8>,
     #[serde(default)]
     routing_k: Option<usize>,
     #[serde(default)]
@@ -839,6 +848,9 @@ impl PartialDht {
         }
         if let Some(v) = self.sybil_count {
             cfg.sybil_count = v;
+        }
+        if let Some(v) = self.find_node_response_percent {
+            cfg.find_node_response_percent = v;
         }
         if let Some(v) = self.sybil_bep42_ratio {
             cfg.sybil_bep42_ratio = v;
@@ -1130,6 +1142,7 @@ mod tests {
         assert_eq!(c.fetch.connect_deadline_ms, 10000);
         assert_eq!(c.fetch.pipeline_limit, 4000);
         assert_eq!(c.harvest.harvest_channel_capacity, 10_000);
+        assert_eq!(c.dht.find_node_response_percent, 100);
     }
 
     #[test]

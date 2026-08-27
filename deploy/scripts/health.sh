@@ -420,7 +420,7 @@ if docker_ps:
     print(f"  docker   : {docker_ps}")
 if effcfg:
     import re
-    keys = ["source_deadline_ms","source_max_queries","global_fetch_limit","pipeline_limit","connect_deadline_ms","race_peers",
+    keys = ["source_deadline_ms","source_max_queries","global_fetch_limit","pipeline_limit","connect_deadline_ms","find_node_response_percent","race_peers",
             "tcp_timeout_secs","utp_timeout_secs","metadata_timeout_secs",
             "max_conns_per_ip","no_peers_terminal_on_first","fresh_channel_capacity"]
     vals = []
@@ -449,7 +449,7 @@ group("SOURCE", ["source_queries","source_responses","source_peers_returned",
 group("SCHEDULER", ["scheduler_claims","scheduler_claimed_fresh","scheduler_claimed_retry"])
 group("CONNECT", ["tcp_attempts","tcp_connect_ok","utp_attempts","utp_connect_ok",
                   "fetch_connect_timeout","fetch_connect_io"])
-group("HARVEST/DHT", ["infohashes_harvested","inbound_get_peers","inbound_announce_peer",
+group("HARVEST/DHT", ["infohashes_harvested","inbound_get_peers","inbound_find_node","inbound_find_node_dropped","inbound_announce_peer",
                       "outbound_queries","outbound_timeouts"])
 
 print("-- JOBS / DB --")
