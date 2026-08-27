@@ -18,7 +18,18 @@
 # Read-only: no writes/DDL to the database.
 set -euo pipefail
 
-HOST="zerone"
+# ── Load deployment config ──
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+if [ -f "$SCRIPT_DIR/../config.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/../config.env"
+    set +a
+fi
+
+HOST="${DEPLOY_HOST:-zerone}"
 WINDOW=15
 ALL_MODE=0
 JSON_MODE=0
@@ -45,10 +56,14 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-SSH_KEY="${HOME}/.ssh/zerone"
+SSH_KEY="${DEPLOY_SSH_KEY:-${HOME}/.ssh/zerone}"
 SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no"
-LOG_DIR="/home/ubuntu/gaia-data/logs"
+LOG_DIR="${DEPLOY_REMOTE_DATA:-/home/ubuntu/gaia-data}/logs"
 TAB="$(printf '\t')"
+
+# Build DB connection string from config.env variables
+: "${DB_HOST:?DB_HOST required — set in deploy/config.env}"
+DB_CONN="postgres://${DB_USER:-crawler}:${DB_PASSWORD:?DB_PASSWORD required}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME:-craw}?sslmode=disable"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -60,8 +75,7 @@ WINDOW="$1"
 SESSION_OVERRIDE="$2"
 SINCE_OVERRIDE="$3"
 NO_LOGS="$4"
-
-DB_CONN="postgres://crawler:83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b@100.87.194.112:5432/craw?sslmode=disable"
+DB_CONN="$5"
 TAB="$(printf '\t')"
 PSQL=(docker run --rm --network host postgres:16 psql "$DB_CONN" -t -A -F "$TAB" -c)
 
@@ -200,7 +214,7 @@ RS
 # NOTE: ssh drops empty args, so use sentinels for unset values.
 SESS_ARG="${SESSION_OVERRIDE:-__none__}"
 SINCE_ARG="${SINCE_OVERRIDE:-__none__}"
-RAW="$($SSH "$HOST" "bash -s" "$WINDOW" "$SESS_ARG" "$SINCE_ARG" "$NO_LOGS" <<<"$REMOTE_SCRIPT" 2>/dev/null)" || {
+RAW="$($SSH "$HOST" "bash -s" "$WINDOW" "$SESS_ARG" "$SINCE_ARG" "$NO_LOGS" "$DB_CONN" <<<"$REMOTE_SCRIPT" 2>/dev/null)" || {
     echo "ERROR: remote capture failed" >&2
     exit 1
 }

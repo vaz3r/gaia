@@ -5,13 +5,25 @@ set -euo pipefail
 # For config-only changes (bind-mounted config): git pull, then run this.
 #
 # Usage: ./config-restart.sh [host]
-# Example: ./config-restart.sh zerone
+# Example: ./config-restart.sh gaia
 
-HOST="${1:-zerone}"
-REMOTE_GIT="/home/ubuntu/gaia"
+# ── Load deployment config ──
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+if [ -f "$SCRIPT_DIR/../config.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/../config.env"
+    set +a
+fi
+
+HOST="${1:-${DEPLOY_HOST:?DEPLOY_HOST required — set in deploy/config.env}}"
+REMOTE_GIT="${DEPLOY_REMOTE_GIT:?DEPLOY_REMOTE_GIT required}"
 REMOTE_COMPOSE="$REMOTE_GIT/deploy/compose"
-SSH_KEY="${HOME}/.ssh/zerone"
-SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no ubuntu@$HOST"
+SSH_KEY="${DEPLOY_SSH_KEY:?DEPLOY_SSH_KEY required}"
+SSH_USER="${DEPLOY_USER:?DEPLOY_USER required}"
+SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no $SSH_USER@$HOST"
 
 echo "=== Detecting running crawler image on $HOST ==="
 IMAGE=$($SSH "docker inspect gaia-crawler --format '{{.Config.Image}}'")
@@ -40,5 +52,5 @@ $SSH "docker inspect gaia-crawler --format 'Restarts={{.RestartCount}}'"
 echo ""
 echo "=== $TAG restart complete ==="
 echo "    Confirm the change took effect:"
-echo "    grep 'effective config' \$(ls -t $REMOTE_GIT/../gaia-data/logs/*.jsonl 2>/dev/null | head -1) || \\"
-echo "    ssh $HOST 'ls -t /home/ubuntu/gaia-data/logs/*.jsonl | head -1 | xargs grep \"effective config\"'"
+echo "    grep 'effective config' \$(ls -t ${DEPLOY_REMOTE_DATA}/logs/*.jsonl 2>/dev/null | head -1) || \\"
+echo "    ssh $HOST 'ls -t ${DEPLOY_REMOTE_DATA}/logs/*.jsonl | head -1 | xargs grep \"effective config\"'"

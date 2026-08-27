@@ -5,19 +5,30 @@ set -euo pipefail
 # Usage: ./deploy.sh [host] [commit-ref]
 #
 # Examples:
-#   ./deploy.sh                    # deploy HEAD to zerone
-#   ./deploy.sh zerone abc1234     # deploy specific commit
-#   ./deploy.sh zerone HEAD~3      # rollback to 3 commits ago
+#   ./deploy.sh                    # deploy HEAD to configured host
+#   ./deploy.sh gaia abc1234       # deploy specific commit
+#   ./deploy.sh gaia HEAD~3        # rollback to 3 commits ago
 
-HOST="${1:-zerone}"
+# ── Load deployment config ──
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+if [ -f "$SCRIPT_DIR/../config.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/../config.env"
+    set +a
+fi
+
+HOST="${1:-${DEPLOY_HOST:?DEPLOY_HOST required — set in deploy/config.env}}"
 REF="${2:-HEAD}"
-REMOTE_GIT="/home/ubuntu/gaia"
+REMOTE_GIT="${DEPLOY_REMOTE_GIT:?DEPLOY_REMOTE_GIT required}"
 REMOTE_COMPOSE="$REMOTE_GIT/deploy/compose"
-SSH_KEY="${HOME}/.ssh/zerone"
-SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no ubuntu@$HOST"
+SSH_KEY="${DEPLOY_SSH_KEY:?DEPLOY_SSH_KEY required}"
+SSH_USER="${DEPLOY_USER:?DEPLOY_USER required}"
+SSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no $SSH_USER@$HOST"
 
 # ── Load env ──
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 if [ -f "$REPO_ROOT/.env" ]; then
     set -a
     # shellcheck disable=SC1091
@@ -48,7 +59,8 @@ $SSH "cd $REMOTE_GIT && git fetch origin && git checkout $TAG"
 $SSH "cd $REMOTE_GIT && git log --oneline -1"
 
 # ── 2b. Ensure data directories exist with correct ownership ──
-$SSH "sudo mkdir -p /home/ubuntu/gaia-data/crawler /home/ubuntu/gaia-data/logs && sudo chown -R 10001:10001 /home/ubuntu/gaia-data"
+REMOTE_DATA="${DEPLOY_REMOTE_DATA:?DEPLOY_REMOTE_DATA required}"
+$SSH "sudo mkdir -p ${REMOTE_DATA}/crawler ${REMOTE_DATA}/logs && sudo chown -R 10001:10001 ${REMOTE_DATA}"
 
 # ── 3. Verify Docker Compose file exists ──
 if ! $SSH "test -f $REMOTE_COMPOSE/docker-compose.yml"; then
@@ -66,7 +78,7 @@ $SSH "cd $REMOTE_COMPOSE && GIT_COMMIT=$TAG docker compose --env-file $REMOTE_GI
 
 # ── 6. Run db-init.sql (idempotent) ──
 echo "[5/6] Ensuring dashboard indexes..."
-scp -i "$SSH_KEY" "$REPO_ROOT/apps/dashboard/db-init.sql" "ubuntu@$HOST:/tmp/db-init.sql"
+scp -i "$SSH_KEY" "$REPO_ROOT/apps/dashboard/db-init.sql" "$SSH_USER@$HOST:/tmp/db-init.sql"
 $SSH "docker run --rm --network host -v /tmp/db-init.sql:/tmp/db-init.sql:ro postgres:16 psql '$REMOTE_DB' -f /tmp/db-init.sql"
 
 # ── 7. Verify ──

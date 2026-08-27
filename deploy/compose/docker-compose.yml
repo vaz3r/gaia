@@ -33,9 +33,9 @@ services:
       CRAW_LOG_DIR: /data/logs
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
-      - /home/ubuntu/gaia-data/crawler:/home/crawler/data
-      - /home/ubuntu/gaia-data/logs:/data/logs
-      - /home/ubuntu/gaia/apps/crawler/config:/etc/crawler/config:ro
+      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/crawler:/home/crawler/data
+      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/logs:/data/logs
+      - /home/${DEPLOY_USER:-ubuntu}/gaia/apps/crawler/config:/etc/crawler/config:ro
 
   dashboard:
     build:
