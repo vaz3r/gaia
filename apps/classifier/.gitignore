@@ -47,7 +47,7 @@ data/predictions_*.jsonl
 data/preds_*.jsonl
 data/predictions_unlabeled_pool.jsonl
 
-# Training snapshots (keep only the latest canonical one; rest are large duplicates)
+# Training snapshots (keep only the latest canonical v10; rest are large duplicates)
 data/training_combined.jsonl
 data/training_combined_v2.jsonl
 data/training_combined_v3.jsonl
@@ -57,6 +57,11 @@ data/training_combined_v6_true.jsonl
 data/training_combined_v6_weak.jsonl
 data/training_combined_v7_true.jsonl
 data/training_combined_v8_true.jsonl
+data/training_combined_v9_true.jsonl
+data/training_combined_v11_true.jsonl
+data/train_v10_80pct.jsonl
+data/val_v10_20pct.jsonl
+data/manual_eval_set_2_1000.jsonl
 
 # Other large intermediate data
 data/labeled_8way.jsonl
@@ -67,26 +72,32 @@ data/val_seed.jsonl
 data/labeled.jsonl
 
 # ── What to KEEP in data/ ─────────────────────────────────────────────────────
-# data/training_combined_v9_true.jsonl  ← canonical training set (tracked)
+# data/training_combined_v10_true.jsonl ← canonical training set (tracked)
 # data/manual_eval_set_1000.jsonl       ← golden test set (tracked)
 # data/manual_eval_set_200.jsonl        ← original test set (tracked)
 # data/manual_seed_1800.csv             ← seed labels (tracked)
-# data/manual_eval_report_iter9_1000.txt ← final report (tracked)
+# data/manual_eval_report_final_v10.txt  ← final report (tracked)
 
 # ── Scratch / one-off scripts ─────────────────────────────────────────────────
-scratch_*.py
-fix_*.py
-test_*.py
-test_*.sh
-inspect_*.py
-invoke_agents.py
-analyze_discrepancies.py
-check_db_port.exp
-eval_names.txt
-evaluate_pytorch.py
+/scratch_*.py
+/fix_*.py
+/test_*.py
+/test_*.sh
+/inspect_*.py
+/invoke_agents.py
+/analyze_*.py
+/build_*.py
+/check_db_port.exp
+/eval_names.txt
+/evaluate_pytorch.py
+/extract_*.py
+/label_*.py
+/tune_threshold.py
+/restore_*.sh
+/retrain_*.sh
 
 # ── Iteration run scripts (history) ──────────────────────────────────────────
-# Keep only run_iter9.sh as the canonical reference
+# Keep only run_iter9.sh / run_iter10.sh as reference
 run_iter2.sh
 run_iter3.sh
 run_iter4.sh
@@ -97,50 +108,36 @@ run_iter8.sh
 run_iter8_full.sh
 run_iter8_part1.sh
 run_iter8_part2.sh
+run_iter10_*.sh
+run_iter11.sh
+run_val_training.sh
 run_active_learning.sh
 run_al_selection.sh
 run_eval_iter5.sh
 run_pipeline.sh
 
 # Merge/select helper scripts (one-off)
-merge_v7.py
-merge_v8.py
-merge_v9.py
-select_al.py
-select_al_iter8.py
-split_al.py
-extract_iter8.py
-extract_iter9.py
-label_al_batch.py
-label_1800.py
+merge_*.py
+select_*.py
+split_*.py
 prompt_al.txt
 
-# ── Intermediate CSVs ─────────────────────────────────────────────────────────
+# ── Intermediate CSVs / JSONs ────────────────────────────────────────────────
 data/active_learning_batch1.csv
 data/active_learning_batch1_labeled.csv
-data/al_chunk1.csv
-data/al_chunk2.csv
-data/al_chunk3.csv
-data/al_chunk_0_labeled.csv
-data/al_chunk_1_labeled.csv
-data/al_chunk_2_labeled.csv
-data/al_chunk_3_labeled.csv
-data/al_chunk_4_labeled.csv
-data/al_batch_iter9_labeled.csv
-data/al_batch2_500_labeled.jsonl
-data/al_batch3_1300_labeled.jsonl
+data/al_*.csv
+data/al_*.json
+data/al_chunk*.csv
+data/al_chunk_*.csv
+data/al_batch*.jsonl
+data/al_chunk_*.jsonl
+data/iter8_*.jsonl
+data/iter9_*.jsonl
+data/iter10_*.jsonl
 data/top_100_al.csv
 data/manual_eval_set_200.csv
 data/manual_eval_report.txt
-data/manual_eval_report_iter2.txt
-data/manual_eval_report_iter3.txt
-data/manual_eval_report_iter4.txt
-data/manual_eval_report_iter5.txt
-data/manual_eval_report_iter6_1000.txt
-data/manual_eval_report_iter6_1000_nothresh.txt
-data/manual_eval_report_iter6_200.txt
-data/manual_eval_report_iter7_1000.txt
-data/manual_eval_report_iter8_1000.txt
+data/manual_eval_report_iter*.txt
 data/manual_eval_report_threshold.txt
 
 # ── OS / IDE ──────────────────────────────────────────────────────────────────
