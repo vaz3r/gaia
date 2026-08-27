@@ -263,7 +263,8 @@ async fn main() {
         peer_outcomes,
         Arc::new(verify::ConnLimiter::new(config.fetch.max_connections_per_ip)),
         verify::VerifyConfig {
-            global_limit: config.fetch.global_fetch_limit,
+            pipeline_limit: config.fetch.pipeline_limit,
+            fetch_limit: config.fetch.global_fetch_limit,
             params: FetchParams {
                 tcp_timeout: Duration::from_secs(config.fetch.tcp_timeout_secs),
                 utp_timeout: Duration::from_secs(config.fetch.utp_timeout_secs),
@@ -377,6 +378,7 @@ fn log_effective_config(config: &Config) {
         rate_limit = config.dht.rate_limit_per_sec,
         rate_limit_burst = config.dht.rate_limit_burst,
         global_fetch_limit = config.fetch.global_fetch_limit,
+        pipeline_limit = config.fetch.pipeline_limit,
         race_peers = config.fetch.race_peers,
         max_conns_per_ip = config.fetch.max_connections_per_ip,
         fresh_channel_capacity = config.fetch.fresh_channel_capacity,

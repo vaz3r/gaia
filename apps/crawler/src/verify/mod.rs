@@ -68,7 +68,8 @@ impl AnnouncePeerCache {
 }
 
 pub struct VerifyConfig {
-    pub global_limit: usize,
+    pub pipeline_limit: usize,
+    pub fetch_limit: usize,
     pub params: FetchParams,
 }
 
@@ -115,14 +116,15 @@ pub async fn run_pipeline(
     conn_limiter: Arc<ConnLimiter>,
     config: VerifyConfig,
 ) {
-    let global = Arc::new(Semaphore::new(config.global_limit.max(1)));
+    let pipeline_limit = Arc::new(Semaphore::new(config.pipeline_limit.max(1)));
+    let fetch_limit = Arc::new(Semaphore::new(config.fetch_limit.max(1)));
     let next_router = AtomicUsize::new(0);
     // Fair-drain batch: after this many consecutive fresh/announce items, force
     // one retry-channel item so a backlogged verify queue is never starved.
     let fresh_batch: usize = 8;
     let mut fresh_streak: usize = 0;
     'pipeline: loop {
-        let Ok(_permit) = global.clone().acquire_owned().await else {
+        let Ok(_pipeline_permit) = pipeline_limit.clone().acquire_owned().await else {
             break;
         };
 
@@ -225,13 +227,14 @@ let (ih, direct, came_from_scheduler) = loop {
         let peer_outcomes = peer_outcomes.clone();
         let conn_limiter = conn_limiter.clone();
         let params = config.params.clone();
+        let fetch_limit = fetch_limit.clone();
         tokio::spawn(async move {
-            let _permit = _permit;
+            let _pipeline_permit = _pipeline_permit;
             if is_direct {
                 metrics.announce_attempts.add(1);
             }
             metrics.verify_attempts.add(1);
-            match verify_infohash(router, utp, ih, &params, metrics.clone(), peer_cache, announce_peer_cache, direct, peer_outcomes, conn_limiter).await {
+            match verify_infohash(router, utp, ih, &params, metrics.clone(), peer_cache, announce_peer_cache, direct, peer_outcomes, conn_limiter, fetch_limit).await {
                 VerifyResult::Success(meta) if check(&ih, &meta) => {
                     crate::trace_lifecycle!(&ih, "sha1_check", stream = "verify", result = "pass");
                     metrics.verify_success.add(1);

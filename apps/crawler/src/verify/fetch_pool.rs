@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 #[derive(Clone)]
@@ -309,6 +310,7 @@ pub async fn verify_infohash(
     direct: Option<SocketAddr>,
     peer_outcomes: Arc<PeerOutcomeWriter>,
     conn_limiter: Arc<crate::verify::ConnLimiter>,
+    fetch_limit: Arc<Semaphore>,
 ) -> VerifyResult {
     let race_peers = params.race_peers.max(1);
     let peer_id = gen_peer_id();
@@ -341,8 +343,10 @@ pub async fn verify_infohash(
         let utp = utp.clone();
         let po = peer_outcomes.clone();
         let limiter = conn_limiter.clone();
+        let fetch_limit = fetch_limit.clone();
         metrics.fetch_attempts.add(1);
         set.spawn(async move {
+            let _fetch_permit = fetch_limit.acquire_owned().await.expect("fetch limit closed");
             try_fetch(addr, ih, pid, metrics, cache, utp, po, "announce_peer", fetch_timeout, tcp_timeout, utp_timeout, limiter, transport_race_concurrent, connect_deadline).await
         });
     }
@@ -350,6 +354,7 @@ pub async fn verify_infohash(
     // 2) Spawn the DHT lookup concurrently so it never blocks the direct race.
     let router_clone = router.clone();
     let metrics_clone = metrics.clone();
+    let peer_cache_dht = peer_cache.clone();
     let source_deadline = params.source_deadline;
     let source_k = params.source_k;
     let source_alpha = params.source_alpha;
@@ -366,6 +371,7 @@ pub async fn verify_infohash(
             source_alpha,
             source_query_timeout,
             source_max_queries,
+            &peer_cache_dht,
         )
         .await
     });
@@ -451,8 +457,10 @@ pub async fn verify_infohash(
                             let utp = utp.clone();
                             let po = peer_outcomes.clone();
                             let limiter = conn_limiter.clone();
+                            let fetch_limit = fetch_limit.clone();
                             metrics.fetch_attempts.add(1);
                             set.spawn(async move {
+                                let _fetch_permit = fetch_limit.acquire_owned().await.expect("fetch limit closed");
                                 try_fetch(addr, ih, pid, metrics, cache, utp, po, "get_peers", fetch_timeout, tcp_timeout, utp_timeout, limiter, transport_race_concurrent, connect_deadline).await
                             });
                         }

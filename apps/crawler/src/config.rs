@@ -75,6 +75,7 @@ pub struct FetchConfig {
     pub fresh_channel_capacity: usize,
     pub transport_race_concurrent: bool,
     pub connect_deadline_ms: u64,
+    pub pipeline_limit: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -222,6 +223,7 @@ impl Default for FetchConfig {
             fresh_channel_capacity: 65536,
             transport_race_concurrent: true,
             connect_deadline_ms: 20000,
+            pipeline_limit: 8000,
         }
     }
 }
@@ -437,6 +439,8 @@ impl Config {
             env_bool("CRAW_TRANSPORT_RACE_CONCURRENT", self.fetch.transport_race_concurrent);
         self.fetch.connect_deadline_ms =
             env_u64("CRAW_CONNECT_DEADLINE_MS", self.fetch.connect_deadline_ms);
+        self.fetch.pipeline_limit =
+            env_usize("CRAW_PIPELINE_LIMIT", self.fetch.pipeline_limit);
 
         // logging
         if let Ok(dir) = std::env::var("CRAW_LOG_DIR") {
@@ -462,6 +466,15 @@ impl Config {
         }
         if self.fetch.global_fetch_limit == 0 {
             return Err("fetch.global_fetch_limit must be > 0".into());
+        }
+        if self.fetch.pipeline_limit == 0 {
+            return Err("fetch.pipeline_limit must be > 0".into());
+        }
+        if self.fetch.pipeline_limit < self.fetch.global_fetch_limit {
+            return Err(format!(
+                "fetch.pipeline_limit ({}) must be >= fetch.global_fetch_limit ({})",
+                self.fetch.pipeline_limit, self.fetch.global_fetch_limit
+            ));
         }
         if self.fetch.race_peers == 0 {
             return Err("fetch.race_peers must be > 0".into());
@@ -619,6 +632,8 @@ struct PartialFetch {
     transport_race_concurrent: Option<bool>,
     #[serde(default)]
     connect_deadline_ms: Option<u64>,
+    #[serde(default)]
+    pipeline_limit: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -903,6 +918,9 @@ impl PartialFetch {
         if let Some(v) = self.connect_deadline_ms {
             cfg.connect_deadline_ms = v;
         }
+        if let Some(v) = self.pipeline_limit {
+            cfg.pipeline_limit = v;
+        }
     }
 }
 
@@ -1096,6 +1114,7 @@ mod tests {
         assert_eq!(c.storage.janitor_batch_size, 25000);
         assert_eq!(c.fetch.transport_race_concurrent, true);
         assert_eq!(c.fetch.connect_deadline_ms, 20000);
+        assert_eq!(c.fetch.pipeline_limit, 8000);
     }
 
     #[test]

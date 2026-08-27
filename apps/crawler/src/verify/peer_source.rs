@@ -4,6 +4,7 @@ use crate::krpc::codec::BValue;
 use crate::krpc::message::{GET_PEERS, Kind, Message};
 use crate::metrics::{Add1, Metrics};
 use crate::router::{QueryError, Router};
+use crate::verify::peer_cache::PeerCache;
 use bytes::Bytes;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -27,6 +28,7 @@ pub async fn source_peers(
     alpha: usize,
     query_timeout: Duration,
     max_queries: usize,
+    cache: &PeerCache,
 ) -> SourceResult {
     let k = k.max(1);
     let alpha = alpha.max(1);
@@ -91,6 +93,9 @@ pub async fn source_peers(
                                         std::net::IpAddr::V4(ip),
                                         u16::from_be_bytes([b[4], b[5]]),
                                     );
+                                    if peer_is_bad(&addr, cache, &metrics) {
+                                        continue;
+                                    }
                                     returned_here += 1;
                                     if seen.insert(addr) {
                                         peers.push(addr);
@@ -209,6 +214,16 @@ fn spawn_query(
     });
 }
 
+/// Testable helper: returns true if a peer is marked bad and should be
+/// skipped. Increments `source_filtered_by_cache` when filtering.
+fn peer_is_bad(addr: &SocketAddr, cache: &PeerCache, metrics: &Metrics) -> bool {
+    let bad = cache.is_bad(addr);
+    if bad {
+        metrics.source_filtered_by_cache.add(1);
+    }
+    bad
+}
+
 fn is_routable(ip: Ipv4Addr) -> bool {
     let o = ip.octets();
     !(ip.is_unspecified()
@@ -232,5 +247,30 @@ mod tests {
         assert!(!is_routable(Ipv4Addr::new(127, 0, 0, 1)));
         assert!(!is_routable(Ipv4Addr::new(0, 0, 0, 0)));
         assert!(!is_routable(Ipv4Addr::new(100, 64, 0, 1)));
+    }
+
+    #[test]
+    fn peer_is_bad_filtering() {
+        use crate::metrics::Metrics;
+        use crate::verify::peer_cache::PeerCache;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let log_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let metrics = Arc::new(Metrics::new(log_dropped));
+        let cache = PeerCache::new(Duration::from_secs(600), 100_000);
+        let addr_ok: SocketAddr = "8.8.8.8:6881".parse().unwrap();
+        let addr_bad: SocketAddr = "1.2.3.4:6881".parse().unwrap();
+
+        // Not yet marked bad -> passes
+        assert!(!peer_is_bad(&addr_ok, &cache, &metrics));
+        assert!(!peer_is_bad(&addr_bad, &cache, &metrics));
+
+        // Mark bad -> filtered
+        cache.mark_bad(addr_bad);
+        assert!(!peer_is_bad(&addr_ok, &cache, &metrics));
+        assert!(peer_is_bad(&addr_bad, &cache, &metrics));
+        // Verify metric was incremented
+        assert!(metrics.source_filtered_by_cache.load(std::sync::atomic::Ordering::Relaxed) >= 1);
     }
 }

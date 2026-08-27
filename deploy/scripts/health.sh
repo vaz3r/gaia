@@ -420,7 +420,7 @@ if docker_ps:
     print(f"  docker   : {docker_ps}")
 if effcfg:
     import re
-    keys = ["source_deadline_ms","source_max_queries","global_fetch_limit","race_peers",
+    keys = ["source_deadline_ms","source_max_queries","global_fetch_limit","pipeline_limit","race_peers",
             "tcp_timeout_secs","utp_timeout_secs","metadata_timeout_secs",
             "max_conns_per_ip","no_peers_terminal_on_first","fresh_channel_capacity"]
     vals = []
@@ -444,7 +444,8 @@ group("CHANNELS", ["verify_channel_depth","fresh_channel_depth","verify_channel_
 group("THROUGHPUT", ["verify_attempts","verify_success","verify_fail",
                      "fetch_attempts","unique_infohashes","tcp_metadata_ok","utp_metadata_ok"])
 group("SOURCE", ["source_queries","source_responses","source_peers_returned",
-                 "source_no_peers","source_timeout","source_deadline_hits"])
+                  "source_no_peers","source_timeout","source_deadline_hits",
+                  "source_filtered_by_cache"])
 group("SCHEDULER", ["scheduler_claims","scheduler_claimed_fresh","scheduler_claimed_retry"])
 group("CONNECT", ["tcp_attempts","tcp_connect_ok","utp_attempts","utp_connect_ok",
                   "fetch_connect_timeout","fetch_connect_io"])

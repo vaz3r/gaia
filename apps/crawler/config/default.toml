@@ -50,6 +50,7 @@ max_connections_per_ip = 4
 utp_enabled = true
 transport_race_concurrent = true
 connect_deadline_ms = 20000
+pipeline_limit = 8000
 fresh_channel_capacity = 65536
 max_message_len = 16777216
 max_pieces = 4096
