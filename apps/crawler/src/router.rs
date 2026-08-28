@@ -1,5 +1,5 @@
 use crate::dht::node_id::SybilPool;
-use crate::dht::routing_table::{NodeInfo, RoutingTable, encode_compact, xor};
+use crate::dht::routing_table::{NodeInfo, RoutingTable, encode_compact, cmp_xor, xor};
 use crate::harvest::{HarvestEvent, Source};
 use crate::krpc::codec::BValue;
 use crate::krpc::message::{ANNOUNCE_PEER, FIND_NODE, GET_PEERS, Kind, Message, PING};
@@ -169,7 +169,7 @@ impl Router {
                 addr: public_addr,
             })
             .collect();
-        sybils.sort_by_key(|n| xor(target, &n.id));
+        sybils.sort_unstable_by(|a, b| cmp_xor(target, &a.id, &b.id));
         sybils.truncate(count);
         if sybils.len() < count {
             let known = self
