@@ -1,4 +1,4 @@
-use crate::dht::routing_table::{NodeInfo, decode_compact, xor};
+use crate::dht::routing_table::{NodeInfo, decode_compact, cmp_xor};
 use crate::krpc::Infohash;
 use crate::krpc::codec::BValue;
 use crate::krpc::message::{GET_PEERS, Kind, Message};
@@ -125,7 +125,7 @@ pub async fn source_peers(
 
             if !new_nodes.is_empty() {
                 candidates.extend(new_nodes.drain(..));
-                candidates.sort_by_key(|n| xor(&info_hash, &n.id));
+                candidates.sort_unstable_by(|a, b| cmp_xor(&info_hash, &a.id, &b.id));
                 candidates.dedup_by(|a, b| a.id == b.id);
                 candidates.truncate(k);
             }

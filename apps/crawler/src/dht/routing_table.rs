@@ -18,6 +18,18 @@ pub fn xor(a: &NodeId, b: &NodeId) -> NodeId {
     out
 }
 
+
+pub fn cmp_xor(target: &NodeId, a: &NodeId, b: &NodeId) -> std::cmp::Ordering {
+    for i in 0..20 {
+        let xa = a[i] ^ target[i];
+        let xb = b[i] ^ target[i];
+        if xa != xb {
+            return xa.cmp(&xb);
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
 fn leading_zeros(x: &NodeId) -> usize {
     let mut count = 0;
     for &byte in x.iter() {
@@ -77,14 +89,15 @@ impl RoutingTable {
     }
 
     pub fn closest(&self, target: &NodeId, n: usize) -> Vec<NodeInfo> {
-        let mut all: Vec<(NodeInfo, NodeId)> = self
+        let mut all: Vec<NodeInfo> = self
             .buckets
             .iter()
             .flat_map(|b| b.iter())
-            .map(|node| (node.clone(), xor(target, &node.id)))
+            .cloned()
             .collect();
-        all.sort_unstable_by(|a, b| a.1.cmp(&b.1));
-        all.into_iter().map(|(node, _)| node).take(n).collect()
+        all.sort_unstable_by(|a, b| cmp_xor(target, &a.id, &b.id));
+        all.truncate(n);
+        all
     }
 
     pub fn all(&self) -> Vec<NodeInfo> {
