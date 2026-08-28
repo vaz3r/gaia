@@ -5,3 +5,4 @@ pub mod tx_state;
 
 pub type NodeId = [u8; 20];
 pub type Infohash = [u8; 20];
+pub mod scanner;

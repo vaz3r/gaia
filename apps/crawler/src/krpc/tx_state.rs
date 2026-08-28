@@ -17,7 +17,7 @@ pub struct TxEntry {
     #[allow(dead_code)]
     pub kind: TxKind,
     pub sent: Instant,
-    pub reply: Option<oneshot::Sender<Message>>,
+    pub reply: Option<oneshot::Sender<Bytes>>,
 }
 
 pub struct TxTable {
@@ -42,7 +42,7 @@ impl TxTable {
         }
     }
 
-    pub fn take(&self, t: &Bytes) -> Option<TxEntry> {
+    pub fn take(&self, t: &[u8]) -> Option<TxEntry> {
         self.map.remove(t).map(|(_, v)| v)
     }
 

@@ -81,6 +81,38 @@ impl Router {
     }
 
     pub fn handle_datagram(&self, buf: &[u8], from: SocketAddr) {
+        let header = match crate::krpc::scanner::scan(buf) {
+            Some(h) => h,
+            None => {
+                self.metrics.inbound_invalid.add(1);
+                return;
+            }
+        };
+
+        if let Some(y) = header.y {
+            if y == b"q" {
+                if let Some(q) = header.q {
+                    if q == FIND_NODE {
+                        if self.find_node_response_percent < 100
+                            && !crate::router::should_answer(self.find_node_response_percent, rand::random::<u16>())
+                        {
+                            self.metrics.inbound_find_node_dropped.add(1);
+                            return;
+                        }
+                    }
+                }
+            } else if y == b"r" || y == b"e" {
+                if let Some(t) = header.t {
+                    if let Some(entry) = self.tx.take(t) {
+                        if let Some(reply) = entry.reply {
+                            let _ = reply.send(Bytes::copy_from_slice(buf));
+                        }
+                    }
+                }
+                return;
+            }
+        }
+
         let bytes = Bytes::copy_from_slice(buf);
         let msg = match Message::parse(&bytes) {
             Ok(m) => m,
@@ -91,7 +123,7 @@ impl Router {
         };
         match &msg.kind {
             Kind::Query { q, a } => self.handle_query(&msg.t, q, a, from),
-            Kind::Response { .. } | Kind::Error { .. } => self.handle_reply(msg),
+            _ => {} // Handled by fast path above
         }
     }
 
@@ -168,12 +200,6 @@ impl Router {
             SybilPool::Random => self.metrics.inbound_find_node_random.add(1),
         }
 
-        if self.find_node_response_percent < 100
-            && !should_answer(self.find_node_response_percent, rand::random::<u16>())
-        {
-            self.metrics.inbound_find_node_dropped.add(1);
-            return;
-        }
         let nodes = self.closest_phantom(&target, 8);
         let r = BValue::dict(vec![
             (
@@ -268,13 +294,6 @@ impl Router {
         }
     }
 
-    fn handle_reply(&self, msg: Message) {
-        if let Some(entry) = self.tx.take(&msg.t)
-            && let Some(reply) = entry.reply
-        {
-            let _ = reply.send(msg);
-        }
-    }
 
     fn send_response(&self, t: &Bytes, from: SocketAddr, r: BValue) {
         let msg = Message::response(t.clone(), r);
@@ -312,7 +331,10 @@ impl Router {
             return Err(QueryError::Io(e));
         }
         match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(m)) => Ok(m),
+            Ok(Ok(bytes)) => match Message::parse(&bytes) {
+                Ok(m) => Ok(m),
+                Err(_) => Err(QueryError::Cancelled),
+            },
             Ok(Err(_)) => Err(QueryError::Cancelled),
             Err(_) => {
                 self.tx.take(&txid);
@@ -322,7 +344,7 @@ impl Router {
         }
     }
 
-    fn register(&self, method: &[u8]) -> (Bytes, oneshot::Receiver<Message>) {
+    fn register(&self, method: &[u8]) -> (Bytes, oneshot::Receiver<Bytes>) {
         for _ in 0..32 {
             let txid = Bytes::copy_from_slice(&rand::random::<[u8; 2]>());
             let kind = match method {
