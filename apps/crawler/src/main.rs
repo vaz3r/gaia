@@ -11,7 +11,6 @@ mod trace;
 mod verify;
 
 use crate::config::Config;
-use crate::trace::TraceConfig;
 use crate::dht::routing_table::{NodeInfo, RoutingTable};
 use crate::dht::walker::Walker;
 use crate::harvest::{HarvestEvent, Harvester, Source};
@@ -22,10 +21,11 @@ use crate::metrics::Metrics;
 use crate::net::rate_limit::RateLimiter;
 use crate::router::Router;
 use crate::storage::batch_writer::BatchWriter;
-use crate::storage::jobs::{RetryConfig as JobRetryConfig, VerifyStore};
 use crate::storage::janitor::JanitorConfig;
-use crate::storage::sightings::SightingWriter;
+use crate::storage::jobs::{RetryConfig as JobRetryConfig, VerifyStore};
 use crate::storage::pg::PoolConfig;
+use crate::storage::sightings::SightingWriter;
+use crate::trace::TraceConfig;
 use crate::verify::fetch_pool::FetchParams;
 use crate::verify::peer_cache::PeerCache;
 use std::net::SocketAddr;
@@ -93,7 +93,10 @@ async fn main() {
 
     let metrics = Arc::new(Metrics::new(log_dropped));
     crate::trace::TRACE_CONFIG
-        .set(TraceConfig::new(config.trace_sample_rate, config.debug_ih.clone()))
+        .set(TraceConfig::new(
+            config.trace_sample_rate,
+            config.debug_ih.clone(),
+        ))
         .unwrap_or(());
 
     let channel_capacity = config.channel_capacity.max(1);
@@ -147,15 +150,19 @@ async fn main() {
             metrics.clone(),
             harvest_tx.clone(),
             &mut node_routers,
-        ).await;
+        )
+        .await;
         tracing::info!(node = i, "dht node started");
     }
     let node_routers: Arc<Vec<Arc<Router>>> = Arc::new(node_routers);
 
-    let sightings = Arc::new(SightingWriter::new(pool.clone(), config.storage.sighting_chunk_size));
-    let sightings_run = sightings
-        .clone()
-        .run(Duration::from_millis(config.storage.sighting_flush_interval_ms));
+    let sightings = Arc::new(SightingWriter::new(
+        pool.clone(),
+        config.storage.sighting_chunk_size,
+    ));
+    let sightings_run = sightings.clone().run(Duration::from_millis(
+        config.storage.sighting_flush_interval_ms,
+    ));
     let sightings_flush = flush_sightings(sightings.clone(), discovery_rx);
 
     let retry_backoffs = config
@@ -176,12 +183,10 @@ async fn main() {
         },
         metrics.clone(),
     ));
-    let retry_run = verify_store
-        .clone()
-        .run_scheduler(
-            verify_tx.clone(),
-            Duration::from_secs(config.retry.scheduler_interval_secs),
-        );
+    let retry_run = verify_store.clone().run_scheduler(
+        verify_tx.clone(),
+        Duration::from_secs(config.retry.scheduler_interval_secs),
+    );
 
     let batch_writer = Arc::new(BatchWriter::new(
         pool.clone(),
@@ -194,12 +199,10 @@ async fn main() {
     ));
 
     let (shutdown_tx, _shutdown_rx) = broadcast::channel(1);
-    let batch_run = batch_writer
-        .clone()
-        .run(
-            Duration::from_secs(config.storage.batch_flush_interval_secs),
-            shutdown_tx.subscribe(),
-        );
+    let batch_run = batch_writer.clone().run(
+        Duration::from_secs(config.storage.batch_flush_interval_secs),
+        shutdown_tx.subscribe(),
+    );
 
     let janitor_pool = pool.clone();
     let janitor_config = JanitorConfig {
@@ -233,9 +236,9 @@ async fn main() {
         pool.clone(),
         metrics.clone(),
     ));
-    let metrics_run = metrics_writer
-        .clone()
-        .run(Duration::from_secs(config.storage.metrics_flush_interval_secs));
+    let metrics_run = metrics_writer.clone().run(Duration::from_secs(
+        config.storage.metrics_flush_interval_secs,
+    ));
 
     let announce_peer_cache = Arc::new(crate::verify::AnnouncePeerCache::new(
         Duration::from_secs(config.cache.announce_cache_ttl_secs),
@@ -243,28 +246,32 @@ async fn main() {
         config.cache.announce_cache_initial_capacity,
         config.cache.announce_cache_shards,
     ));
-    let peer_outcomes = Arc::new(
-        crate::storage::peer_outcomes::PeerOutcomeWriter::new(
-            pool.clone(),
-            config.storage.peer_outcomes_chunk_size,
-        ),
-    );
-    let peer_outcomes_run = peer_outcomes
-        .clone()
-        .run(Duration::from_secs(config.storage.peer_outcomes_flush_interval_secs));
+    let peer_outcomes = Arc::new(crate::storage::peer_outcomes::PeerOutcomeWriter::new(
+        pool.clone(),
+        config.storage.peer_outcomes_chunk_size,
+    ));
+    let peer_outcomes_run = peer_outcomes.clone().run(Duration::from_secs(
+        config.storage.peer_outcomes_flush_interval_secs,
+    ));
 
     let pipeline = verify::run_pipeline(
         verify_rx,
         fresh_verify_rx,
         announce_rx,
         node_routers,
-        if config.fetch.utp_enabled { utp_socket().await } else { None },
+        if config.fetch.utp_enabled {
+            utp_socket().await
+        } else {
+            None
+        },
         metrics.clone(),
         batch_writer.clone(),
         peer_cache.clone(),
         announce_peer_cache,
         peer_outcomes,
-        Arc::new(verify::ConnLimiter::new(config.fetch.max_connections_per_ip)),
+        Arc::new(verify::ConnLimiter::new(
+            config.fetch.max_connections_per_ip,
+        )),
         verify::VerifyConfig {
             pipeline_limit: config.fetch.pipeline_limit,
             fetch_limit: config.fetch.global_fetch_limit,
@@ -449,10 +456,7 @@ async fn spawn_node(
         Duration::from_secs(config.dht.token_window_secs),
     )));
 
-    let bind = SocketAddr::new(
-        config.bind_addr.ip(),
-        config.port_base + node_index as u16,
-    );
+    let bind = SocketAddr::new(config.bind_addr.ip(), config.port_base + node_index as u16);
     let sockets = net::bind_reuseport(bind, config.worker_threads)
         .expect("bind udp sockets")
         .into_iter()
@@ -615,7 +619,18 @@ async fn report_loop(
     let mut tick = tokio::time::interval(interval);
     loop {
         tick.tick().await;
-        let cur = metrics.snapshot();
+        let mut cur = metrics.snapshot();
+        // Reset interval maximum via swap to current active (not zero); report
+        // the maximum of swapped value and current active to cover race where
+        // a task increments max between snapshot and swap.
+        let current_active = metrics
+            .pipeline_active
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let swapped_max = metrics
+            .pipeline_active_max_interval
+            .swap(current_active, std::sync::atomic::Ordering::Relaxed);
+        let interval_max = swapped_max.max(current_active);
+        cur.pipeline_active_max_interval = interval_max;
         let dt = interval.as_secs_f64();
         let vph = (cur.verify_success - prev.verify_success) as f64 / dt * 3600.0;
         let uph = (cur.unique_infohashes - prev.unique_infohashes) as f64 / dt * 3600.0;
@@ -715,6 +730,19 @@ async fn report_loop(
             fresh_channel_depth = cur.fresh_channel_depth,
             fresh_channel_depth_max = cur.fresh_channel_depth_max,
             scheduler_skipped_backpressure = cur.scheduler_skipped_backpressure,
+            fresh_dequeued_total = cur.fresh_dequeued_total,
+            retry_dequeued_total = cur.retry_dequeued_total,
+            announce_dequeued_total = cur.announce_dequeued_total,
+            pipeline_dequeued_total = cur.pipeline_dequeued_total,
+            pipeline_spawned_total = cur.pipeline_spawned_total,
+            pipeline_completed_total = cur.pipeline_completed_total,
+            pipeline_cancelled_total = cur.pipeline_cancelled_total,
+            pipeline_active = cur.pipeline_active,
+            pipeline_active_max_interval = cur.pipeline_active_max_interval,
+            pipeline_permit_wait_micros_total = cur.pipeline_permit_wait_micros_total,
+            pipeline_permit_acquisitions_total = cur.pipeline_permit_acquisitions_total,
+            pipeline_task_micros_total = cur.pipeline_task_micros_total,
+            pipeline_no_peers_total = cur.pipeline_no_peers_total,
         );
         prev = cur;
     }
@@ -744,9 +772,13 @@ async fn cache_cleanup_loop(cache: Arc<PeerCache>, metrics: Arc<Metrics>, interv
     loop {
         tick.tick().await;
         let evicted = cache.evict_expired();
-        metrics.peer_cache_size.store(cache.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        metrics
+            .peer_cache_size
+            .store(cache.len() as u64, std::sync::atomic::Ordering::Relaxed);
         if evicted > 0 {
-            metrics.peer_cache_evictions.fetch_add(evicted as u64, std::sync::atomic::Ordering::Relaxed);
+            metrics
+                .peer_cache_evictions
+                .fetch_add(evicted as u64, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }

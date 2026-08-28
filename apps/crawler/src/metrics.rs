@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Default)]
 pub struct Metrics {
@@ -103,6 +103,26 @@ pub struct Metrics {
     pub fresh_channel_depth: AtomicU64,
     pub fresh_channel_depth_max: AtomicU64,
     pub scheduler_skipped_backpressure: AtomicU64,
+    // Pipeline observability — bounded atomics, no alloc on hot path
+    pub fresh_dequeued_total: AtomicU64,
+    pub retry_dequeued_total: AtomicU64,
+    pub announce_dequeued_total: AtomicU64,
+    pub pipeline_dequeued_total: AtomicU64,
+    pub pipeline_spawned_total: AtomicU64,
+    pub pipeline_completed_total: AtomicU64,
+    pub pipeline_cancelled_total: AtomicU64,
+    pub pipeline_active: AtomicU64,
+    pub pipeline_active_max_interval: AtomicU64,
+    pub pipeline_permit_wait_micros_total: AtomicU64,
+    pub pipeline_permit_acquisitions_total: AtomicU64,
+    pub pipeline_task_micros_total: AtomicU64,
+    /// Final pipeline outcome `NoPeers` (terminal `VerifyResult::NoPeers` after
+    /// DHT lookup + direct-peer race). Distinct from per-query `source_timeout`
+    /// / `source_no_values`: it is the pipeline task's terminal result, not
+    /// just the source sub-phase. Kept separate from `source_no_peers` (which
+    /// is the historical pipeline terminal counter) to make `pipeline_*`
+    /// conservation checks self-contained.
+    pub pipeline_no_peers_total: AtomicU64,
 }
 
 impl Metrics {
@@ -214,6 +234,19 @@ pub struct Snapshot {
     pub fresh_channel_depth: u64,
     pub fresh_channel_depth_max: u64,
     pub scheduler_skipped_backpressure: u64,
+    pub fresh_dequeued_total: u64,
+    pub retry_dequeued_total: u64,
+    pub announce_dequeued_total: u64,
+    pub pipeline_dequeued_total: u64,
+    pub pipeline_spawned_total: u64,
+    pub pipeline_completed_total: u64,
+    pub pipeline_cancelled_total: u64,
+    pub pipeline_active: u64,
+    pub pipeline_active_max_interval: u64,
+    pub pipeline_permit_wait_micros_total: u64,
+    pub pipeline_permit_acquisitions_total: u64,
+    pub pipeline_task_micros_total: u64,
+    pub pipeline_no_peers_total: u64,
 }
 
 impl Metrics {
@@ -298,17 +331,11 @@ impl Metrics {
             routing_rejected: self.routing_rejected.load(Ordering::Relaxed),
             log_dropped: self.log_dropped.load(Ordering::Relaxed),
             harvest_try_send_dropped: self.harvest_try_send_dropped.load(Ordering::Relaxed),
-            harvest_sighting_tx_dropped: self
-                .harvest_sighting_tx_dropped
-                .load(Ordering::Relaxed),
+            harvest_sighting_tx_dropped: self.harvest_sighting_tx_dropped.load(Ordering::Relaxed),
             scheduler_send_blocked: self.scheduler_send_blocked.load(Ordering::Relaxed),
             scheduler_claims: self.scheduler_claims.load(Ordering::Relaxed),
-            scheduler_claimed_fresh: self
-                .scheduler_claimed_fresh
-                .load(Ordering::Relaxed),
-            scheduler_claimed_retry: self
-                .scheduler_claimed_retry
-                .load(Ordering::Relaxed),
+            scheduler_claimed_fresh: self.scheduler_claimed_fresh.load(Ordering::Relaxed),
+            scheduler_claimed_retry: self.scheduler_claimed_retry.load(Ordering::Relaxed),
             verify_channel_depth: self.verify_channel_depth.load(Ordering::Relaxed),
             verify_channel_depth_max: self.verify_channel_depth_max.load(Ordering::Relaxed),
             fresh_channel_dropped: self.fresh_channel_dropped.load(Ordering::Relaxed),
@@ -317,6 +344,23 @@ impl Metrics {
             scheduler_skipped_backpressure: self
                 .scheduler_skipped_backpressure
                 .load(Ordering::Relaxed),
+            fresh_dequeued_total: self.fresh_dequeued_total.load(Ordering::Relaxed),
+            retry_dequeued_total: self.retry_dequeued_total.load(Ordering::Relaxed),
+            announce_dequeued_total: self.announce_dequeued_total.load(Ordering::Relaxed),
+            pipeline_dequeued_total: self.pipeline_dequeued_total.load(Ordering::Relaxed),
+            pipeline_spawned_total: self.pipeline_spawned_total.load(Ordering::Relaxed),
+            pipeline_completed_total: self.pipeline_completed_total.load(Ordering::Relaxed),
+            pipeline_cancelled_total: self.pipeline_cancelled_total.load(Ordering::Relaxed),
+            pipeline_active: self.pipeline_active.load(Ordering::Relaxed),
+            pipeline_active_max_interval: self.pipeline_active_max_interval.load(Ordering::Relaxed),
+            pipeline_permit_wait_micros_total: self
+                .pipeline_permit_wait_micros_total
+                .load(Ordering::Relaxed),
+            pipeline_permit_acquisitions_total: self
+                .pipeline_permit_acquisitions_total
+                .load(Ordering::Relaxed),
+            pipeline_task_micros_total: self.pipeline_task_micros_total.load(Ordering::Relaxed),
+            pipeline_no_peers_total: self.pipeline_no_peers_total.load(Ordering::Relaxed),
         }
     }
 }
