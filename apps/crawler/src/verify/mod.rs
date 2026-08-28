@@ -313,7 +313,7 @@ pub async fn run_pipeline(
                 metrics.announce_attempts.add(1);
             }
             metrics.verify_attempts.add(1);
-            match verify_infohash(
+            let verify_result = verify_infohash(
                 router,
                 utp,
                 ih,
@@ -326,8 +326,9 @@ pub async fn run_pipeline(
                 conn_limiter,
                 fetch_limit,
             )
-            .await
-            {
+            .await;
+            let handling_start = Instant::now();
+            match verify_result {
                 VerifyResult::Success(meta) if check(&ih, &meta) => {
                     crate::trace_lifecycle!(&ih, "sha1_check", stream = "verify", result = "pass");
                     metrics.verify_success.add(1);
@@ -387,6 +388,27 @@ pub async fn run_pipeline(
                     batch_writer.push_failed(ih, "no_metadata");
                 }
             }
+            let handling_us = handling_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
+            // saturating add helper is in fetch_pool; use direct atomic with saturating via CAS loop
+            {
+                let target = &metrics.result_handling_micros_total;
+                let mut prev = target.load(Ordering::Relaxed);
+                loop {
+                    let next = prev.saturating_add(handling_us);
+                    match target.compare_exchange_weak(
+                        prev,
+                        next,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => break,
+                        Err(actual) => prev = actual,
+                    }
+                }
+            }
+            metrics
+                .result_handling_completed_total
+                .fetch_add(1, Ordering::Relaxed);
             guard.complete();
         });
     }

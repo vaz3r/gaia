@@ -743,6 +743,23 @@ async fn report_loop(
             pipeline_permit_acquisitions_total = cur.pipeline_permit_acquisitions_total,
             pipeline_task_micros_total = cur.pipeline_task_micros_total,
             pipeline_no_peers_total = cur.pipeline_no_peers_total,
+            verify_source_micros_total = cur.verify_source_micros_total,
+            verify_source_completed_total = cur.verify_source_completed_total,
+            fetch_permit_wait_micros_total = cur.fetch_permit_wait_micros_total,
+            fetch_permit_acquisitions_total = cur.fetch_permit_acquisitions_total,
+            per_ip_wait_micros_total = cur.per_ip_wait_micros_total,
+            per_ip_acquisitions_total = cur.per_ip_acquisitions_total,
+            transport_connect_micros_total = cur.transport_connect_micros_total,
+            transport_connect_completed_total = cur.transport_connect_completed_total,
+            metadata_exchange_micros_total = cur.metadata_exchange_micros_total,
+            metadata_exchange_completed_total = cur.metadata_exchange_completed_total,
+            fetch_joinset_drain_micros_total = cur.fetch_joinset_drain_micros_total,
+            fetch_joinset_drain_completed_total = cur.fetch_joinset_drain_completed_total,
+            result_handling_micros_total = cur.result_handling_micros_total,
+            result_handling_completed_total = cur.result_handling_completed_total,
+            source_active = cur.source_active,
+            fetch_active = cur.fetch_active,
+            metadata_active = cur.metadata_active,
         );
         prev = cur;
     }

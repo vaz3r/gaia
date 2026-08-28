@@ -123,6 +123,24 @@ pub struct Metrics {
     /// is the historical pipeline terminal counter) to make `pipeline_*`
     /// conservation checks self-contained.
     pub pipeline_no_peers_total: AtomicU64,
+    // Verification phase durations — wall-clock per task vs aggregate per attempt
+    pub verify_source_micros_total: AtomicU64,
+    pub verify_source_completed_total: AtomicU64,
+    pub fetch_permit_wait_micros_total: AtomicU64,
+    pub fetch_permit_acquisitions_total: AtomicU64,
+    pub per_ip_wait_micros_total: AtomicU64,
+    pub per_ip_acquisitions_total: AtomicU64,
+    pub transport_connect_micros_total: AtomicU64,
+    pub transport_connect_completed_total: AtomicU64,
+    pub metadata_exchange_micros_total: AtomicU64,
+    pub metadata_exchange_completed_total: AtomicU64,
+    pub fetch_joinset_drain_micros_total: AtomicU64,
+    pub fetch_joinset_drain_completed_total: AtomicU64,
+    pub result_handling_micros_total: AtomicU64,
+    pub result_handling_completed_total: AtomicU64,
+    pub source_active: AtomicU64,
+    pub fetch_active: AtomicU64,
+    pub metadata_active: AtomicU64,
 }
 
 impl Metrics {
@@ -247,6 +265,23 @@ pub struct Snapshot {
     pub pipeline_permit_acquisitions_total: u64,
     pub pipeline_task_micros_total: u64,
     pub pipeline_no_peers_total: u64,
+    pub verify_source_micros_total: u64,
+    pub verify_source_completed_total: u64,
+    pub fetch_permit_wait_micros_total: u64,
+    pub fetch_permit_acquisitions_total: u64,
+    pub per_ip_wait_micros_total: u64,
+    pub per_ip_acquisitions_total: u64,
+    pub transport_connect_micros_total: u64,
+    pub transport_connect_completed_total: u64,
+    pub metadata_exchange_micros_total: u64,
+    pub metadata_exchange_completed_total: u64,
+    pub fetch_joinset_drain_micros_total: u64,
+    pub fetch_joinset_drain_completed_total: u64,
+    pub result_handling_micros_total: u64,
+    pub result_handling_completed_total: u64,
+    pub source_active: u64,
+    pub fetch_active: u64,
+    pub metadata_active: u64,
 }
 
 impl Metrics {
@@ -361,6 +396,43 @@ impl Metrics {
                 .load(Ordering::Relaxed),
             pipeline_task_micros_total: self.pipeline_task_micros_total.load(Ordering::Relaxed),
             pipeline_no_peers_total: self.pipeline_no_peers_total.load(Ordering::Relaxed),
+            verify_source_micros_total: self.verify_source_micros_total.load(Ordering::Relaxed),
+            verify_source_completed_total: self
+                .verify_source_completed_total
+                .load(Ordering::Relaxed),
+            fetch_permit_wait_micros_total: self
+                .fetch_permit_wait_micros_total
+                .load(Ordering::Relaxed),
+            fetch_permit_acquisitions_total: self
+                .fetch_permit_acquisitions_total
+                .load(Ordering::Relaxed),
+            per_ip_wait_micros_total: self.per_ip_wait_micros_total.load(Ordering::Relaxed),
+            per_ip_acquisitions_total: self.per_ip_acquisitions_total.load(Ordering::Relaxed),
+            transport_connect_micros_total: self
+                .transport_connect_micros_total
+                .load(Ordering::Relaxed),
+            transport_connect_completed_total: self
+                .transport_connect_completed_total
+                .load(Ordering::Relaxed),
+            metadata_exchange_micros_total: self
+                .metadata_exchange_micros_total
+                .load(Ordering::Relaxed),
+            metadata_exchange_completed_total: self
+                .metadata_exchange_completed_total
+                .load(Ordering::Relaxed),
+            fetch_joinset_drain_micros_total: self
+                .fetch_joinset_drain_micros_total
+                .load(Ordering::Relaxed),
+            fetch_joinset_drain_completed_total: self
+                .fetch_joinset_drain_completed_total
+                .load(Ordering::Relaxed),
+            result_handling_micros_total: self.result_handling_micros_total.load(Ordering::Relaxed),
+            result_handling_completed_total: self
+                .result_handling_completed_total
+                .load(Ordering::Relaxed),
+            source_active: self.source_active.load(Ordering::Relaxed),
+            fetch_active: self.fetch_active.load(Ordering::Relaxed),
+            metadata_active: self.metadata_active.load(Ordering::Relaxed),
         }
     }
 }
