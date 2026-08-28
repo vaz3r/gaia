@@ -42,11 +42,11 @@ rate_limit_bucket_ttl_secs = 600
 token_window_secs = 300
 
 [fetch]
-tcp_timeout_secs = 2
-utp_timeout_secs = 3
-metadata_timeout_secs = 5
+tcp_timeout_secs = 5
+utp_timeout_secs = 10
+metadata_timeout_secs = 20
 race_peers = 8
-global_fetch_limit = 600
+global_fetch_limit = 400
 max_connections_per_ip = 4
 utp_enabled = true
 transport_race_concurrent = true
