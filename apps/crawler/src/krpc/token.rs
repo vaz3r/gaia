@@ -1,11 +1,9 @@
-use hmac::{Hmac, KeyInit, Mac};
-use sha1::Sha1;
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 use std::net::IpAddr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-type HmacSha1 = Hmac<Sha1>;
-
-pub const TOKEN_LEN: usize = 20;
+pub const TOKEN_LEN: usize = 8;
 
 #[derive(Clone)]
 pub struct TokenGenerator {
@@ -64,16 +62,11 @@ impl TokenGenerator {
     }
 
     fn sign(&self, secret: &[u8; 32], ip: IpAddr, epoch: u64) -> [u8; TOKEN_LEN] {
-        let mut mac = HmacSha1::new_from_slice(secret).expect("hmac accepts any key length");
-        match ip {
-            IpAddr::V4(v4) => mac.update(&v4.octets()),
-            IpAddr::V6(v6) => mac.update(&v6.octets()),
-        }
-        mac.update(&epoch.to_be_bytes());
-        let out = mac.finalize().into_bytes();
-        let mut tok = [0u8; TOKEN_LEN];
-        tok.copy_from_slice(out.as_ref());
-        tok
+        let mut hasher = DefaultHasher::new();
+        secret.hash(&mut hasher);
+        ip.hash(&mut hasher);
+        epoch.hash(&mut hasher);
+        hasher.finish().to_be_bytes()
     }
 }
 
