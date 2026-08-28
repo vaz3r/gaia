@@ -144,6 +144,10 @@ impl WireSession {
             .map_err(|_| WireError::Timeout)?
             .map_err(WireError::Io)?;
         stream.set_nodelay(true).ok();
+        
+        let sock = socket2::SockRef::from(&stream);
+        let _ = sock.set_recv_buffer_size(32768);
+        let _ = sock.set_send_buffer_size(16384);
         WireSession::init(Transport::Tcp(stream), info_hash, peer_id, timeout).await
     }
 

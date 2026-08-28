@@ -215,9 +215,9 @@ impl Default for FetchConfig {
         FetchConfig {
             tcp_timeout_secs: 5,
             utp_timeout_secs: 10,
-            metadata_timeout_secs: 20,
+            metadata_timeout_secs: 25,
             race_peers: 8,
-            global_fetch_limit: 400,
+            global_fetch_limit: 1200,
             max_connections_per_ip: 4,
             utp_enabled: true,
             max_message_len: 16 * 1024 * 1024,
