@@ -33,8 +33,8 @@ fn sample_failed_peer(ih: &Infohash, addr: &SocketAddr, metrics: &Metrics, rate:
     let count = metrics.fetch_connect_io.load(Ordering::Relaxed);
     let hash = count
         .wrapping_mul(0x517c1b7275698a01)
-        .wrapping_mul((ih[0] as u64) | 1);
-    if hash.is_multiple_of(rate) {
+        .wrapping_mul(u64::from(ih[0] as u64) | 1);
+    if hash % rate == 0 {
         tracing::warn!(
             addr = %addr,
             ih_prefix = ?&ih[..4],
@@ -327,10 +327,11 @@ pub async fn verify_infohash(
     //    and/or the direct announce_peer. These are raced against the DHT
     //    lookup below so we never wait up to source_deadline behind querying
     //    mostly-dead DHT nodes for a peer that is live right now.
-    if let Some(announcer) = announce_peer_cache.get(&info_hash)
-        && peers_seen.insert(announcer) {
+    if let Some(announcer) = announce_peer_cache.get(&info_hash) {
+        if peers_seen.insert(announcer) {
             crate::trace_lifecycle!(&info_hash, "announce_peer_injected", stream = "fetch", peer = announcer.to_string());
         }
+    }
     if let Some(d) = direct {
         peers_seen.insert(d);
     }

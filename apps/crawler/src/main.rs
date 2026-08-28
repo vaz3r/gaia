@@ -124,7 +124,7 @@ async fn main() {
     ));
     let peer_cache_cleanup = peer_cache.clone();
 
-    let (_shutdown_tx, _shutdown_rx): (tokio::sync::broadcast::Sender<()>, _) =
+    let (shutdown_tx, _shutdown_rx): (tokio::sync::broadcast::Sender<()>, _) =
         broadcast::channel(1);
 
     tracing::info!(
@@ -461,8 +461,7 @@ async fn spawn_node(
     let self_addr = sockets[0].local_addr().expect("local addr");
     let send_socks: Arc<Vec<Arc<UdpSocket>>> = Arc::new(sockets.clone());
 
-    let sybil_ids = sybils.iter().map(|s| s.0).collect::<Vec<_>>();
-    let table = Arc::new(Mutex::new(RoutingTable::new(self_id, &sybil_ids)));
+    let table = Arc::new(Mutex::new(RoutingTable::new(self_id)));
     load_routing_snapshot(&table, &data_dir.join("routing_table.bin"));
 
     let tx_table = Arc::new(TxTable::new());

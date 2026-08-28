@@ -140,11 +140,12 @@ impl BatchWriter {
                 })
                 .collect();
         }
-        if !torrent_batch.is_empty()
-            && flush_torrents(&self.pool, &torrent_batch, self.torrent_flush_chunk).await {
+        if !torrent_batch.is_empty() {
+            if flush_torrents(&self.pool, &torrent_batch, self.torrent_flush_chunk).await {
                 self.torrents_written
                     .fetch_add(torrent_batch.len() as u64, Ordering::Relaxed);
             }
+        }
         if !verified_ihs.is_empty() {
             delete_verified(&self.pool, &verified_ihs, self.flush_chunk).await;
         }

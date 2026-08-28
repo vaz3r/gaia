@@ -32,10 +32,11 @@ impl TraceConfig {
 
 pub fn should_trace(ih: &NodeId) -> bool {
     let Some(config) = TRACE_CONFIG.get() else { return false };
-    if let Some(debug) = &config.debug_ih
-        && debug == ih {
+    if let Some(debug) = &config.debug_ih {
+        if debug == ih {
             return true;
         }
+    }
     if config.sample_rate <= 0.0 {
         return false;
     }

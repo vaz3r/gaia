@@ -53,14 +53,14 @@ fn bucket_index(self_id: &NodeId, id: &NodeId) -> usize {
     }
 }
 
-pub struct SingleRoutingTable {
+pub struct RoutingTable {
     self_id: NodeId,
     buckets: Vec<VecDeque<NodeInfo>>,
 }
 
-impl SingleRoutingTable {
+impl RoutingTable {
     pub fn new(self_id: NodeId) -> Self {
-        SingleRoutingTable {
+        RoutingTable {
             self_id,
             buckets: (0..160).map(|_| VecDeque::new()).collect(),
         }
@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn insert_and_closest() {
-        let mut rt = RoutingTable::new([0u8; 20], &[]);
+        let mut rt = RoutingTable::new([0u8; 20]);
         let mut nodes = Vec::new();
         for i in 1..17u8 {
             let mut id = [0u8; 20];
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn random_nodes_populated_table() {
-        let mut rt = RoutingTable::new([0u8; 20], &[]);
+        let mut rt = RoutingTable::new([0u8; 20]);
         for i in 0..400u16 {
             let mut id = [0u8; 20];
             id[0] = (i >> 8) as u8;
@@ -254,7 +254,7 @@ mod tests {
         // So a flood of distinct ids saturates only the far buckets (K=8 each)
         // and the total length plateaus well below 160*K. This documents the
         // intrinsic property: a healthy table is ~100-400 nodes, not 1280.
-        let mut rt = RoutingTable::new([0u8; 20], &[]);
+        let mut rt = RoutingTable::new([0u8; 20]);
         let mut new_at_insert = 0u64;
         for i in 0..500_000u64 {
             let id = rand::random::<[u8; 20]>();
@@ -274,94 +274,3 @@ mod tests {
         let _ = top;
     }
 }
-
-pub struct RoutingTable {
-    tables: Vec<SingleRoutingTable>,
-}
-
-impl RoutingTable {
-    pub fn new(self_id: NodeId, sybils: &[NodeId]) -> Self {
-        let mut tables = vec![SingleRoutingTable::new(self_id)];
-        for &s in sybils {
-            tables.push(SingleRoutingTable::new(s));
-        }
-        RoutingTable { tables }
-    }
-
-    pub fn insert(&mut self, node: NodeInfo) -> bool {
-        let mut inserted = false;
-        for t in &mut self.tables {
-            if t.insert(node.clone()) { inserted = true; }
-        }
-        inserted
-    }
-
-    pub fn closest(&self, target: &NodeId, n: usize) -> Vec<NodeInfo> {
-        let mut all = Vec::new();
-        for t in &self.tables {
-            all.extend(t.closest(target, n));
-        }
-        all.sort_unstable_by(|a, b| cmp_xor(target, &a.id, &b.id));
-        all.dedup_by(|a, b| a.id == b.id);
-        all.truncate(n);
-        all
-    }
-
-    pub fn len(&self) -> usize {
-        let mut sum = 0;
-        for t in &self.tables {
-            sum += t.len();
-        }
-        sum
-    }
-
-    pub fn buckets_used(&self) -> usize {
-        let mut sum = 0;
-        for t in &self.tables {
-            sum += t.buckets_used();
-        }
-        sum
-    }
-
-    pub fn all(&self) -> Vec<NodeInfo> {
-        let mut all = Vec::new();
-        for t in &self.tables {
-            all.extend(t.all());
-        }
-        all.sort_unstable_by_key(|n| n.id);
-        all.dedup_by(|a, b| a.id == b.id);
-        all
-    }
-
-    pub fn contains_id(&self, id: &NodeId) -> bool {
-        for t in &self.tables {
-            if t.contains_id(id) { return true; }
-        }
-        false
-    }
-
-    pub fn random_nodes(&self, n: usize) -> Vec<NodeInfo> {
-        if self.tables.is_empty() { return Vec::new(); }
-        let mut nodes = Vec::with_capacity(n);
-        let mut tables = self.tables.iter().cycle();
-        let mut attempts = 0;
-        while nodes.len() < n && attempts < n * 4 {
-            if let Some(t) = tables.next()
-                && let Some(node) = t.random_nodes(1).pop() {
-                    nodes.push(node);
-                }
-            attempts += 1;
-        }
-        nodes.sort_unstable_by_key(|n| n.id);
-        nodes.dedup_by(|a, b| a.id == b.id);
-        nodes.truncate(n);
-        nodes
-    }
-
-    #[cfg(test)]
-    fn bucket_fill(&self, idx: usize) -> usize {
-        if self.tables.is_empty() { return 0; }
-        self.tables[0].bucket_fill(idx)
-    }
-}
-

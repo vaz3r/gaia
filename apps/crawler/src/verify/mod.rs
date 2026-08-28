@@ -130,17 +130,27 @@ pub async fn run_pipeline(
 
 let (ih, direct, came_from_scheduler) = loop {
             // 1) Announce (direct peer) has top priority.
-            if let Ok((ih, addr)) = announce_rx.try_recv() { break (ih, Some(addr), false) }
+            match announce_rx.try_recv() {
+                Ok((ih, addr)) => break (ih, Some(addr), false),
+                Err(_) => {}
+            }
             // 2) Fresh discoveries, batched so they cannot monopolize the queue.
-            if fresh_streak < fresh_batch
-                && let Ok(ih) = fresh_rx.try_recv() {
-                    fresh_streak += 1;
-                    break (ih, None, false);
+            if fresh_streak < fresh_batch {
+                match fresh_rx.try_recv() {
+                    Ok(ih) => {
+                        fresh_streak += 1;
+                        break (ih, None, false);
+                    }
+                    Err(_) => {}
                 }
+            }
             // 3) Retry channel: guaranteed slot after every fresh_batch.
-            if let Ok(ih) = rx.try_recv() {
-                fresh_streak = 0;
-                break (ih, None, true);
+            match rx.try_recv() {
+                Ok(ih) => {
+                    fresh_streak = 0;
+                    break (ih, None, true);
+                }
+                Err(_) => {}
             }
             // 4) Everything momentarily empty: block on the first producer.
             break tokio::select! {

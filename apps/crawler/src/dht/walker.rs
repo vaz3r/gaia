@@ -51,8 +51,7 @@ impl Walker {
             let router = self.router.clone();
             let target = crate::dht::node_id::random_node_id();
             set.spawn(async move {
-                let sender_id = router.random_sybil_id();
-                let args = find_node_args(&sender_id, target);
+                let args = find_node_args(&router.self_id, target);
                 router
                     .send_query(FIND_NODE, addr, args, query_timeout)
                     .await
@@ -133,7 +132,7 @@ impl Walker {
         if explore {
             self.router.metrics().walker_self_target.add(1);
             if let Some(n) = self.router.routing_nodes().first() {
-                return (self.router.random_sybil_id(), n.id);
+                return (self.router.self_id, n.id);
             }
         }
         self.router.metrics().walker_sybil_target.add(1);

@@ -124,7 +124,7 @@ pub async fn source_peers(
             inflight -= 1;
 
             if !new_nodes.is_empty() {
-                candidates.append(&mut new_nodes);
+                candidates.extend(new_nodes.drain(..));
                 candidates.sort_unstable_by(|a, b| cmp_xor(&info_hash, &a.id, &b.id));
                 candidates.dedup_by(|a, b| a.id == b.id);
                 candidates.truncate(k);
@@ -193,11 +193,10 @@ fn spawn_query(
     let router = router.clone();
     let ih = info_hash;
     let addr = node.addr;
-    let sender_id = router.closest_sybil(&info_hash);
     let args = BValue::dict(vec![
         (
             Bytes::from_static(b"id"),
-            BValue::Bytes(Bytes::copy_from_slice(&sender_id)),
+            BValue::Bytes(Bytes::copy_from_slice(&router.self_id)),
         ),
         (
             Bytes::from_static(b"info_hash"),
