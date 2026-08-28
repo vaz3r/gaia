@@ -51,16 +51,21 @@ impl Walker {
             let router = self.router.clone();
             let target = crate::dht::node_id::random_node_id();
             set.spawn(async move {
-                let args = find_node_args(&router.self_id, target);
                 router
-                    .send_query(FIND_NODE, addr, args, query_timeout)
+                    .send_find_node_fast(addr, &target, query_timeout)
                     .await
-                    .map(|msg| (msg, addr))
+                    .map(|(n, n6)| (n, n6))
             });
         }
         while let Some(res) = set.join_next().await {
-            if let Ok(Ok((msg, addr))) = res {
-                ingest(&self.router, &msg, addr, self.parse_nodes6);
+            if let Ok(Ok((nodes, nodes6))) = res {
+                self.router.metrics().walker_ok.add(1);
+                self.router.metrics().walker_nodes_returned.add(nodes.len() as u64);
+                self.router.insert_nodes(nodes);
+                if self.parse_nodes6 {
+                    self.router.metrics().walker_nodes_returned.add(nodes6.len() as u64);
+                    self.router.insert_nodes(nodes6);
+                }
             }
         }
     }
@@ -80,15 +85,21 @@ impl Walker {
         }
     }
 
-    fn handle(&self, res: Result<(Result<Message, crate::router::QueryError>, SocketAddr), tokio::task::JoinError>) {
-        if let Ok((Ok(msg), addr)) = res {
-            ingest(&self.router, &msg, addr, self.parse_nodes6);
+    fn handle(&self, res: Result<Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>, tokio::task::JoinError>) {
+        if let Ok(Ok((nodes, nodes6))) = res {
+            self.router.metrics().walker_ok.add(1);
+            self.router.metrics().walker_nodes_returned.add(nodes.len() as u64);
+            self.router.insert_nodes(nodes);
+            if self.parse_nodes6 {
+                self.router.metrics().walker_nodes_returned.add(nodes6.len() as u64);
+                self.router.insert_nodes(nodes6);
+            }
         }
     }
 
     async fn reap(
         &self,
-        set: &mut tokio::task::JoinSet<(Result<Message, crate::router::QueryError>, SocketAddr)>,
+        set: &mut tokio::task::JoinSet<Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>>,
     ) {
         loop {
             match set.try_join_next() {
@@ -100,7 +111,7 @@ impl Walker {
 
     fn spawn_step(
         &self,
-        set: &mut tokio::task::JoinSet<(Result<Message, crate::router::QueryError>, SocketAddr)>,
+        set: &mut tokio::task::JoinSet<Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>>,
     ) -> bool {
         self.router.metrics().walker_steps.add(1);
         let nodes = self.router.random_routing_nodes(self.alpha);
@@ -114,14 +125,12 @@ impl Walker {
                 continue;
             }
             let router = self.router.clone();
-            let args = self.find_node_args(&our_id, target);
             let addr = node.addr;
             self.router.metrics().walker_queries.add(1);
             set.spawn(async move {
-                let res = router
-                    .send_query(FIND_NODE, addr, args, query_timeout)
-                    .await;
-                (res, addr)
+                router
+                    .send_find_node_fast(addr, &target, query_timeout)
+                    .await
             });
         }
         true

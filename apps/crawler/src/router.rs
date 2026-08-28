@@ -498,6 +498,116 @@ impl Router {
         }
     }
 
+
+    pub async fn send_find_node_fast(
+        &self,
+        addr: SocketAddr,
+        target: &[u8; 20],
+        timeout: Duration,
+    ) -> Result<(Vec<NodeInfo>, Vec<NodeInfo>), QueryError> {
+        let (txid, rx) = self.register(FIND_NODE);
+        
+        use std::io::Write;
+        let mut buf = [0u8; 256];
+        let mut pos = 0;
+        
+        let b1 = b"d1:ad2:id20:";
+        buf[pos..pos+b1.len()].copy_from_slice(b1);
+        pos += b1.len();
+        
+        buf[pos..pos+20].copy_from_slice(&self.self_id);
+        pos += 20;
+        
+        let b2 = b"6:target20:";
+        buf[pos..pos+b2.len()].copy_from_slice(b2);
+        pos += b2.len();
+        
+        buf[pos..pos+20].copy_from_slice(target);
+        pos += 20;
+        
+        let b3 = b"e1:q9:find_node1:t";
+        buf[pos..pos+b3.len()].copy_from_slice(b3);
+        pos += b3.len();
+        
+        let mut cursor = std::io::Cursor::new(&mut buf[pos..]);
+        write!(cursor, "{}:", txid.len()).unwrap();
+        pos += cursor.position() as usize;
+        
+        buf[pos..pos+txid.len()].copy_from_slice(&txid);
+        pos += txid.len();
+        
+        let b4 = b"1:y1:qe";
+        buf[pos..pos+b4.len()].copy_from_slice(b4);
+        pos += b4.len();
+        
+        self.metrics.outbound_queries.add(1);
+        if let Err(e) = self.next_socket().send_to(&buf[..pos], addr).await {
+            self.tx.take(&txid);
+            return Err(QueryError::Io(e));
+        }
+        
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(bytes)) => {
+                let mut nodes = Vec::new();
+                let mut nodes6 = Vec::new();
+                
+                let pat_id = b"2:id20:";
+                if let Some(pos) = bytes.windows(pat_id.len()).position(|w| w == pat_id) {
+                    let start = pos + pat_id.len();
+                    if start + 20 <= bytes.len() {
+                        let mut id = [0u8; 20];
+                        id.copy_from_slice(&bytes[start..start+20]);
+                        nodes.push(NodeInfo { id, addr });
+                    }
+                }
+                
+                let pat_nodes = b"5:nodes";
+                if let Some(pos) = bytes.windows(pat_nodes.len()).position(|w| w == pat_nodes) {
+                    let start = pos + pat_nodes.len();
+                    let mut colon_pos = 0;
+                    for i in start..bytes.len() {
+                        if bytes[i] == b':' { colon_pos = i; break; }
+                    }
+                    if colon_pos > 0 {
+                        if let Ok(len_str) = std::str::from_utf8(&bytes[start..colon_pos]) {
+                            if let Ok(len) = len_str.parse::<usize>() {
+                                if colon_pos + 1 + len <= bytes.len() {
+                                    nodes.extend(crate::dht::routing_table::decode_compact(&bytes[colon_pos+1 .. colon_pos+1+len]));
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                let pat_nodes6 = b"6:nodes6";
+                if let Some(pos) = bytes.windows(pat_nodes6.len()).position(|w| w == pat_nodes6) {
+                    let start = pos + pat_nodes6.len();
+                    let mut colon_pos = 0;
+                    for i in start..bytes.len() {
+                        if bytes[i] == b':' { colon_pos = i; break; }
+                    }
+                    if colon_pos > 0 {
+                        if let Ok(len_str) = std::str::from_utf8(&bytes[start..colon_pos]) {
+                            if let Ok(len) = len_str.parse::<usize>() {
+                                if colon_pos + 1 + len <= bytes.len() {
+                                    nodes6.extend(crate::dht::routing_table::decode_compact6(&bytes[colon_pos+1 .. colon_pos+1+len]));
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                Ok((nodes, nodes6))
+            },
+            Ok(Err(_)) => Err(QueryError::Cancelled),
+            Err(_) => {
+                self.tx.take(&txid);
+                self.metrics.outbound_timeouts.add(1);
+                Err(QueryError::Timeout)
+            }
+        }
+    }
+
     pub async fn send_query(
         &self,
         method: &[u8],

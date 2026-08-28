@@ -213,8 +213,8 @@ impl Default for DhtConfig {
 impl Default for FetchConfig {
     fn default() -> Self {
         FetchConfig {
-            tcp_timeout_secs: 5,
-            utp_timeout_secs: 10,
+            tcp_timeout_secs: 3,
+            utp_timeout_secs: 5,
             metadata_timeout_secs: 25,
             race_peers: 8,
             global_fetch_limit: 1200,
