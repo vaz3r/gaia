@@ -91,24 +91,20 @@ impl Router {
 
         if let Some(y) = header.y {
             if y == b"q" {
-                if let Some(q) = header.q {
-                    if q == FIND_NODE {
-                        if self.find_node_response_percent < 100
+                if let Some(q) = header.q
+                    && q == FIND_NODE
+                        && self.find_node_response_percent < 100
                             && !crate::router::should_answer(self.find_node_response_percent, rand::random::<u16>())
                         {
                             self.metrics.inbound_find_node_dropped.add(1);
                             return;
                         }
-                    }
-                }
             } else if y == b"r" || y == b"e" {
-                if let Some(t) = header.t {
-                    if let Some(entry) = self.tx.take(t) {
-                        if let Some(reply) = entry.reply {
+                if let Some(t) = header.t
+                    && let Some(entry) = self.tx.take(t)
+                        && let Some(reply) = entry.reply {
                             let _ = reply.send(Bytes::copy_from_slice(buf));
                         }
-                    }
-                }
                 return;
             }
         }
@@ -396,6 +392,24 @@ impl Router {
         &self.metrics
     }
 
+    pub fn random_sybil_id(&self) -> NodeId {
+        if self.sybils.is_empty() {
+            self.self_id
+        } else {
+            let idx = rand::random::<u64>() as usize % self.sybils.len();
+            self.sybils[idx].0
+        }
+    }
+
+    pub fn closest_sybil(&self, target: &NodeId) -> NodeId {
+        let mut best = self.self_id;
+        for (sybil, _) in &self.sybils {
+            if crate::dht::routing_table::cmp_xor(target, sybil, &best) == std::cmp::Ordering::Less {
+                best = *sybil;
+            }
+        }
+        best
+    }
     pub fn random_routing_nodes(&self, n: usize) -> Vec<NodeInfo> {
         self.table
             .lock()

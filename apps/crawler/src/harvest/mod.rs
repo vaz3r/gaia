@@ -81,12 +81,11 @@ impl Harvester {
                 return false;
             }
             self.announce_seen.insert(&ih);
-            if self.announce_tx.try_send((ih, peer)).is_err() {
-                if self.fresh_verify_tx.try_send(ih).is_err() {
+            if self.announce_tx.try_send((ih, peer)).is_err()
+                && self.fresh_verify_tx.try_send(ih).is_err() {
                     self.metrics.fresh_channel_dropped.add(1);
                     return false;
                 }
-            }
             self.current.insert(&ih);
             if self.current.inserted() >= self.rotate_at {
                 std::mem::swap(&mut self.current, &mut self.previous);
