@@ -1,5 +1,11 @@
 pub mod rate_limit;
 
+#[cfg(target_os = "linux")]
+pub mod mmsg;
+
+#[cfg(all(test, target_os = "linux"))]
+mod mmsg_tests;
+
 use crate::router::Router;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -27,21 +33,40 @@ pub fn bind_reuseport(addr: SocketAddr, n: usize) -> std::io::Result<Vec<UdpSock
     Ok(sockets)
 }
 
-pub async fn worker(sock: Arc<UdpSocket>, router: Arc<Router>) {
+pub async fn worker(
+    sock: Arc<UdpSocket>,
+    router: Arc<Router>,
+    node_idx: usize,
+    worker_idx: usize,
+    local_addr: SocketAddr,
+) {
     let mut buf = vec![0u8; MAX_DATAGRAM];
-    loop {
-        let (n, from) = match sock.recv_from(&mut buf).await {
-            Ok(x) => x,
-            Err(_) => continue,
-        };
-        router.handle_datagram(&buf[..n], from);
-        // Bounded drain: absorb short bursts in the same poll, then always
-        // yield via the outer .await so the executor can service other tasks.
-        for _ in 0..32 {
-            match sock.try_recv_from(&mut buf) {
-                Ok((n, from)) => router.handle_datagram(&buf[..n], from),
-                Err(_) => break,
+    let res: Result<(), std::io::Error> = loop {
+        match sock.recv_from(&mut buf).await {
+            Ok((n, from)) => {
+                router.handle_datagram(&buf[..n], from);
+                // Bounded drain: absorb short bursts in the same poll, then always
+                // yield via the outer .await so the executor can service other tasks.
+                for _ in 0..32 {
+                    match sock.try_recv_from(&mut buf) {
+                        Ok((n, from)) => router.handle_datagram(&buf[..n], from),
+                        Err(_) => break,
+                    }
+                }
+            }
+            Err(e) => {
+                break Err(e);
             }
         }
+    };
+    if let Err(e) = res {
+        tracing::error!(
+            backend = "tokio",
+            node = node_idx,
+            worker = worker_idx,
+            local = %local_addr,
+            error = %e,
+            "standard worker loop exited with error"
+        );
     }
 }

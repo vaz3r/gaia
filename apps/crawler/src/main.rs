@@ -1,4 +1,6 @@
+#![recursion_limit = "512"]
 mod config;
+
 mod dht;
 mod harvest;
 mod krpc;
@@ -29,10 +31,12 @@ use crate::trace::TraceConfig;
 use crate::verify::fetch_pool::FetchParams;
 use crate::verify::peer_cache::PeerCache;
 use std::net::SocketAddr;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::io::unix::AsyncFd;
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, mpsc};
 
@@ -459,13 +463,66 @@ async fn spawn_node(
     )));
 
     let bind = SocketAddr::new(config.bind_addr.ip(), config.port_base + node_index as u16);
-    let sockets = net::bind_reuseport(bind, config.worker_threads)
-        .expect("bind udp sockets")
-        .into_iter()
-        .map(Arc::new)
-        .collect::<Vec<_>>();
-    let self_addr = sockets[0].local_addr().expect("local addr");
-    let send_socks: Arc<Vec<Arc<UdpSocket>>> = Arc::new(sockets.clone());
+    let self_addr = bind;
+
+    let mut send_socks = Vec::with_capacity(config.worker_threads);
+    #[cfg(target_os = "linux")]
+    let mut recv_socks = Vec::with_capacity(config.worker_threads);
+    let use_mmsg = config.dht.linux_mmsg_receive;
+
+    if use_mmsg {
+        #[cfg(target_os = "linux")]
+        {
+            for _i in 0..config.worker_threads {
+                let domain = if bind.is_ipv4() {
+                    socket2::Domain::IPV4
+                } else {
+                    socket2::Domain::IPV6
+                };
+                let sock = socket2::Socket::new(
+                    domain,
+                    socket2::Type::DGRAM,
+                    Some(socket2::Protocol::UDP),
+                )
+                .expect("create socket2");
+                sock.set_reuse_address(true).expect("set reuseaddr");
+                sock.set_reuse_port(true).expect("set reuseport");
+                sock.set_nonblocking(true).expect("set nonblocking");
+                sock.bind(&bind.into()).expect("bind socket");
+
+                // Duplicate the bound descriptor: exactly one try_clone() per socket.
+                let dup_sock = sock.try_clone().expect("duplicate socket descriptor");
+
+                // Convert original to AsyncFd for receive
+                let owned_fd = std::os::fd::OwnedFd::from(sock);
+                let async_fd = Arc::new(AsyncFd::new(owned_fd).expect("register asyncfd"));
+                recv_socks.push(async_fd);
+
+                // Convert duplicated to UdpSocket for send
+                let std_sock: std::net::UdpSocket = dup_sock.into();
+                let tokio_sock = Arc::new(UdpSocket::from_std(std_sock).expect("tokio fromstd"));
+                send_socks.push(tokio_sock);
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            panic!("recvmmsg receive backend is only supported on Linux targets");
+        }
+    }
+
+    let sockets = if !use_mmsg {
+        let raw_socks = net::bind_reuseport(bind, config.worker_threads)
+            .expect("bind udp sockets")
+            .into_iter()
+            .map(Arc::new)
+            .collect::<Vec<_>>();
+        send_socks = raw_socks.clone();
+        raw_socks
+    } else {
+        Vec::new()
+    };
+
+    let send_socks_arc = Arc::new(send_socks);
 
     let table = Arc::new(Mutex::new(RoutingTable::new(self_id)));
     load_routing_snapshot(&table, &data_dir.join("routing_table.bin"));
@@ -476,7 +533,7 @@ async fn spawn_node(
         self_addr,
         sybils,
         config.external_ip,
-        send_socks.clone(),
+        send_socks_arc.clone(),
         tx_table.clone(),
         token.clone(),
         table.clone(),
@@ -485,8 +542,25 @@ async fn spawn_node(
         config.dht.find_node_response_percent,
     );
 
-    for sock in sockets {
-        tokio::spawn(net::worker(sock, router.clone()));
+    if !use_mmsg {
+        for (i, sock) in sockets.into_iter().enumerate() {
+            tokio::spawn(net::worker(sock, router.clone(), node_index, i, bind));
+        }
+    } else {
+        #[cfg(target_os = "linux")]
+        {
+            // Spawn recvmmsg tasks directly using the preserved AsyncFd instances.
+            for (i, async_fd) in recv_socks.into_iter().enumerate() {
+                tokio::spawn(net::mmsg::run_mmsg_worker(
+                    async_fd,
+                    router.clone(),
+                    metrics.clone(),
+                    node_index,
+                    i,
+                    bind,
+                ));
+            }
+        }
     }
 
     let limiter = Arc::new(RateLimiter::new(
@@ -760,6 +834,19 @@ async fn report_loop(
             source_active = cur.source_active,
             fetch_active = cur.fetch_active,
             metadata_active = cur.metadata_active,
+            udp_recv_syscalls = cur.udp_recv_syscalls_total,
+            udp_recv_successful_syscalls = cur.udp_recv_successful_syscalls_total,
+            udp_recv_packets = cur.udp_recv_packets_total,
+            udp_recv_batch_max = metrics
+                .udp_recv_batch_max_interval
+                .swap(0, std::sync::atomic::Ordering::Relaxed),
+            udp_recv_eagain = cur.udp_recv_eagain_total,
+            udp_recv_eintr = cur.udp_recv_eintr_total,
+            udp_recv_errors = cur.udp_recv_errors_total,
+            udp_recv_truncated = cur.udp_recv_truncated_total,
+            udp_recv_invalid_addr = cur.udp_recv_invalid_addr_total,
+            udp_recv_zero_length = cur.udp_recv_zero_length_total,
+            udp_recv_fatal = cur.udp_recv_fatal_total,
         );
         tracing::info!(
             source_direct_accepted = cur.source_direct_accepted_total,

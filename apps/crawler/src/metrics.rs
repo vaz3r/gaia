@@ -205,6 +205,18 @@ pub struct Metrics {
     pub source_active: AtomicU64,
     pub fetch_active: AtomicU64,
     pub metadata_active: AtomicU64,
+    // Linux recvmmsg receive metrics
+    pub udp_recv_syscalls_total: AtomicU64,
+    pub udp_recv_successful_syscalls_total: AtomicU64,
+    pub udp_recv_packets_total: AtomicU64,
+    pub udp_recv_batch_max_interval: AtomicU64,
+    pub udp_recv_eagain_total: AtomicU64,
+    pub udp_recv_eintr_total: AtomicU64,
+    pub udp_recv_errors_total: AtomicU64,
+    pub udp_recv_truncated_total: AtomicU64,
+    pub udp_recv_invalid_addr_total: AtomicU64,
+    pub udp_recv_zero_length_total: AtomicU64,
+    pub udp_recv_fatal_total: AtomicU64,
 }
 
 impl Metrics {
@@ -400,6 +412,18 @@ pub struct Snapshot {
     pub source_active: u64,
     pub fetch_active: u64,
     pub metadata_active: u64,
+    // Linux recvmmsg receive metrics
+    pub udp_recv_syscalls_total: u64,
+    pub udp_recv_successful_syscalls_total: u64,
+    pub udp_recv_packets_total: u64,
+    pub udp_recv_batch_max_interval: u64,
+    pub udp_recv_eagain_total: u64,
+    pub udp_recv_eintr_total: u64,
+    pub udp_recv_errors_total: u64,
+    pub udp_recv_truncated_total: u64,
+    pub udp_recv_invalid_addr_total: u64,
+    pub udp_recv_zero_length_total: u64,
+    pub udp_recv_fatal_total: u64,
 }
 
 impl Metrics {
@@ -642,6 +666,19 @@ impl Metrics {
             source_active: self.source_active.load(Ordering::Relaxed),
             fetch_active: self.fetch_active.load(Ordering::Relaxed),
             metadata_active: self.metadata_active.load(Ordering::Relaxed),
+            udp_recv_syscalls_total: self.udp_recv_syscalls_total.load(Ordering::Relaxed),
+            udp_recv_successful_syscalls_total: self
+                .udp_recv_successful_syscalls_total
+                .load(Ordering::Relaxed),
+            udp_recv_packets_total: self.udp_recv_packets_total.load(Ordering::Relaxed),
+            udp_recv_batch_max_interval: self.udp_recv_batch_max_interval.load(Ordering::Relaxed),
+            udp_recv_eagain_total: self.udp_recv_eagain_total.load(Ordering::Relaxed),
+            udp_recv_eintr_total: self.udp_recv_eintr_total.load(Ordering::Relaxed),
+            udp_recv_errors_total: self.udp_recv_errors_total.load(Ordering::Relaxed),
+            udp_recv_truncated_total: self.udp_recv_truncated_total.load(Ordering::Relaxed),
+            udp_recv_invalid_addr_total: self.udp_recv_invalid_addr_total.load(Ordering::Relaxed),
+            udp_recv_zero_length_total: self.udp_recv_zero_length_total.load(Ordering::Relaxed),
+            udp_recv_fatal_total: self.udp_recv_fatal_total.load(Ordering::Relaxed),
         }
     }
 }

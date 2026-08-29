@@ -222,6 +222,7 @@ dependencies = [
  "chrono",
  "dashmap",
  "hmac 0.13.0",
+ "libc",
  "librqbit-utp",
  "rand 0.10.2",
  "serde",

@@ -59,6 +59,7 @@ pub struct DhtConfig {
     pub rate_limit_burst: f64,
     pub rate_limit_bucket_ttl_secs: u64,
     pub token_window_secs: u64,
+    pub linux_mmsg_receive: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -207,6 +208,7 @@ impl Default for DhtConfig {
             rate_limit_burst: 64.0,
             rate_limit_bucket_ttl_secs: 600,
             token_window_secs: 300,
+            linux_mmsg_receive: false,
         }
     }
 }
@@ -443,6 +445,8 @@ impl Config {
             "CRAW_FIND_NODE_RESPONSE_PERCENT",
             self.dht.find_node_response_percent as u64,
         ) as u8;
+        self.dht.linux_mmsg_receive =
+            env_bool("CRAW_LINUX_MMSG_RECEIVE", self.dht.linux_mmsg_receive);
 
         // fetch
         self.fetch.global_fetch_limit =
@@ -645,6 +649,8 @@ struct PartialDht {
     rate_limit_bucket_ttl_secs: Option<u64>,
     #[serde(default)]
     token_window_secs: Option<u64>,
+    #[serde(default)]
+    linux_mmsg_receive: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -924,6 +930,9 @@ impl PartialDht {
         if let Some(v) = self.token_window_secs {
             cfg.token_window_secs = v;
         }
+        if let Some(v) = self.linux_mmsg_receive {
+            cfg.linux_mmsg_receive = v;
+        }
     }
 }
 
@@ -1174,6 +1183,7 @@ mod tests {
         assert_eq!(c.fetch.lead_source_grace_ms, 1000);
         assert_eq!(c.harvest.harvest_channel_capacity, 10_000);
         assert_eq!(c.dht.find_node_response_percent, 100);
+        assert!(!c.dht.linux_mmsg_receive);
     }
 
     #[test]
