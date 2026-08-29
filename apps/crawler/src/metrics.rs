@@ -166,6 +166,28 @@ pub struct Metrics {
     pub source_dht_metadata_fail_total: AtomicU64,
     pub source_dht_verified_total: AtomicU64,
 
+    // Lead task & query attribution counters
+    pub lead_tasks_total: AtomicU64,
+    pub lead_tasks_dht_started_total: AtomicU64,
+    pub lead_tasks_queries_total: AtomicU64,
+    pub lead_tasks_lead_verified_total: AtomicU64,
+    pub lead_tasks_dht_verified_total: AtomicU64,
+    pub non_lead_tasks_total: AtomicU64,
+    pub non_lead_tasks_queries_total: AtomicU64,
+
+    // Lead attempt latency buckets (elapsed from attempt start to completion)
+    pub lead_success_le_250ms_total: AtomicU64,
+    pub lead_success_le_500ms_total: AtomicU64,
+    pub lead_success_le_1000ms_total: AtomicU64,
+    pub lead_success_le_2000ms_total: AtomicU64,
+    pub lead_success_gt_2000ms_total: AtomicU64,
+
+    pub lead_failure_le_250ms_total: AtomicU64,
+    pub lead_failure_le_500ms_total: AtomicU64,
+    pub lead_failure_le_1000ms_total: AtomicU64,
+    pub lead_failure_le_2000ms_total: AtomicU64,
+    pub lead_failure_gt_2000ms_total: AtomicU64,
+
     pub result_handling_micros_total: AtomicU64,
     pub result_handling_completed_total: AtomicU64,
     pub source_active: AtomicU64,
@@ -333,6 +355,27 @@ pub struct Snapshot {
     pub source_dht_metadata_ok_total: u64,
     pub source_dht_metadata_fail_total: u64,
     pub source_dht_verified_total: u64,
+
+    pub lead_tasks_total: u64,
+    pub lead_tasks_dht_started_total: u64,
+    pub lead_tasks_queries_total: u64,
+    pub lead_tasks_lead_verified_total: u64,
+    pub lead_tasks_dht_verified_total: u64,
+    pub non_lead_tasks_total: u64,
+    pub non_lead_tasks_queries_total: u64,
+
+    pub lead_success_le_250ms_total: u64,
+    pub lead_success_le_500ms_total: u64,
+    pub lead_success_le_1000ms_total: u64,
+    pub lead_success_le_2000ms_total: u64,
+    pub lead_success_gt_2000ms_total: u64,
+
+    pub lead_failure_le_250ms_total: u64,
+    pub lead_failure_le_500ms_total: u64,
+    pub lead_failure_le_1000ms_total: u64,
+    pub lead_failure_le_2000ms_total: u64,
+    pub lead_failure_gt_2000ms_total: u64,
+
     pub result_handling_micros_total: u64,
     pub result_handling_completed_total: u64,
     pub source_active: u64,
@@ -542,6 +585,27 @@ impl Metrics {
                 .source_dht_metadata_fail_total
                 .load(Ordering::Relaxed),
             source_dht_verified_total: self.source_dht_verified_total.load(Ordering::Relaxed),
+            lead_tasks_total: self.lead_tasks_total.load(Ordering::Relaxed),
+            lead_tasks_dht_started_total: self.lead_tasks_dht_started_total.load(Ordering::Relaxed),
+            lead_tasks_queries_total: self.lead_tasks_queries_total.load(Ordering::Relaxed),
+            lead_tasks_lead_verified_total: self
+                .lead_tasks_lead_verified_total
+                .load(Ordering::Relaxed),
+            lead_tasks_dht_verified_total: self
+                .lead_tasks_dht_verified_total
+                .load(Ordering::Relaxed),
+            non_lead_tasks_total: self.non_lead_tasks_total.load(Ordering::Relaxed),
+            non_lead_tasks_queries_total: self.non_lead_tasks_queries_total.load(Ordering::Relaxed),
+            lead_success_le_250ms_total: self.lead_success_le_250ms_total.load(Ordering::Relaxed),
+            lead_success_le_500ms_total: self.lead_success_le_500ms_total.load(Ordering::Relaxed),
+            lead_success_le_1000ms_total: self.lead_success_le_1000ms_total.load(Ordering::Relaxed),
+            lead_success_le_2000ms_total: self.lead_success_le_2000ms_total.load(Ordering::Relaxed),
+            lead_success_gt_2000ms_total: self.lead_success_gt_2000ms_total.load(Ordering::Relaxed),
+            lead_failure_le_250ms_total: self.lead_failure_le_250ms_total.load(Ordering::Relaxed),
+            lead_failure_le_500ms_total: self.lead_failure_le_500ms_total.load(Ordering::Relaxed),
+            lead_failure_le_1000ms_total: self.lead_failure_le_1000ms_total.load(Ordering::Relaxed),
+            lead_failure_le_2000ms_total: self.lead_failure_le_2000ms_total.load(Ordering::Relaxed),
+            lead_failure_gt_2000ms_total: self.lead_failure_gt_2000ms_total.load(Ordering::Relaxed),
             result_handling_micros_total: self.result_handling_micros_total.load(Ordering::Relaxed),
             result_handling_completed_total: self
                 .result_handling_completed_total

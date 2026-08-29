@@ -198,13 +198,13 @@ async fn race_transports<S: Send>(
 }
 
 enum FetchOutcome {
-    ConnectFailed(SocketAddr, WireError, CandidateSource),
-    MetadataFailed(WireError, CandidateSource),
-    Success(Vec<u8>, CandidateSource),
+    ConnectFailed(SocketAddr, WireError, CandidateSource, Duration),
+    MetadataFailed(WireError, CandidateSource, Duration),
+    Success(Vec<u8>, CandidateSource, Duration),
 }
 
 pub enum VerifyResult {
-    Success(Vec<u8>, CandidateSource),
+    Success(Vec<u8>, CandidateSource, Duration),
     NoPeers,
     SourceTimeout,
     MetadataFailed,
@@ -372,7 +372,7 @@ async fn try_fetch(
                 metrics
                     .transport_connect_completed_total
                     .fetch_add(1, Ordering::Relaxed);
-                return FetchOutcome::ConnectFailed(addr, e, source);
+                return FetchOutcome::ConnectFailed(addr, e, source, start.elapsed());
             }
         }
     } else {
@@ -498,7 +498,12 @@ async fn try_fetch(
                                 metrics
                                     .transport_connect_completed_total
                                     .fetch_add(1, Ordering::Relaxed);
-                                return FetchOutcome::ConnectFailed(addr, utp_err, source);
+                                return FetchOutcome::ConnectFailed(
+                                    addr,
+                                    utp_err,
+                                    source,
+                                    start.elapsed(),
+                                );
                             }
                         }
                     }
@@ -513,7 +518,7 @@ async fn try_fetch(
                         metrics
                             .transport_connect_completed_total
                             .fetch_add(1, Ordering::Relaxed);
-                        return FetchOutcome::ConnectFailed(addr, tcp_err, source);
+                        return FetchOutcome::ConnectFailed(addr, tcp_err, source, start.elapsed());
                     }
                 }
             }
@@ -568,7 +573,7 @@ async fn try_fetch(
                 phase: Some("metadata".to_string()),
                 elapsed_ms: Some(metadata_start.elapsed().as_millis().min(i32::MAX as u128) as i32),
             });
-            FetchOutcome::Success(meta, source)
+            FetchOutcome::Success(meta, source, start.elapsed())
         }
         Err(e) => {
             metrics.metadata_failed_io.add(1);
@@ -593,7 +598,7 @@ async fn try_fetch(
                 phase: Some("metadata".to_string()),
                 elapsed_ms: Some(metadata_start.elapsed().as_millis().min(i32::MAX as u128) as i32),
             });
-            FetchOutcome::MetadataFailed(e, source)
+            FetchOutcome::MetadataFailed(e, source, start.elapsed())
         }
     };
     let meta_us = metadata_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
@@ -664,6 +669,16 @@ pub async fn verify_infohash(
         }
     }
 
+    let is_lead_task = !candidate_queue.is_empty();
+    if is_lead_task {
+        metrics.lead_tasks_total.fetch_add(1, Ordering::Relaxed);
+        metrics
+            .lead_tasks_dht_started_total
+            .fetch_add(1, Ordering::Relaxed);
+    } else {
+        metrics.non_lead_tasks_total.fetch_add(1, Ordering::Relaxed);
+    }
+
     // 2) Spawn the DHT lookup concurrently so it runs alongside the fetch scheduling.
     let router_clone = router.clone();
     let metrics_clone = metrics.clone();
@@ -685,13 +700,14 @@ pub async fn verify_infohash(
             source_query_timeout,
             source_max_queries,
             &peer_cache_dht,
+            is_lead_task,
         )
         .await
     });
 
     let mut source_state = SourceState::Timeout;
     let mut dht_done = false;
-    let mut result: Option<(Vec<u8>, CandidateSource)> = None;
+    let mut result: Option<(Vec<u8>, CandidateSource, Duration)> = None;
 
     // Persistent permit acquisition future across select! ticks.
     let mut permit_fut: Option<PermitAcquisitionFuture> = None;
@@ -709,66 +725,118 @@ pub async fn verify_infohash(
             // Active attempt completed
             res = set.join_next(), if !set.is_empty() => {
                 match res {
-                    Some(Ok(FetchOutcome::Success(meta, src))) => {
-                        result = Some((meta, src));
+                    Some(Ok(FetchOutcome::Success(meta, src, dur))) => {
+                        result = Some((meta, src, dur));
                         break;
                     }
                     Some(Ok(outcome)) => {
                         match outcome {
-                            FetchOutcome::ConnectFailed(_addr, WireError::Timeout, src) => {
+                            FetchOutcome::ConnectFailed(_addr, WireError::Timeout, src, dur) => {
                                 metrics.fetch_connect_timeout.add(1);
                                 metrics.verify_timeouts.add(1);
                                 match src {
-                                    CandidateSource::Direct => metrics.source_direct_connect_timeout_total.fetch_add(1, Ordering::Relaxed),
-                                    CandidateSource::AnnounceCache => metrics.source_announce_cache_connect_timeout_total.fetch_add(1, Ordering::Relaxed),
-                                    CandidateSource::Dht => metrics.source_dht_connect_timeout_total.fetch_add(1, Ordering::Relaxed),
-                                };
+                                    CandidateSource::Direct => {
+                                        metrics.source_direct_connect_timeout_total.fetch_add(1, Ordering::Relaxed);
+                                        record_lead_failure_latency(&metrics, dur);
+                                    }
+                                    CandidateSource::AnnounceCache => {
+                                        metrics.source_announce_cache_connect_timeout_total.fetch_add(1, Ordering::Relaxed);
+                                        record_lead_failure_latency(&metrics, dur);
+                                    }
+                                    CandidateSource::Dht => {
+                                        metrics.source_dht_connect_timeout_total.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                }
                             }
-                            FetchOutcome::ConnectFailed(_addr, WireError::Io(_), src) => {
+                            FetchOutcome::ConnectFailed(_addr, WireError::Io(_), src, dur) => {
                                 metrics.fetch_connect_io.add(1);
                                 match src {
-                                    CandidateSource::Direct => metrics.source_direct_connect_io_total.fetch_add(1, Ordering::Relaxed),
-                                    CandidateSource::AnnounceCache => metrics.source_announce_cache_connect_io_total.fetch_add(1, Ordering::Relaxed),
-                                    CandidateSource::Dht => metrics.source_dht_connect_io_total.fetch_add(1, Ordering::Relaxed),
-                                };
+                                    CandidateSource::Direct => {
+                                        metrics.source_direct_connect_io_total.fetch_add(1, Ordering::Relaxed);
+                                        record_lead_failure_latency(&metrics, dur);
+                                    }
+                                    CandidateSource::AnnounceCache => {
+                                        metrics.source_announce_cache_connect_io_total.fetch_add(1, Ordering::Relaxed);
+                                        record_lead_failure_latency(&metrics, dur);
+                                    }
+                                    CandidateSource::Dht => {
+                                        metrics.source_dht_connect_io_total.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                }
                                 sample_failed_peer(&info_hash, &_addr, &metrics, params.failed_peer_sample_rate.max(1));
                             }
-                            FetchOutcome::ConnectFailed(_addr, _, src) => {
+                            FetchOutcome::ConnectFailed(_addr, _, src, dur) => {
                                 metrics.fetch_connect_io.add(1);
                                 match src {
-                                    CandidateSource::Direct => metrics.source_direct_connect_io_total.fetch_add(1, Ordering::Relaxed),
-                                    CandidateSource::AnnounceCache => metrics.source_announce_cache_connect_io_total.fetch_add(1, Ordering::Relaxed),
-                                    CandidateSource::Dht => metrics.source_dht_connect_io_total.fetch_add(1, Ordering::Relaxed),
-                                };
+                                    CandidateSource::Direct => {
+                                        metrics.source_direct_connect_io_total.fetch_add(1, Ordering::Relaxed);
+                                        record_lead_failure_latency(&metrics, dur);
+                                    }
+                                    CandidateSource::AnnounceCache => {
+                                        metrics.source_announce_cache_connect_io_total.fetch_add(1, Ordering::Relaxed);
+                                        record_lead_failure_latency(&metrics, dur);
+                                    }
+                                    CandidateSource::Dht => {
+                                        metrics.source_dht_connect_io_total.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                }
                                 sample_failed_peer(&info_hash, &_addr, &metrics, params.failed_peer_sample_rate.max(1));
                             }
-                            FetchOutcome::MetadataFailed(WireError::Timeout, _src) => {
+                            FetchOutcome::MetadataFailed(WireError::Timeout, src, dur) => {
                                 metrics.fetch_io.add(1);
                                 metrics.verify_timeouts.add(1);
+                                if src != CandidateSource::Dht {
+                                    record_lead_failure_latency(&metrics, dur);
+                                }
                             }
-                            FetchOutcome::MetadataFailed(WireError::Handshake, _src) => {
+                            FetchOutcome::MetadataFailed(WireError::Handshake, src, dur) => {
                                 metrics.fetch_handshake.add(1);
+                                if src != CandidateSource::Dht {
+                                    record_lead_failure_latency(&metrics, dur);
+                                }
                             }
-                            FetchOutcome::MetadataFailed(WireError::NoExtension, _src) => {
+                            FetchOutcome::MetadataFailed(WireError::NoExtension, src, dur) => {
                                 metrics.fetch_no_extension.add(1);
+                                if src != CandidateSource::Dht {
+                                    record_lead_failure_latency(&metrics, dur);
+                                }
                             }
-                            FetchOutcome::MetadataFailed(WireError::Reject, _src) => {
+                            FetchOutcome::MetadataFailed(WireError::Reject, src, dur) => {
                                 metrics.fetch_reject.add(1);
+                                if src != CandidateSource::Dht {
+                                    record_lead_failure_latency(&metrics, dur);
+                                }
                             }
-                            FetchOutcome::MetadataFailed(WireError::BadPiece, _src) => {
+                            FetchOutcome::MetadataFailed(WireError::BadPiece, src, dur) => {
                                 metrics.fetch_bad_piece.add(1);
+                                if src != CandidateSource::Dht {
+                                    record_lead_failure_latency(&metrics, dur);
+                                }
                             }
-                            FetchOutcome::MetadataFailed(WireError::Io(_), _src) => {
+                            FetchOutcome::MetadataFailed(WireError::Io(_), src, dur) => {
                                 metrics.fetch_io.add(1);
+                                if src != CandidateSource::Dht {
+                                    record_lead_failure_latency(&metrics, dur);
+                                }
                             }
-                            FetchOutcome::MetadataFailed(WireError::Eof, _src) => {
+                            FetchOutcome::MetadataFailed(WireError::Eof, src, dur) => {
                                 metrics.fetch_io.add(1);
+                                if src != CandidateSource::Dht {
+                                    record_lead_failure_latency(&metrics, dur);
+                                }
                             }
-                            FetchOutcome::MetadataFailed(WireError::Cancelled, _src) => {
+                            FetchOutcome::MetadataFailed(WireError::Cancelled, src, dur) => {
                                 metrics.fetch_io.add(1);
+                                if src != CandidateSource::Dht {
+                                    record_lead_failure_latency(&metrics, dur);
+                                }
                             }
-                            FetchOutcome::MetadataFailed(WireError::NoMetadataSize, _src) => {}
-                            FetchOutcome::Success(_, _) => {}
+                            FetchOutcome::MetadataFailed(WireError::NoMetadataSize, src, dur) => {
+                                if src != CandidateSource::Dht {
+                                    record_lead_failure_latency(&metrics, dur);
+                                }
+                            }
+                            FetchOutcome::Success(_, _, _) => {}
                         }
                     }
                     _ => {}
@@ -894,7 +962,7 @@ pub async fn verify_infohash(
         .fetch_add(1, Ordering::Relaxed);
 
     match result {
-        Some((meta, src)) => VerifyResult::Success(meta, src),
+        Some((meta, src, dur)) => VerifyResult::Success(meta, src, dur),
         None => {
             if peers_seen.is_empty() {
                 match source_state {
@@ -905,6 +973,56 @@ pub async fn verify_infohash(
                 VerifyResult::MetadataFailed
             }
         }
+    }
+}
+
+pub fn record_lead_failure_latency(metrics: &Metrics, dur: Duration) {
+    let ms = dur.as_millis();
+    if ms <= 250 {
+        metrics
+            .lead_failure_le_250ms_total
+            .fetch_add(1, Ordering::Relaxed);
+    } else if ms <= 500 {
+        metrics
+            .lead_failure_le_500ms_total
+            .fetch_add(1, Ordering::Relaxed);
+    } else if ms <= 1000 {
+        metrics
+            .lead_failure_le_1000ms_total
+            .fetch_add(1, Ordering::Relaxed);
+    } else if ms <= 2000 {
+        metrics
+            .lead_failure_le_2000ms_total
+            .fetch_add(1, Ordering::Relaxed);
+    } else {
+        metrics
+            .lead_failure_gt_2000ms_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+pub fn record_lead_success_latency(metrics: &Metrics, dur: Duration) {
+    let ms = dur.as_millis();
+    if ms <= 250 {
+        metrics
+            .lead_success_le_250ms_total
+            .fetch_add(1, Ordering::Relaxed);
+    } else if ms <= 500 {
+        metrics
+            .lead_success_le_500ms_total
+            .fetch_add(1, Ordering::Relaxed);
+    } else if ms <= 1000 {
+        metrics
+            .lead_success_le_1000ms_total
+            .fetch_add(1, Ordering::Relaxed);
+    } else if ms <= 2000 {
+        metrics
+            .lead_success_le_2000ms_total
+            .fetch_add(1, Ordering::Relaxed);
+    } else {
+        metrics
+            .lead_success_gt_2000ms_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -1558,7 +1676,11 @@ mod tests {
             let _g = FetchActiveGuard::new(metrics.clone());
             tokio::time::sleep(Duration::from_millis(10)).await;
             drop(winning_permit);
-            FetchOutcome::Success(vec![0xAA; 20], CandidateSource::Direct)
+            FetchOutcome::Success(
+                vec![0xAA; 20],
+                CandidateSource::Direct,
+                Duration::from_millis(10),
+            )
         });
 
         let source_handle = tokio::spawn(async {
@@ -1570,7 +1692,7 @@ mod tests {
         tokio::select! {
             biased;
             res = set.join_next(), if !set.is_empty() => {
-                if let Some(Ok(FetchOutcome::Success(meta, _src))) = res {
+                if let Some(Ok(FetchOutcome::Success(meta, _src, _dur))) = res {
                     result = Some(meta);
                 }
             }
@@ -1839,14 +1961,19 @@ mod tests {
     #[tokio::test]
     async fn candidate_source_survives_joinset_and_fetch_outcome() {
         let mut set: JoinSet<FetchOutcome> = JoinSet::new();
-        set.spawn(
-            async move { FetchOutcome::Success(vec![1, 2, 3], CandidateSource::AnnounceCache) },
-        );
+        set.spawn(async move {
+            FetchOutcome::Success(
+                vec![1, 2, 3],
+                CandidateSource::AnnounceCache,
+                Duration::from_millis(150),
+            )
+        });
 
         match set.join_next().await {
-            Some(Ok(FetchOutcome::Success(data, source))) => {
+            Some(Ok(FetchOutcome::Success(data, source, dur))) => {
                 assert_eq!(data, vec![1, 2, 3]);
                 assert_eq!(source, CandidateSource::AnnounceCache);
+                assert_eq!(dur, Duration::from_millis(150));
             }
             _ => panic!("Expected FetchOutcome::Success with AnnounceCache source"),
         }

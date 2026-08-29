@@ -30,6 +30,7 @@ pub async fn source_peers(
     query_timeout: Duration,
     max_queries: usize,
     cache: &PeerCache,
+    is_lead_task: bool,
 ) -> SourceResult {
     let k = k.max(1);
     let alpha = alpha.max(1);
@@ -71,7 +72,15 @@ pub async fn source_peers(
             queried.insert(node.addr);
             inflight += 1;
             total_queries += 1;
-            spawn_query(&mut set, &router, info_hash, node, &metrics, query_timeout);
+            spawn_query(
+                &mut set,
+                &router,
+                info_hash,
+                node,
+                &metrics,
+                query_timeout,
+                is_lead_task,
+            );
         }
 
         while inflight > 0 {
@@ -149,7 +158,15 @@ pub async fn source_peers(
                 queried.insert(node.addr);
                 inflight += 1;
                 total_queries += 1;
-                spawn_query(&mut set, &router, info_hash, node, &metrics, query_timeout);
+                spawn_query(
+                    &mut set,
+                    &router,
+                    info_hash,
+                    node,
+                    &metrics,
+                    query_timeout,
+                    is_lead_task,
+                );
             }
         }
     };
@@ -190,6 +207,7 @@ fn spawn_query(
     node: NodeInfo,
     metrics: &Arc<Metrics>,
     query_timeout: Duration,
+    is_lead_task: bool,
 ) {
     let router = router.clone();
     let ih = info_hash;
@@ -205,6 +223,15 @@ fn spawn_query(
         ),
     ]);
     metrics.source_queries.add(1);
+    if is_lead_task {
+        metrics
+            .lead_tasks_queries_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    } else {
+        metrics
+            .non_lead_tasks_queries_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     set.spawn(async move {
         let node_str = addr.to_string();
         crate::trace_lifecycle!(&ih, "source_query", stream = "dht", node = node_str);

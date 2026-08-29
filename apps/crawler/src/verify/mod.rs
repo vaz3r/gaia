@@ -313,6 +313,7 @@ pub async fn run_pipeline(
                 metrics.announce_attempts.add(1);
             }
             metrics.verify_attempts.add(1);
+            let is_lead = is_direct || announce_peer_cache.get(&ih).is_some();
             let verify_result = verify_infohash(
                 router,
                 utp,
@@ -329,7 +330,7 @@ pub async fn run_pipeline(
             .await;
             let handling_start = Instant::now();
             match verify_result {
-                VerifyResult::Success(meta, source) if check(&ih, &meta) => {
+                VerifyResult::Success(meta, source, dur) if check(&ih, &meta) => {
                     crate::trace_lifecycle!(&ih, "sha1_check", stream = "verify", result = "pass");
                     metrics.verify_success.add(1);
                     match source {
@@ -337,16 +338,29 @@ pub async fn run_pipeline(
                             metrics
                                 .source_direct_verified_total
                                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            metrics
+                                .lead_tasks_lead_verified_total
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            fetch_pool::record_lead_success_latency(&metrics, dur);
                         }
                         fetch_pool::CandidateSource::AnnounceCache => {
                             metrics
                                 .source_announce_cache_verified_total
                                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            metrics
+                                .lead_tasks_lead_verified_total
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            fetch_pool::record_lead_success_latency(&metrics, dur);
                         }
                         fetch_pool::CandidateSource::Dht => {
                             metrics
                                 .source_dht_verified_total
                                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if is_lead {
+                                metrics
+                                    .lead_tasks_dht_verified_total
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
                         }
                     }
                     if is_direct {
@@ -366,7 +380,7 @@ pub async fn run_pipeline(
                         batch_writer.push_verified(ih);
                     }
                 }
-                VerifyResult::Success(_, _) => {
+                VerifyResult::Success(_, _, _) => {
                     crate::trace_lifecycle!(&ih, "sha1_check", stream = "verify", result = "fail");
                     metrics.sha1_mismatch.add(1);
                     metrics.verify_fail.add(1);

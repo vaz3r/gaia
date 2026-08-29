@@ -786,6 +786,26 @@ async fn report_loop(
             source_dht_verified = cur.source_dht_verified_total,
             "candidate source metrics"
         );
+        tracing::info!(
+            lead_tasks = cur.lead_tasks_total,
+            lead_tasks_dht_started = cur.lead_tasks_dht_started_total,
+            lead_tasks_queries = cur.lead_tasks_queries_total,
+            lead_tasks_lead_verified = cur.lead_tasks_lead_verified_total,
+            lead_tasks_dht_verified = cur.lead_tasks_dht_verified_total,
+            non_lead_tasks = cur.non_lead_tasks_total,
+            non_lead_tasks_queries = cur.non_lead_tasks_queries_total,
+            lead_success_le_250ms = cur.lead_success_le_250ms_total,
+            lead_success_le_500ms = cur.lead_success_le_500ms_total,
+            lead_success_le_1000ms = cur.lead_success_le_1000ms_total,
+            lead_success_le_2000ms = cur.lead_success_le_2000ms_total,
+            lead_success_gt_2000ms = cur.lead_success_gt_2000ms_total,
+            lead_failure_le_250ms = cur.lead_failure_le_250ms_total,
+            lead_failure_le_500ms = cur.lead_failure_le_500ms_total,
+            lead_failure_le_1000ms = cur.lead_failure_le_1000ms_total,
+            lead_failure_le_2000ms = cur.lead_failure_le_2000ms_total,
+            lead_failure_gt_2000ms = cur.lead_failure_gt_2000ms_total,
+            "lead metrics"
+        );
         prev = cur;
     }
 }
