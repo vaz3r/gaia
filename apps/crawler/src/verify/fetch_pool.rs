@@ -763,8 +763,7 @@ pub async fn verify_infohash(
         .fetch_joinset_drain_completed_total
         .fetch_add(1, Ordering::Relaxed);
 
-    let handling_start = Instant::now();
-    let res = match result {
+    match result {
         Some(meta) => VerifyResult::Success(meta),
         None => {
             if peers_seen.is_empty() {
@@ -776,13 +775,7 @@ pub async fn verify_infohash(
                 VerifyResult::MetadataFailed
             }
         }
-    };
-    let handling_us = handling_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
-    saturating_add_atomic(&metrics.result_handling_micros_total, handling_us);
-    metrics
-        .result_handling_completed_total
-        .fetch_add(1, Ordering::Relaxed);
-    res
+    }
 }
 
 #[cfg(test)]
