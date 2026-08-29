@@ -1,4 +1,4 @@
-use crate::dht::routing_table::{NodeInfo, decode_compact, cmp_xor};
+use crate::dht::routing_table::{NodeInfo, cmp_xor, decode_compact};
 use crate::krpc::Infohash;
 use crate::krpc::codec::BValue;
 use crate::krpc::message::{GET_PEERS, Kind, Message};
@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinSet;
 
+#[derive(Debug)]
 pub enum SourceResult {
     Peers(Vec<SocketAddr>),
     NoPeers,
@@ -271,6 +272,11 @@ mod tests {
         assert!(!peer_is_bad(&addr_ok, &cache, &metrics));
         assert!(peer_is_bad(&addr_bad, &cache, &metrics));
         // Verify metric was incremented
-        assert!(metrics.source_filtered_by_cache.load(std::sync::atomic::Ordering::Relaxed) >= 1);
+        assert!(
+            metrics
+                .source_filtered_by_cache
+                .load(std::sync::atomic::Ordering::Relaxed)
+                >= 1
+        );
     }
 }

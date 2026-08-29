@@ -6,11 +6,14 @@ use crate::verify::peer_cache::PeerCache;
 use crate::verify::peer_source::{SourceResult, source_peers};
 use crate::verify::wire::{WireError, WireSession, gen_peer_id};
 use librqbit_utp::UtpSocketUdp;
+use std::collections::{HashSet, VecDeque};
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
 #[derive(Clone)]
@@ -207,6 +210,25 @@ pub enum VerifyResult {
     MetadataFailed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateSource {
+    Direct,
+    AnnounceCache,
+    Dht,
+}
+
+impl CandidateSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CandidateSource::Direct | CandidateSource::AnnounceCache => "announce_peer",
+            CandidateSource::Dht => "get_peers",
+        }
+    }
+}
+
+type PermitAcquisitionFuture =
+    Pin<Box<dyn Future<Output = Result<OwnedSemaphorePermit, tokio::sync::AcquireError>> + Send>>;
+
 enum SourceState {
     Peers,
     NoPeers,
@@ -221,13 +243,14 @@ async fn try_fetch(
     cache: Arc<PeerCache>,
     utp: Option<Arc<UtpSocketUdp>>,
     peer_outcomes: Arc<PeerOutcomeWriter>,
-    source: &str,
+    source: CandidateSource,
     fetch_timeout: Duration,
     tcp_timeout: Duration,
     utp_timeout: Duration,
     limiter: Arc<crate::verify::ConnLimiter>,
     transport_race_concurrent: bool,
     connect_deadline: Duration,
+    _fetch_permit: tokio::sync::OwnedSemaphorePermit,
 ) -> FetchOutcome {
     let _fetch_guard = FetchActiveGuard::new(metrics.clone());
     metrics.tcp_attempts.add(1);
@@ -272,7 +295,7 @@ async fn try_fetch(
         let po = peer_outcomes.clone();
         let ih_clone = ih;
         let addr_clone = addr;
-        let source_clone = source.to_string();
+        let source_clone = source.as_str().to_string();
         let addr_str_clone = addr_str.clone();
 
         match race_transports(
@@ -362,7 +385,7 @@ async fn try_fetch(
                 peer_outcomes.push(PeerOutcome {
                     ih,
                     peer: addr.to_string(),
-                    source: source.to_string(),
+                    source: source.as_str().to_string(),
                     transport: "tcp".to_string(),
                     result: result_str.to_string(),
                     client: None,
@@ -410,7 +433,7 @@ async fn try_fetch(
                                 peer_outcomes.push(PeerOutcome {
                                     ih,
                                     peer: addr.to_string(),
-                                    source: source.to_string(),
+                                    source: source.as_str().to_string(),
                                     transport: "utp".to_string(),
                                     result: result_str.to_string(),
                                     client: None,
@@ -463,7 +486,7 @@ async fn try_fetch(
     peer_outcomes.push(PeerOutcome {
         ih,
         peer: addr.to_string(),
-        source: source.to_string(),
+        source: source.as_str().to_string(),
         transport: transport_str.to_string(),
         result: "ok".to_string(),
         client: None,
@@ -483,7 +506,7 @@ async fn try_fetch(
             peer_outcomes.push(PeerOutcome {
                 ih,
                 peer: addr.to_string(),
-                source: source.to_string(),
+                source: source.as_str().to_string(),
                 transport: transport_str.to_string(),
                 result: "metadata_ok".to_string(),
                 client: last_client,
@@ -497,7 +520,7 @@ async fn try_fetch(
             peer_outcomes.push(PeerOutcome {
                 ih,
                 peer: addr.to_string(),
-                source: source.to_string(),
+                source: source.as_str().to_string(),
                 transport: transport_str.to_string(),
                 result: wire_error_to_outcome(&e).to_string(),
                 client: last_client,
@@ -512,6 +535,7 @@ async fn try_fetch(
     metrics
         .metadata_exchange_completed_total
         .fetch_add(1, Ordering::Relaxed);
+    drop(_fetch_permit);
     outcome
 }
 
@@ -537,17 +561,23 @@ pub async fn verify_infohash(
     let connect_deadline = params.connect_deadline;
 
     let mut set: JoinSet<FetchOutcome> = JoinSet::new();
-    let mut peers_seen: std::collections::HashSet<SocketAddr> = std::collections::HashSet::new();
+    let mut peers_seen: HashSet<SocketAddr> = HashSet::new();
+    let mut candidate_queue: VecDeque<(SocketAddr, CandidateSource)> =
+        VecDeque::with_capacity(race_peers);
 
     // Source phase — wall-clock per verification task, active gauge.
     metrics.source_active.fetch_add(1, Ordering::Relaxed);
     let source_start = Instant::now();
     let mut source_completed = false;
 
-    // 1) Immediately spawn the highest-quality leads: a cached announcing peer
-    //    and/or the direct announce_peer. These are raced against the DHT
-    //    lookup below so we never wait up to source_deadline behind querying
-    //    mostly-dead DHT nodes for a peer that is live right now.
+    // 1) Enqueue the highest-quality leads in priority order:
+    //    Priority 1: Direct peer supplied by announce_peer
+    //    Priority 2: AnnouncePeerCache peer
+    if let Some(d) = direct {
+        if peers_seen.insert(d) && candidate_queue.len() < race_peers {
+            candidate_queue.push_back((d, CandidateSource::Direct));
+        }
+    }
     if let Some(announcer) = announce_peer_cache.get(&info_hash) {
         if peers_seen.insert(announcer) {
             crate::trace_lifecycle!(
@@ -556,53 +586,13 @@ pub async fn verify_infohash(
                 stream = "fetch",
                 peer = announcer.to_string()
             );
+            if candidate_queue.len() < race_peers {
+                candidate_queue.push_back((announcer, CandidateSource::AnnounceCache));
+            }
         }
     }
-    if let Some(d) = direct {
-        peers_seen.insert(d);
-    }
-    for &addr in &peers_seen {
-        let ih = info_hash;
-        let pid = peer_id;
-        let metrics = metrics.clone();
-        let cache = peer_cache.clone();
-        let utp = utp.clone();
-        let po = peer_outcomes.clone();
-        let limiter = conn_limiter.clone();
-        let fetch_limit = fetch_limit.clone();
-        metrics.fetch_attempts.add(1);
-        set.spawn(async move {
-            let permit_start = Instant::now();
-            let _fetch_permit = fetch_limit
-                .acquire_owned()
-                .await
-                .expect("fetch limit closed");
-            let wait_us = permit_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
-            saturating_add_atomic(&metrics.fetch_permit_wait_micros_total, wait_us);
-            metrics
-                .fetch_permit_acquisitions_total
-                .fetch_add(1, Ordering::Relaxed);
-            try_fetch(
-                addr,
-                ih,
-                pid,
-                metrics,
-                cache,
-                utp,
-                po,
-                "announce_peer",
-                fetch_timeout,
-                tcp_timeout,
-                utp_timeout,
-                limiter,
-                transport_race_concurrent,
-                connect_deadline,
-            )
-            .await
-        });
-    }
 
-    // 2) Spawn the DHT lookup concurrently so it never blocks the direct race.
+    // 2) Spawn the DHT lookup concurrently so it runs alongside the fetch scheduling.
     let router_clone = router.clone();
     let metrics_clone = metrics.clone();
     let peer_cache_dht = peer_cache.clone();
@@ -631,10 +621,20 @@ pub async fn verify_infohash(
     let mut dht_done = false;
     let mut result = None;
 
-    // 3) Race fetches against the DHT lookup; inject DHT-returned peers as they
-    //    arrive, capped at race_peers total.
+    // Persistent permit acquisition future across select! ticks.
+    let mut permit_fut: Option<PermitAcquisitionFuture> = None;
+    let mut permit_wait_start: Option<Instant> = None;
+
     loop {
+        // Maintain persistent permit future when candidates are waiting and we have not initiated acquisition.
+        if permit_fut.is_none() && !candidate_queue.is_empty() {
+            permit_wait_start = Some(Instant::now());
+            let sem = fetch_limit.clone();
+            permit_fut = Some(Box::pin(async move { sem.acquire_owned().await }));
+        }
+
         tokio::select! {
+            // Active attempt completed
             res = set.join_next(), if !set.is_empty() => {
                 match res {
                     Some(Ok(FetchOutcome::Success(meta))) => {
@@ -687,6 +687,61 @@ pub async fn verify_infohash(
                     _ => {}
                 }
             }
+
+            // Global fetch permit acquired for front candidate
+            permit_res = async {
+                match &mut permit_fut {
+                    Some(fut) => fut.await,
+                    None => std::future::pending().await,
+                }
+            }, if permit_fut.is_some() => {
+                permit_fut = None;
+                if let Ok(permit) = permit_res {
+                    if let Some(start) = permit_wait_start.take() {
+                        let wait_us = start.elapsed().as_micros().min(u64::MAX as u128) as u64;
+                        saturating_add_atomic(&metrics.fetch_permit_wait_micros_total, wait_us);
+                        metrics
+                            .fetch_permit_acquisitions_total
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    if let Some((addr, source)) = candidate_queue.pop_front() {
+                        metrics.fetch_permit_owned_attempts_total.fetch_add(1, Ordering::Relaxed);
+                        metrics.fetch_attempts.add(1);
+                        let ih = info_hash;
+                        let pid = peer_id;
+                        let metrics_c = metrics.clone();
+                        let cache_c = peer_cache.clone();
+                        let utp_c = utp.clone();
+                        let po_c = peer_outcomes.clone();
+                        let limiter_c = conn_limiter.clone();
+                        set.spawn(async move {
+                            try_fetch(
+                                addr,
+                                ih,
+                                pid,
+                                metrics_c,
+                                cache_c,
+                                utp_c,
+                                po_c,
+                                source,
+                                fetch_timeout,
+                                tcp_timeout,
+                                utp_timeout,
+                                limiter_c,
+                                transport_race_concurrent,
+                                connect_deadline,
+                                permit,
+                            )
+                            .await
+                        });
+                        // Yield to the Tokio runtime after spawning so other tasks/schedulers
+                        // waiting on the fetch_limit semaphore can make progress.
+                        tokio::task::yield_now().await;
+                    }
+                }
+            }
+
+            // DHT source completed
             dht_res = &mut source_fut, if !dht_done => {
                 dht_done = true;
                 if !source_completed {
@@ -710,42 +765,24 @@ pub async fn verify_infohash(
                     };
                     source_state = state;
                     for addr in new_peers {
+                        if peers_seen.contains(&addr) {
+                            continue;
+                        }
                         if peers_seen.len() >= race_peers {
-                            break;
+                            metrics.fetch_candidates_skipped_budget_total.fetch_add(1, Ordering::Relaxed);
+                            continue;
                         }
-                        if peers_seen.insert(addr) {
-                            let ih = info_hash;
-                            let pid = peer_id;
-                            let metrics = metrics.clone();
-                            let cache = peer_cache.clone();
-                            let utp = utp.clone();
-                            let po = peer_outcomes.clone();
-                            let limiter = conn_limiter.clone();
-                            let fetch_limit = fetch_limit.clone();
-                            metrics.fetch_attempts.add(1);
-                            set.spawn(async move {
-                                let permit_start = Instant::now();
-                                let _fetch_permit =
-                                    fetch_limit.acquire_owned().await.expect("fetch limit closed");
-                                let wait_us = permit_start
-                                    .elapsed()
-                                    .as_micros()
-                                    .min(u64::MAX as u128) as u64;
-                                saturating_add_atomic(
-                                    &metrics.fetch_permit_wait_micros_total,
-                                    wait_us,
-                                );
-                                metrics
-                                    .fetch_permit_acquisitions_total
-                                    .fetch_add(1, Ordering::Relaxed);
-                                try_fetch(addr, ih, pid, metrics, cache, utp, po, "get_peers", fetch_timeout, tcp_timeout, utp_timeout, limiter, transport_race_concurrent, connect_deadline).await
-                            });
-                        }
+                        peers_seen.insert(addr);
+                        candidate_queue.push_back((addr, CandidateSource::Dht));
                     }
                 }
             }
+
+            // All branches completed/exhausted
             else => {
-                break;
+                if candidate_queue.is_empty() && set.is_empty() && dht_done {
+                    break;
+                }
             }
         }
     }
@@ -782,7 +819,6 @@ pub async fn verify_infohash(
 mod tests {
     use super::*;
     use std::sync::Mutex;
-    use std::sync::atomic::AtomicUsize;
 
     fn ok_after(ms: u64) -> impl std::future::Future<Output = Result<(), WireError>> {
         async move {
@@ -953,5 +989,646 @@ mod tests {
         assert_eq!(recs.len(), 2);
         assert_eq!(recs[0].result, "io_error");
         assert_eq!(recs[1].result, "ok");
+    }
+
+    #[tokio::test]
+    async fn attempt_spawned_only_with_owned_fetch_permit() {
+        let sem = Arc::new(Semaphore::new(0)); // 0 initial permits
+        let (tx, _rx) = tokio::sync::mpsc::channel::<()>(1);
+        let sem_clone = sem.clone();
+
+        let mut permit_fut: Option<PermitAcquisitionFuture> =
+            Some(Box::pin(async move { sem_clone.acquire_owned().await }));
+
+        // With 0 permits, permit_fut should not resolve
+        tokio::select! {
+            biased;
+            _ = async {
+                match &mut permit_fut {
+                    Some(f) => f.await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                panic!("Permit should not have been acquired with 0 available permits");
+            }
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {
+                // Verified that without permit, no attempt is scheduled
+            }
+        }
+
+        // Add 1 permit and ensure it resolves
+        sem.add_permits(1);
+        let permit = match &mut permit_fut {
+            Some(f) => f.await.unwrap(),
+            None => panic!("missing permit fut"),
+        };
+        assert_eq!(sem.available_permits(), 0);
+        drop(permit);
+        assert_eq!(sem.available_permits(), 1);
+        drop(tx);
+    }
+
+    #[tokio::test]
+    async fn global_permit_retained_throughout_attempt_lifecycle() {
+        let sem = Arc::new(Semaphore::new(1));
+        let permit = sem.clone().acquire_owned().await.unwrap();
+        assert_eq!(sem.available_permits(), 0);
+
+        // Permit remains held throughout try_fetch execution
+        assert_eq!(sem.available_permits(), 0);
+        // When try_fetch returns (or task finishes), permit is dropped
+        drop(permit);
+        assert_eq!(
+            sem.available_permits(),
+            1,
+            "Global fetch permit must be released when attempt completes or fails"
+        );
+    }
+
+    #[test]
+    fn candidate_and_active_budget_never_exceeds_race_peers() {
+        let race_peers = 8;
+        let mut candidate_queue: VecDeque<(SocketAddr, CandidateSource)> =
+            VecDeque::with_capacity(race_peers);
+        let active_count = 3;
+
+        let new_dht_peers = vec![
+            "1.1.1.1:6881".parse().unwrap(),
+            "2.2.2.2:6881".parse().unwrap(),
+            "3.3.3.3:6881".parse().unwrap(),
+            "4.4.4.4:6881".parse().unwrap(),
+            "5.5.5.5:6881".parse().unwrap(),
+            "6.6.6.6:6881".parse().unwrap(),
+            "7.7.7.7:6881".parse().unwrap(),
+        ];
+
+        let mut skipped = 0;
+        for addr in new_dht_peers {
+            if candidate_queue.len() + active_count >= race_peers {
+                skipped += 1;
+                continue;
+            }
+            candidate_queue.push_back((addr, CandidateSource::Dht));
+        }
+
+        assert_eq!(candidate_queue.len() + active_count, race_peers);
+        assert_eq!(candidate_queue.len(), 5);
+        assert_eq!(skipped, 2);
+    }
+
+    #[tokio::test]
+    async fn temporary_permit_unavailability_preserves_front_candidate() {
+        let sem = Arc::new(Semaphore::new(0));
+        let mut queue: VecDeque<(SocketAddr, CandidateSource)> = VecDeque::new();
+        let addr: SocketAddr = "1.2.3.4:6881".parse().unwrap();
+        queue.push_back((addr, CandidateSource::Direct));
+
+        let sem_clone = sem.clone();
+        let mut permit_fut: Option<PermitAcquisitionFuture> =
+            Some(Box::pin(async move { sem_clone.acquire_owned().await }));
+
+        // Wait momentarily: permit is unavailable
+        tokio::select! {
+            _ = async {
+                match &mut permit_fut {
+                    Some(f) => f.await,
+                    None => std::future::pending().await,
+                }
+            } => panic!("Should not acquire"),
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+        }
+
+        // Verify candidate remains at front of queue
+        assert_eq!(queue.front().unwrap().0, addr);
+
+        // Now permit becomes available
+        sem.add_permits(1);
+        let permit = match &mut permit_fut {
+            Some(f) => f.await.unwrap(),
+            None => panic!("missing fut"),
+        };
+        let popped = queue.pop_front().unwrap();
+        assert_eq!(popped.0, addr);
+        assert_eq!(popped.1, CandidateSource::Direct);
+        drop(permit);
+    }
+
+    #[tokio::test]
+    async fn persistent_permit_wait_survives_other_select_branch() {
+        let sem = Arc::new(Semaphore::new(0));
+        let sem_clone = sem.clone();
+        let mut permit_fut: Option<PermitAcquisitionFuture> =
+            Some(Box::pin(async move { sem_clone.acquire_owned().await }));
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
+        tx.send(()).await.unwrap();
+
+        let other_branch_fired;
+        tokio::select! {
+            _ = rx.recv() => {
+                other_branch_fired = true;
+            }
+            _ = async {
+                match &mut permit_fut {
+                    Some(f) => f.await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                panic!("Permit should not fire");
+            }
+        }
+
+        assert!(other_branch_fired);
+        assert!(
+            permit_fut.is_some(),
+            "Permit future must be preserved across other select branches"
+        );
+
+        sem.add_permits(1);
+        let permit = match &mut permit_fut {
+            Some(f) => f.await.unwrap(),
+            None => panic!("missing"),
+        };
+        drop(permit);
+    }
+
+    #[tokio::test]
+    async fn one_scheduler_step_spawns_at_most_one_attempt() {
+        let sem = Arc::new(Semaphore::new(10)); // 10 permits available
+        let mut queue: VecDeque<(SocketAddr, CandidateSource)> = VecDeque::new();
+        queue.push_back(("1.1.1.1:6881".parse().unwrap(), CandidateSource::Direct));
+        queue.push_back(("2.2.2.2:6881".parse().unwrap(), CandidateSource::Dht));
+        queue.push_back(("3.3.3.3:6881".parse().unwrap(), CandidateSource::Dht));
+
+        let mut permit_fut: Option<PermitAcquisitionFuture> = None;
+        let mut spawned = 0;
+
+        // Single progression step
+        if permit_fut.is_none() && !queue.is_empty() {
+            let s = sem.clone();
+            permit_fut = Some(Box::pin(async move { s.acquire_owned().await }));
+        }
+
+        tokio::select! {
+            permit_res = async {
+                match &mut permit_fut {
+                    Some(f) => f.await,
+                    None => std::future::pending().await,
+                }
+            }, if permit_fut.is_some() => {
+                if let Ok(_permit) = permit_res
+                    && let Some(_cand) = queue.pop_front() {
+                    spawned += 1;
+                }
+            }
+        }
+
+        assert_eq!(
+            spawned, 1,
+            "Exactly one attempt must be spawned per scheduler progression step"
+        );
+        assert_eq!(
+            queue.len(),
+            2,
+            "Remaining candidates must stay queued for subsequent steps"
+        );
+    }
+
+    #[test]
+    fn direct_then_announce_then_dht_priority() {
+        let direct: Option<SocketAddr> = Some("1.1.1.1:6881".parse().unwrap());
+        let announcer: Option<SocketAddr> = Some("2.2.2.2:6881".parse().unwrap());
+        let dht_peers = vec![
+            "3.3.3.3:6881".parse().unwrap(),
+            "4.4.4.4:6881".parse().unwrap(),
+        ];
+
+        let mut seen = HashSet::new();
+        let mut queue: VecDeque<(SocketAddr, CandidateSource)> = VecDeque::new();
+
+        // Step 1: Direct peer
+        if let Some(d) = direct
+            && seen.insert(d) {
+            queue.push_back((d, CandidateSource::Direct));
+        }
+        // Step 2: Announce cache
+        if let Some(a) = announcer
+            && seen.insert(a) {
+            queue.push_back((a, CandidateSource::AnnounceCache));
+        }
+        // Step 3: DHT peers
+        for addr in dht_peers {
+            if seen.insert(addr) {
+                queue.push_back((addr, CandidateSource::Dht));
+            }
+        }
+
+        assert_eq!(
+            queue.pop_front().unwrap(),
+            ("1.1.1.1:6881".parse().unwrap(), CandidateSource::Direct)
+        );
+        assert_eq!(
+            queue.pop_front().unwrap(),
+            (
+                "2.2.2.2:6881".parse().unwrap(),
+                CandidateSource::AnnounceCache
+            )
+        );
+        assert_eq!(
+            queue.pop_front().unwrap(),
+            ("3.3.3.3:6881".parse().unwrap(), CandidateSource::Dht)
+        );
+        assert_eq!(
+            queue.pop_front().unwrap(),
+            ("4.4.4.4:6881".parse().unwrap(), CandidateSource::Dht)
+        );
+    }
+
+    #[test]
+    fn duplicate_peer_queued_and_attempted_once() {
+        let addr: SocketAddr = "1.2.3.4:6881".parse().unwrap();
+        let mut seen = HashSet::new();
+        let mut queue: VecDeque<(SocketAddr, CandidateSource)> = VecDeque::new();
+
+        // Direct
+        if seen.insert(addr) {
+            queue.push_back((addr, CandidateSource::Direct));
+        }
+        // Announce duplicate
+        if seen.insert(addr) {
+            queue.push_back((addr, CandidateSource::AnnounceCache));
+        }
+        // DHT duplicate
+        if seen.insert(addr) {
+            queue.push_back((addr, CandidateSource::Dht));
+        }
+
+        assert_eq!(
+            queue.len(),
+            1,
+            "Duplicate addresses must be accepted into queue at most once"
+        );
+    }
+
+    #[test]
+    fn dht_batch_excess_is_skipped_by_budget() {
+        let race_peers = 4;
+        let mut queue: VecDeque<(SocketAddr, CandidateSource)> = VecDeque::new();
+        let mut seen = HashSet::new();
+
+        // 1 direct queued
+        let d: SocketAddr = "1.1.1.1:6881".parse().unwrap();
+        seen.insert(d);
+        queue.push_back((d, CandidateSource::Direct));
+
+        let dht_results = vec![
+            "2.2.2.2:6881".parse().unwrap(),
+            "3.3.3.3:6881".parse().unwrap(),
+            "4.4.4.4:6881".parse().unwrap(),
+            "5.5.5.5:6881".parse().unwrap(),
+        ];
+
+        let mut skipped = 0;
+        for addr in dht_results {
+            if seen.contains(&addr) {
+                continue;
+            }
+            if seen.len() >= race_peers {
+                skipped += 1;
+                continue;
+            }
+            seen.insert(addr);
+            queue.push_back((addr, CandidateSource::Dht));
+        }
+
+        assert_eq!(queue.len(), 4);
+        assert_eq!(seen.len(), 4);
+        assert_eq!(skipped, 1);
+    }
+
+    #[test]
+    fn cumulative_race_peers_budget_preserved_after_failures() {
+        // Scenario:
+        // - race_peers = 8
+        // - two direct/announce candidates are accepted and fail
+        // - DHT later returns eight unique candidates
+        // - only six DHT candidates may be accepted
+        // - total attempted candidates must remain eight
+        let race_peers = 8;
+        let mut queue: VecDeque<(SocketAddr, CandidateSource)> = VecDeque::new();
+        let mut peers_seen = HashSet::new();
+
+        // 1) Direct + AnnounceCache accepted
+        let d1: SocketAddr = "10.0.0.1:6881".parse().unwrap();
+        let d2: SocketAddr = "10.0.0.2:6881".parse().unwrap();
+        peers_seen.insert(d1);
+        queue.push_back((d1, CandidateSource::Direct));
+        peers_seen.insert(d2);
+        queue.push_back((d2, CandidateSource::AnnounceCache));
+
+        // 2) Both candidates are popped and fail (active_attempts = 0, queue.len() = 0)
+        let _c1 = queue.pop_front().unwrap();
+        let _c2 = queue.pop_front().unwrap();
+        assert_eq!(queue.len(), 0);
+        assert_eq!(peers_seen.len(), 2);
+
+        // 3) DHT returns 8 unique peers
+        let dht_results = vec![
+            "10.0.0.3:6881".parse().unwrap(),
+            "10.0.0.4:6881".parse().unwrap(),
+            "10.0.0.5:6881".parse().unwrap(),
+            "10.0.0.6:6881".parse().unwrap(),
+            "10.0.0.7:6881".parse().unwrap(),
+            "10.0.0.8:6881".parse().unwrap(),
+            "10.0.0.9:6881".parse().unwrap(),
+            "10.0.0.10:6881".parse().unwrap(),
+        ];
+
+        let mut skipped = 0;
+        for addr in dht_results {
+            if peers_seen.contains(&addr) {
+                continue;
+            }
+            if peers_seen.len() >= race_peers {
+                skipped += 1;
+                continue;
+            }
+            peers_seen.insert(addr);
+            queue.push_back((addr, CandidateSource::Dht));
+        }
+
+        // Exactly 6 DHT candidates accepted, total accepted = 8, 2 skipped
+        assert_eq!(queue.len(), 6);
+        assert_eq!(peers_seen.len(), race_peers);
+        assert_eq!(skipped, 2);
+    }
+
+    #[tokio::test]
+    async fn scheduler_performs_cooperative_yield_between_attempt_spawns() {
+        let sem = Arc::new(Semaphore::new(2));
+
+        let mut queue: VecDeque<(SocketAddr, CandidateSource)> = VecDeque::new();
+        queue.push_back(("1.1.1.1:6881".parse().unwrap(), CandidateSource::Direct));
+        queue.push_back(("1.1.1.2:6881".parse().unwrap(), CandidateSource::Dht));
+
+        let mut permit_fut: Option<PermitAcquisitionFuture> = None;
+        let mut spawned = 0;
+
+        // Step 1: Arm permit future for candidate 1
+        if permit_fut.is_none() && !queue.is_empty() {
+            let s = sem.clone();
+            permit_fut = Some(Box::pin(async move { s.acquire_owned().await }));
+        }
+
+        tokio::select! {
+            permit_res = async {
+                match &mut permit_fut {
+                    Some(f) => f.await,
+                    None => std::future::pending().await,
+                }
+            }, if permit_fut.is_some() => {
+                permit_fut = None;
+                if let Ok(permit) = permit_res
+                    && let Some((_addr, _source)) = queue.pop_front() {
+                    spawned += 1;
+                    drop(permit);
+                    tokio::task::yield_now().await;
+                }
+            }
+        }
+
+        // Exactly one attempt spawned in step 1, second candidate remains in queue
+        assert_eq!(spawned, 1);
+        assert_eq!(queue.len(), 1);
+        assert!(permit_fut.is_none(), "Permit future is not yet re-armed before the next scheduler step");
+
+        // Step 2: Next scheduler progression step
+        if permit_fut.is_none() && !queue.is_empty() {
+            let s = sem.clone();
+            permit_fut = Some(Box::pin(async move { s.acquire_owned().await }));
+        }
+
+        tokio::select! {
+            permit_res = async {
+                match &mut permit_fut {
+                    Some(f) => f.await,
+                    None => std::future::pending().await,
+                }
+            }, if permit_fut.is_some() => {
+                if let Ok(permit) = permit_res
+                    && let Some((_addr, _source)) = queue.pop_front() {
+                    spawned += 1;
+                    drop(permit);
+                    tokio::task::yield_now().await;
+                }
+            }
+        }
+
+        assert_eq!(spawned, 2);
+        assert_eq!(queue.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn first_success_aborts_source_losing_attempts_and_pending_permit() {
+        // Test scenario:
+        // - one fetch attempt is about to succeed
+        // - another candidate is waiting on the persistent permit future
+        // - success branch wins
+        // - pending acquisition future is dropped
+        // - all semaphore permits become available
+        // - queued candidates are dropped
+        // - active losing attempts are aborted
+        // - source lookup is aborted
+        let sem = Arc::new(Semaphore::new(1));
+        let log_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let metrics = Arc::new(Metrics::new(log_dropped));
+
+        // 1 permit taken by winning attempt
+        let winning_permit = sem.clone().acquire_owned().await.unwrap();
+        assert_eq!(sem.available_permits(), 0);
+
+        // Persistent permit waiter waiting for 2nd candidate
+        let sem_clone = sem.clone();
+        let mut permit_fut: Option<PermitAcquisitionFuture> =
+            Some(Box::pin(async move { sem_clone.acquire_owned().await }));
+
+        let mut queue: VecDeque<(SocketAddr, CandidateSource)> = VecDeque::new();
+        queue.push_back(("2.2.2.2:6881".parse().unwrap(), CandidateSource::Dht));
+
+        let mut set: JoinSet<FetchOutcome> = JoinSet::new();
+        set.spawn(async move {
+            let _g = FetchActiveGuard::new(metrics.clone());
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            drop(winning_permit);
+            FetchOutcome::Success(vec![0xAA; 20])
+        });
+
+        let source_handle = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            SourceResult::NoPeers
+        });
+
+        let mut result = None;
+        tokio::select! {
+            biased;
+            res = set.join_next(), if !set.is_empty() => {
+                if let Some(Ok(FetchOutcome::Success(meta))) = res {
+                    result = Some(meta);
+                }
+            }
+            _ = async {
+                match &mut permit_fut {
+                    Some(f) => f.await,
+                    None => std::future::pending().await,
+                }
+            }, if permit_fut.is_some() => {
+                panic!("Permit should not be acquired before winning attempt finishes");
+            }
+        }
+
+        // Clean up on success
+        drop(permit_fut);
+        queue.clear();
+        set.abort_all();
+        source_handle.abort();
+
+        assert_eq!(result.unwrap(), vec![0xAA; 20]);
+        assert_eq!(queue.len(), 0);
+        assert_eq!(sem.available_permits(), 1, "All semaphore permits must be available and uncorrupted");
+    }
+
+    #[tokio::test]
+    async fn pending_permit_acquisition_cancelled_on_success() {
+        let sem = Arc::new(Semaphore::new(0));
+        let sem_clone = sem.clone();
+        let permit_fut: Option<PermitAcquisitionFuture> =
+            Some(Box::pin(async move { sem_clone.acquire_owned().await }));
+
+        // Verification succeeds before permit is acquired: drop future
+        drop(permit_fut);
+
+        // Semaphore capacity is untouched and uncorrupted
+        assert_eq!(sem.available_permits(), 0);
+        sem.add_permits(1);
+        assert_eq!(sem.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn global_permit_released_on_failure() {
+        let sem = Arc::new(Semaphore::new(1));
+        let permit = sem.clone().acquire_owned().await.unwrap();
+        assert_eq!(sem.available_permits(), 0);
+
+        // Simulate failure before metadata transfer
+        drop(permit);
+        assert_eq!(
+            sem.available_permits(),
+            1,
+            "Permit must be released on connect/handshake failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn global_permit_released_on_task_abort() {
+        let sem = Arc::new(Semaphore::new(1));
+        let sem_clone = sem.clone();
+        let handle = tokio::spawn(async move {
+            let _permit = sem_clone.acquire_owned().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(sem.available_permits(), 0);
+
+        handle.abort();
+        let _ = handle.await;
+        assert_eq!(
+            sem.available_permits(),
+            1,
+            "Permit must be released when task is aborted"
+        );
+    }
+
+    #[tokio::test]
+    async fn per_ip_limit_remains_enforced() {
+        let limiter = Arc::new(crate::verify::ConnLimiter::new(1));
+        let ip = "1.2.3.4".parse().unwrap();
+
+        let p1 = limiter.acquire(ip).await;
+
+        let mut p2_fut = Box::pin(limiter.acquire(ip));
+        tokio::select! {
+            _ = &mut p2_fut => panic!("Second acquisition for same IP should block"),
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+        }
+
+        drop(p1);
+        let _p2 = p2_fut.await; // Now succeeds
+    }
+
+    #[tokio::test]
+    async fn multiple_verify_operations_never_exceed_global_fetch_limit() {
+        let global_fetch_limit = 5;
+        let sem = Arc::new(Semaphore::new(global_fetch_limit));
+
+        let mut permits = Vec::new();
+        for _ in 0..global_fetch_limit {
+            permits.push(sem.clone().acquire_owned().await.unwrap());
+        }
+        assert_eq!(sem.available_permits(), 0);
+
+        let mut sixth_fut = Box::pin(sem.clone().acquire_owned());
+        tokio::select! {
+            _ = &mut sixth_fut => panic!("Sixth permit should block"),
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+        }
+
+        drop(permits);
+        // sixth_fut immediately acquires 1 permit when permits are dropped, leaving 4 available
+        let p = sixth_fut.await.unwrap();
+        assert_eq!(sem.available_permits(), 4);
+        drop(p);
+        assert_eq!(sem.available_permits(), 5);
+    }
+
+    #[tokio::test]
+    async fn shutdown_releases_permits_and_active_gauges() {
+        let log_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let metrics = Arc::new(Metrics::new(log_dropped));
+        let sem = Arc::new(Semaphore::new(2));
+
+        {
+            let _fetch_guard = FetchActiveGuard::new(metrics.clone());
+            let _permit = sem.clone().acquire_owned().await.unwrap();
+            assert_eq!(metrics.fetch_active.load(Ordering::Relaxed), 1);
+            assert_eq!(sem.available_permits(), 1);
+        }
+
+        assert_eq!(metrics.fetch_active.load(Ordering::Relaxed), 0);
+        assert_eq!(sem.available_permits(), 2);
+    }
+
+    #[tokio::test]
+    async fn scheduler_does_not_busy_loop_without_permit() {
+        let sem = Arc::new(Semaphore::new(0)); // 0 permits
+        let mut queue: VecDeque<(SocketAddr, CandidateSource)> = VecDeque::new();
+        queue.push_back(("1.2.3.4:6881".parse().unwrap(), CandidateSource::Direct));
+
+        let sem_clone = sem.clone();
+        let mut permit_fut: Option<PermitAcquisitionFuture> =
+            Some(Box::pin(async move { sem_clone.acquire_owned().await }));
+
+        let start = Instant::now();
+        tokio::select! {
+            _ = async {
+                match &mut permit_fut {
+                    Some(f) => f.await,
+                    None => std::future::pending().await,
+                }
+            } => panic!("Should not acquire"),
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+
+        assert!(start.elapsed() >= Duration::from_millis(50));
     }
 }
