@@ -122,6 +122,9 @@ fn snapshot_rows(s: &Snapshot) -> Vec<(&'static str, u64)> {
         ("fresh_channel_dropped", s.fresh_channel_dropped),
         ("fresh_channel_depth", s.fresh_channel_depth),
         ("fresh_channel_depth_max", s.fresh_channel_depth_max),
-        ("scheduler_skipped_backpressure", s.scheduler_skipped_backpressure),
+        (
+            "scheduler_skipped_backpressure",
+            s.scheduler_skipped_backpressure,
+        ),
     ]
 }

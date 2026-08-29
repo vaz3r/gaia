@@ -3,12 +3,12 @@ mod writer;
 
 pub use layer::JsonLayer;
 
-use std::sync::atomic::{AtomicU64};
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
 
 use crate::config::Config;
 
@@ -60,9 +60,7 @@ pub fn init(config: &Config, log_dropped: Arc<AtomicU64>) -> LoggingGuard {
             .with(layer)
             .init();
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .init();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
     }
 
     LoggingGuard {

@@ -77,6 +77,7 @@ pub struct FetchConfig {
     pub transport_race_concurrent: bool,
     pub connect_deadline_ms: u64,
     pub pipeline_limit: usize,
+    pub lead_source_grace_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -227,6 +228,7 @@ impl Default for FetchConfig {
             transport_race_concurrent: true,
             connect_deadline_ms: 10000,
             pipeline_limit: 4000,
+            lead_source_grace_ms: 1000,
         }
     }
 }
@@ -408,8 +410,10 @@ impl Config {
         }
         self.channel_capacity = env_usize("CRAW_CHANNEL_CAPACITY", self.channel_capacity);
         self.report_interval_secs = env_u64("CRAW_REPORT_INTERVAL", self.report_interval_secs);
-        self.rate_limit_sweep_interval_secs =
-            env_u64("CRAW_RATE_LIMIT_SWEEP_INTERVAL", self.rate_limit_sweep_interval_secs);
+        self.rate_limit_sweep_interval_secs = env_u64(
+            "CRAW_RATE_LIMIT_SWEEP_INTERVAL",
+            self.rate_limit_sweep_interval_secs,
+        );
         if let Ok(dir) = std::env::var("CRAW_DATA_DIR") {
             self.data_dir = PathBuf::from(dir);
             // If data_dir changes and logging log_dir wasn't explicitly set
@@ -424,32 +428,46 @@ impl Config {
 
         // dht
         self.dht.walker_alpha = env_usize("CRAW_WALKER_ALPHA", self.dht.walker_alpha);
-        self.dht.walker_interval_ms = env_u64("CRAW_WALKER_INTERVAL_MS", self.dht.walker_interval_ms);
+        self.dht.walker_interval_ms =
+            env_u64("CRAW_WALKER_INTERVAL_MS", self.dht.walker_interval_ms);
         self.dht.sybil_count = env_usize("CRAW_SYBILS", self.dht.sybil_count);
-        self.dht.source_deadline_ms = env_u64("CRAW_SOURCE_DEADLINE_MS", self.dht.source_deadline_ms);
-        self.dht.source_query_timeout_secs =
-            env_u64("CRAW_SOURCE_QUERY_TIMEOUT", self.dht.source_query_timeout_secs);
+        self.dht.source_deadline_ms =
+            env_u64("CRAW_SOURCE_DEADLINE_MS", self.dht.source_deadline_ms);
+        self.dht.source_query_timeout_secs = env_u64(
+            "CRAW_SOURCE_QUERY_TIMEOUT",
+            self.dht.source_query_timeout_secs,
+        );
         self.dht.rate_limit_per_sec = env_f64("CRAW_RATE_LIMIT", self.dht.rate_limit_per_sec);
         self.dht.token_window_secs = env_u64("CRAW_TOKEN_WINDOW", self.dht.token_window_secs);
-        self.dht.find_node_response_percent = env_u64("CRAW_FIND_NODE_RESPONSE_PERCENT", self.dht.find_node_response_percent as u64) as u8;
+        self.dht.find_node_response_percent = env_u64(
+            "CRAW_FIND_NODE_RESPONSE_PERCENT",
+            self.dht.find_node_response_percent as u64,
+        ) as u8;
 
         // fetch
         self.fetch.global_fetch_limit =
             env_usize("CRAW_FETCH_LIMIT", self.fetch.global_fetch_limit);
         self.fetch.race_peers = env_usize("CRAW_RACE_PEERS", self.fetch.race_peers);
-        self.fetch.metadata_timeout_secs =
-            env_u64("CRAW_FETCH_TIMEOUT_MS", self.fetch.metadata_timeout_secs * 1000) / 1000;
+        self.fetch.metadata_timeout_secs = env_u64(
+            "CRAW_FETCH_TIMEOUT_MS",
+            self.fetch.metadata_timeout_secs * 1000,
+        ) / 1000;
         self.fetch.utp_enabled = env_bool("CRAW_UTP_ENABLED", self.fetch.utp_enabled);
-        self.fetch.transport_race_concurrent =
-            env_bool("CRAW_TRANSPORT_RACE_CONCURRENT", self.fetch.transport_race_concurrent);
+        self.fetch.transport_race_concurrent = env_bool(
+            "CRAW_TRANSPORT_RACE_CONCURRENT",
+            self.fetch.transport_race_concurrent,
+        );
         self.fetch.connect_deadline_ms =
             env_u64("CRAW_CONNECT_DEADLINE_MS", self.fetch.connect_deadline_ms);
-        self.fetch.pipeline_limit =
-            env_usize("CRAW_PIPELINE_LIMIT", self.fetch.pipeline_limit);
+        self.fetch.pipeline_limit = env_usize("CRAW_PIPELINE_LIMIT", self.fetch.pipeline_limit);
+        self.fetch.lead_source_grace_ms =
+            env_u64("CRAW_LEAD_SOURCE_GRACE_MS", self.fetch.lead_source_grace_ms);
 
         // harvest
-        self.harvest.harvest_channel_capacity =
-            env_usize("CRAW_HARVEST_CHANNEL_CAPACITY", self.harvest.harvest_channel_capacity);
+        self.harvest.harvest_channel_capacity = env_usize(
+            "CRAW_HARVEST_CHANNEL_CAPACITY",
+            self.harvest.harvest_channel_capacity,
+        );
 
         // logging
         if let Ok(dir) = std::env::var("CRAW_LOG_DIR") {
@@ -467,6 +485,12 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.fetch.lead_source_grace_ms > 60_000 {
+            return Err(format!(
+                "fetch.lead_source_grace_ms ({}) must be <= 60000",
+                self.fetch.lead_source_grace_ms
+            ));
+        }
         if self.dht.source_query_timeout_secs * 1000 > self.dht.source_deadline_ms {
             return Err(format!(
                 "source_query_timeout_secs ({}) * 1000 > source_deadline_ms ({})",
@@ -653,6 +677,8 @@ struct PartialFetch {
     connect_deadline_ms: Option<u64>,
     #[serde(default)]
     pipeline_limit: Option<usize>,
+    #[serde(default)]
+    lead_source_grace_ms: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -945,6 +971,9 @@ impl PartialFetch {
         if let Some(v) = self.pipeline_limit {
             cfg.pipeline_limit = v;
         }
+        if let Some(v) = self.lead_source_grace_ms {
+            cfg.lead_source_grace_ms = v;
+        }
     }
 }
 
@@ -1142,6 +1171,7 @@ mod tests {
         assert_eq!(c.fetch.transport_race_concurrent, true);
         assert_eq!(c.fetch.connect_deadline_ms, 10000);
         assert_eq!(c.fetch.pipeline_limit, 4000);
+        assert_eq!(c.fetch.lead_source_grace_ms, 1000);
         assert_eq!(c.harvest.harvest_channel_capacity, 10_000);
         assert_eq!(c.dht.find_node_response_percent, 100);
     }
@@ -1151,17 +1181,36 @@ mod tests {
         let c = Config::default();
         assert!(c.validate().is_ok());
     }
-}
 
     #[test]
-    fn toml_files_parse() {
-        // Verify the shipped TOML files decode against the partial schema.
-        for name in ["default", "production", "development"] {
-            let path = PathBuf::from("config").join(format!("{name}.toml"));
-            let contents = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("{name}.toml missing: {e}"));
-            let p = toml::from_str::<PartialConfig>(&contents)
-                .unwrap_or_else(|e| panic!("{name}.toml invalid: {e}"));
-            assert!(p.bind_addr.is_none() || p.bind_addr.is_some());
-        }
+    fn lead_source_grace_ms_validation_and_defaults() {
+        let c = Config::default();
+        assert_eq!(c.fetch.lead_source_grace_ms, 1000);
+        assert!(c.validate().is_ok());
+
+        let mut c_zero = Config::default();
+        c_zero.fetch.lead_source_grace_ms = 0;
+        assert!(c_zero.validate().is_ok());
+
+        let mut c_valid_max = Config::default();
+        c_valid_max.fetch.lead_source_grace_ms = 60_000;
+        assert!(c_valid_max.validate().is_ok());
+
+        let mut c_invalid = Config::default();
+        c_invalid.fetch.lead_source_grace_ms = 60_001;
+        assert!(c_invalid.validate().is_err());
     }
+}
+
+#[test]
+fn toml_files_parse() {
+    // Verify the shipped TOML files decode against the partial schema.
+    for name in ["default", "production", "development"] {
+        let path = PathBuf::from("config").join(format!("{name}.toml"));
+        let contents =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{name}.toml missing: {e}"));
+        let p = toml::from_str::<PartialConfig>(&contents)
+            .unwrap_or_else(|e| panic!("{name}.toml invalid: {e}"));
+        assert!(p.bind_addr.is_none() || p.bind_addr.is_some());
+    }
+}

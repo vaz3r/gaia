@@ -18,7 +18,6 @@ pub fn xor(a: &NodeId, b: &NodeId) -> NodeId {
     out
 }
 
-
 pub fn cmp_xor(target: &NodeId, a: &NodeId, b: &NodeId) -> std::cmp::Ordering {
     for i in 0..20 {
         let xa = a[i] ^ target[i];
@@ -46,11 +45,7 @@ fn leading_zeros(x: &NodeId) -> usize {
 fn bucket_index(self_id: &NodeId, id: &NodeId) -> usize {
     let d = xor(self_id, id);
     let lz = leading_zeros(&d);
-    if lz >= 160 {
-        0
-    } else {
-        159 - lz
-    }
+    if lz >= 160 { 0 } else { 159 - lz }
 }
 
 pub struct RoutingTable {
@@ -131,9 +126,7 @@ impl RoutingTable {
     }
 
     pub fn random_nodes(&self, n: usize) -> Vec<NodeInfo> {
-        let non_empty: Vec<usize> = (0..160)
-            .filter(|&i| !self.buckets[i].is_empty())
-            .collect();
+        let non_empty: Vec<usize> = (0..160).filter(|&i| !self.buckets[i].is_empty()).collect();
         if non_empty.is_empty() {
             return Vec::new();
         }
@@ -263,14 +256,19 @@ mod tests {
             }
             rt.insert(NodeInfo {
                 id,
-                addr: format!("1.2.3.{}:6881", (i % 250) as u8 + 1).parse().unwrap(),
+                addr: format!("1.2.3.{}:6881", (i % 250) as u8 + 1)
+                    .parse()
+                    .unwrap(),
             });
         }
         assert_eq!(new_at_insert, 500_000);
         let top = rt.bucket_fill(159) + rt.bucket_fill(158) + rt.bucket_fill(157);
         let total = rt.buckets_used();
         assert!(rt.len() > 50 && rt.len() < 512, "len={}", rt.len());
-        assert!(total < 40, "only far buckets fill under uniform ids, used={total}");
+        assert!(
+            total < 40,
+            "only far buckets fill under uniform ids, used={total}"
+        );
         let _ = top;
     }
 }

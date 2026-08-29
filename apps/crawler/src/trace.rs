@@ -14,7 +14,7 @@ impl TraceConfig {
             if s.len() == 40 {
                 let mut buf = [0u8; 20];
                 for i in 0..20 {
-                    let byte_str = &s[i*2..i*2+2];
+                    let byte_str = &s[i * 2..i * 2 + 2];
                     if let Ok(byte) = u8::from_str_radix(byte_str, 16) {
                         buf[i] = byte;
                     } else {
@@ -26,12 +26,17 @@ impl TraceConfig {
                 None
             }
         });
-        Self { sample_rate, debug_ih }
+        Self {
+            sample_rate,
+            debug_ih,
+        }
     }
 }
 
 pub fn should_trace(ih: &NodeId) -> bool {
-    let Some(config) = TRACE_CONFIG.get() else { return false };
+    let Some(config) = TRACE_CONFIG.get() else {
+        return false;
+    };
     if let Some(debug) = &config.debug_ih {
         if debug == ih {
             return true;

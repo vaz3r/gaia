@@ -48,10 +48,7 @@ async fn cleanup_dead(pool: &PgPool, cfg: &JanitorConfig, report: &mut JanitorRe
              )",
             cfg.dead_retention_secs
         );
-        let result = sqlx::query(&sql)
-            .bind(cfg.batch_size)
-            .execute(pool)
-            .await;
+        let result = sqlx::query(&sql).bind(cfg.batch_size).execute(pool).await;
 
         match result {
             Ok(r) => {
@@ -87,10 +84,7 @@ async fn cleanup_verified(pool: &PgPool, cfg: &JanitorConfig, report: &mut Janit
              )",
             cfg.verified_retention_secs
         );
-        let result = sqlx::query(&sql)
-            .bind(cfg.batch_size)
-            .execute(pool)
-            .await;
+        let result = sqlx::query(&sql).bind(cfg.batch_size).execute(pool).await;
 
         match result {
             Ok(r) => {

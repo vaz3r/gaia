@@ -59,7 +59,8 @@ impl Harvester {
         metrics: Arc<Metrics>,
     ) -> Self {
         let capacity = capacity.max(64);
-        let announce_cap = ((capacity as f64 * announce_bloom_ratio) as usize).max(announce_bloom_min.max(1));
+        let announce_cap =
+            ((capacity as f64 * announce_bloom_ratio) as usize).max(announce_bloom_min.max(1));
         Harvester {
             current: BloomFilter::new(capacity, fp_rate),
             previous: BloomFilter::new(capacity, fp_rate),
@@ -74,7 +75,9 @@ impl Harvester {
     }
 
     pub fn harvest(&mut self, ih: Infohash, source: Source, direct: Option<SocketAddr>) -> bool {
-        if source == Source::AnnouncePeer && let Some(peer) = direct {
+        if source == Source::AnnouncePeer
+            && let Some(peer) = direct
+        {
             // Announce sightings get a dedicated bloom so a prior get_peers
             // first-sighting does not suppress the high-value direct fetch.
             if self.announce_seen.contains(&ih) {

@@ -13,18 +13,18 @@ pub fn scan(input: &[u8]) -> Option<KrpcHeader> {
     }
     let mut header = KrpcHeader::default();
     let mut pos = 1;
-    
+
     while pos < input.len() {
         if input[pos] == b'e' {
             break;
         }
-        
+
         // Parse key
         let key = match parse_string(input, &mut pos) {
             Some(s) => s,
             None => return None, // malformed
         };
-        
+
         // Match key and parse value or skip
         if key == b"t" {
             header.t = parse_string(input, &mut pos);
@@ -53,22 +53,24 @@ fn parse_string<'a>(input: &'a [u8], pos: &mut usize) -> Option<&'a [u8]> {
     if colon == input.len() || colon == *pos {
         return None;
     }
-    
+
     let len_str = std::str::from_utf8(&input[*pos..colon]).ok()?;
     let len: usize = len_str.parse().ok()?;
-    
+
     let start = colon + 1;
     let end = start + len;
     if end > input.len() {
         return None;
     }
-    
+
     *pos = end;
     Some(&input[start..end])
 }
 
 fn skip_value(input: &[u8], pos: &mut usize, depth: usize) -> bool {
-    if depth > 64 { return false; }
+    if depth > 64 {
+        return false;
+    }
     if *pos >= input.len() {
         return false;
     }
@@ -84,7 +86,7 @@ fn skip_value(input: &[u8], pos: &mut usize, depth: usize) -> bool {
             } else {
                 false
             }
-        },
+        }
         b'l' | b'd' => {
             *pos += 1;
             while *pos < input.len() && input[*pos] != b'e' {
@@ -98,10 +100,8 @@ fn skip_value(input: &[u8], pos: &mut usize, depth: usize) -> bool {
             } else {
                 false
             }
-        },
-        b'0'..=b'9' => {
-            parse_string(input, pos).is_some()
-        },
+        }
+        b'0'..=b'9' => parse_string(input, pos).is_some(),
         _ => false,
     }
 }

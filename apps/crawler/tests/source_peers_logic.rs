@@ -11,9 +11,18 @@ fn candidate_dedup_by_node_id() {
     let other_id = [0x22; 20];
 
     let mut candidates = vec![
-        NodeInfo { id: same_id, addr: addr1 },
-        NodeInfo { id: other_id, addr: addr2 },
-        NodeInfo { id: same_id, addr: "9.10.11.12:6881".parse().unwrap() },
+        NodeInfo {
+            id: same_id,
+            addr: addr1,
+        },
+        NodeInfo {
+            id: other_id,
+            addr: addr2,
+        },
+        NodeInfo {
+            id: same_id,
+            addr: "9.10.11.12:6881".parse().unwrap(),
+        },
     ];
     candidates.sort_by_key(|n| xor(&ih, &n.id));
     candidates.dedup_by(|a, b| a.id == b.id);
@@ -44,9 +53,18 @@ fn decode_compact_parses_all_nodes() {
 fn closest_returns_sorted_by_xor_distance() {
     let ih = Infohash::from([0xFF; 20]);
     let mut nodes = vec![
-        NodeInfo { id: [0x01; 20], addr: "1.1.1.1:6881".parse().unwrap() },
-        NodeInfo { id: [0xFE; 20], addr: "2.2.2.2:6881".parse().unwrap() },
-        NodeInfo { id: [0x80; 20], addr: "3.3.3.3:6881".parse().unwrap() },
+        NodeInfo {
+            id: [0x01; 20],
+            addr: "1.1.1.1:6881".parse().unwrap(),
+        },
+        NodeInfo {
+            id: [0xFE; 20],
+            addr: "2.2.2.2:6881".parse().unwrap(),
+        },
+        NodeInfo {
+            id: [0x80; 20],
+            addr: "3.3.3.3:6881".parse().unwrap(),
+        },
     ];
     nodes.sort_by_key(|n| xor(&ih, &n.id));
     assert_eq!(nodes[0].id, [0xFE; 20], "0xFE should be closest to 0xFF");
@@ -85,7 +103,11 @@ fn source_peers_stops_immediately_when_round_returns_enough() {
         }
         peers.push(*addr);
     }
-    assert_eq!(peers.len(), 3, "Should stop at count=3 even though batch has 5");
+    assert_eq!(
+        peers.len(),
+        3,
+        "Should stop at count=3 even though batch has 5"
+    );
 }
 
 #[test]
@@ -104,5 +126,9 @@ fn decode_compact_partial_node_ignored() {
     data.extend_from_slice(&[1, 2, 3]);
 
     let nodes = decode_compact(&data);
-    assert_eq!(nodes.len(), 1, "Only the complete 26-byte entry should be parsed");
+    assert_eq!(
+        nodes.len(),
+        1,
+        "Only the complete 26-byte entry should be parsed"
+    );
 }

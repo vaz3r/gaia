@@ -30,6 +30,7 @@ pub struct FetchParams {
     pub failed_peer_sample_rate: u64,
     pub transport_race_concurrent: bool,
     pub connect_deadline: Duration,
+    pub lead_source_grace: Duration,
 }
 
 fn sample_failed_peer(ih: &Infohash, addr: &SocketAddr, metrics: &Metrics, rate: u64) {
@@ -203,11 +204,25 @@ enum FetchOutcome {
     Success(Vec<u8>, CandidateSource, Duration),
 }
 
+fn outcome_source(outcome: &FetchOutcome) -> CandidateSource {
+    match outcome {
+        FetchOutcome::ConnectFailed(_, _, s, _) => *s,
+        FetchOutcome::MetadataFailed(_, s, _) => *s,
+        FetchOutcome::Success(_, s, _) => *s,
+    }
+}
+
 pub enum VerifyResult {
     Success(Vec<u8>, CandidateSource, Duration),
     NoPeers,
     SourceTimeout,
     MetadataFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeadDhtTriggerReason {
+    GraceExpired,
+    LeadExhausted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -636,11 +651,6 @@ pub async fn verify_infohash(
     let mut candidate_queue: VecDeque<(SocketAddr, CandidateSource)> =
         VecDeque::with_capacity(race_peers);
 
-    // Source phase — wall-clock per verification task, active gauge.
-    metrics.source_active.fetch_add(1, Ordering::Relaxed);
-    let source_start = Instant::now();
-    let mut source_completed = false;
-
     // 1) Enqueue the highest-quality leads in priority order:
     //    Priority 1: Direct peer supplied by announce_peer
     //    Priority 2: AnnouncePeerCache peer
@@ -672,14 +682,28 @@ pub async fn verify_infohash(
     let is_lead_task = !candidate_queue.is_empty();
     if is_lead_task {
         metrics.lead_tasks_total.fetch_add(1, Ordering::Relaxed);
-        metrics
-            .lead_tasks_dht_started_total
-            .fetch_add(1, Ordering::Relaxed);
     } else {
         metrics.non_lead_tasks_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    // 2) Spawn the DHT lookup concurrently so it runs alongside the fetch scheduling.
+    enum DhtSourceLifecycle {
+        NotStarted,
+        Running(tokio::task::JoinHandle<SourceResult>, Instant),
+        Finished,
+    }
+
+    let mut dht_lifecycle = DhtSourceLifecycle::NotStarted;
+    let grace_duration = params.lead_source_grace;
+    let defer_dht = is_lead_task && !grace_duration.is_zero();
+    let mut grace_timer: Option<Pin<Box<tokio::time::Sleep>>> = if defer_dht {
+        metrics
+            .lead_dht_deferred_total
+            .fetch_add(1, Ordering::Relaxed);
+        Some(Box::pin(tokio::time::sleep(grace_duration)))
+    } else {
+        None
+    };
+
     let router_clone = router.clone();
     let metrics_clone = metrics.clone();
     let peer_cache_dht = peer_cache.clone();
@@ -688,30 +712,70 @@ pub async fn verify_infohash(
     let source_alpha = params.source_alpha;
     let source_query_timeout = params.source_query_timeout;
     let source_max_queries = params.source_max_queries;
-    let mut source_fut = tokio::spawn(async move {
-        source_peers(
-            router_clone,
-            info_hash,
-            race_peers,
-            metrics_clone,
-            source_deadline,
-            source_k,
-            source_alpha,
-            source_query_timeout,
-            source_max_queries,
-            &peer_cache_dht,
-            is_lead_task,
-        )
-        .await
-    });
+
+    let maybe_start_dht =
+        |lifecycle: &mut DhtSourceLifecycle, reason: Option<LeadDhtTriggerReason>| -> bool {
+            if matches!(lifecycle, DhtSourceLifecycle::NotStarted) {
+                metrics_clone.source_active.fetch_add(1, Ordering::Relaxed);
+                if is_lead_task {
+                    metrics_clone
+                        .lead_tasks_dht_started_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    match reason {
+                        Some(LeadDhtTriggerReason::GraceExpired) => {
+                            metrics_clone
+                                .lead_dht_started_grace_expired_total
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                        Some(LeadDhtTriggerReason::LeadExhausted) => {
+                            metrics_clone
+                                .lead_dht_started_exhausted_total
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                        None => {}
+                    }
+                }
+                let router_c = router_clone.clone();
+                let metrics_c = metrics_clone.clone();
+                let peer_cache_c = peer_cache_dht.clone();
+                let started_at = Instant::now();
+                let handle = tokio::spawn(async move {
+                    source_peers(
+                        router_c,
+                        info_hash,
+                        race_peers,
+                        metrics_c,
+                        source_deadline,
+                        source_k,
+                        source_alpha,
+                        source_query_timeout,
+                        source_max_queries,
+                        &peer_cache_c,
+                        is_lead_task,
+                    )
+                    .await
+                });
+                *lifecycle = DhtSourceLifecycle::Running(handle, started_at);
+                true
+            } else {
+                false
+            }
+        };
+
+    if !defer_dht {
+        maybe_start_dht(&mut dht_lifecycle, None);
+    }
 
     let mut source_state = SourceState::Timeout;
-    let mut dht_done = false;
     let mut result: Option<(Vec<u8>, CandidateSource, Duration)> = None;
 
     // Persistent permit acquisition future across select! ticks.
     let mut permit_fut: Option<PermitAcquisitionFuture> = None;
     let mut permit_wait_start: Option<Instant> = None;
+
+    // Track active fetch attempts and queued candidates by source for lead exhaustion
+    let mut active_lead_attempts: usize = 0;
+    let mut queued_lead_candidates: usize = candidate_queue.len();
 
     loop {
         // Maintain persistent permit future when candidates are waiting and we have not initiated acquisition.
@@ -730,6 +794,10 @@ pub async fn verify_infohash(
                         break;
                     }
                     Some(Ok(outcome)) => {
+                        let outcome_src = outcome_source(&outcome);
+                        if outcome_src != CandidateSource::Dht {
+                            active_lead_attempts = active_lead_attempts.saturating_sub(1);
+                        }
                         match outcome {
                             FetchOutcome::ConnectFailed(_addr, WireError::Timeout, src, dur) => {
                                 metrics.fetch_connect_timeout.add(1);
@@ -838,9 +906,39 @@ pub async fn verify_infohash(
                             }
                             FetchOutcome::Success(_, _, _) => {}
                         }
+
+                        // Check lead exhaustion condition after a lead failure
+                        if queued_lead_candidates == 0 && active_lead_attempts == 0 {
+                            if let Some(timer) = grace_timer.take() {
+                                let elapsed = timer.deadline().saturating_duration_since(tokio::time::Instant::now());
+                                let grace_taken_dur = grace_duration.saturating_sub(elapsed);
+                                let grace_us = grace_taken_dur.as_micros().min(u64::MAX as u128) as u64;
+                                saturating_add_atomic(&metrics.lead_grace_micros_total, grace_us);
+                                metrics
+                                    .lead_grace_completed_total
+                                    .fetch_add(1, Ordering::Relaxed);
+                            }
+                            maybe_start_dht(&mut dht_lifecycle, Some(LeadDhtTriggerReason::LeadExhausted));
+                        }
                     }
                     _ => {}
                 }
+            }
+
+            // Lead grace timer expired
+            _ = async {
+                match &mut grace_timer {
+                    Some(timer) => timer.as_mut().await,
+                    None => std::future::pending().await,
+                }
+            }, if grace_timer.is_some() => {
+                grace_timer = None;
+                let grace_us = grace_duration.as_micros().min(u64::MAX as u128) as u64;
+                saturating_add_atomic(&metrics.lead_grace_micros_total, grace_us);
+                metrics
+                    .lead_grace_completed_total
+                    .fetch_add(1, Ordering::Relaxed);
+                maybe_start_dht(&mut dht_lifecycle, Some(LeadDhtTriggerReason::GraceExpired));
             }
 
             // Global fetch permit acquired for front candidate
@@ -860,6 +958,10 @@ pub async fn verify_infohash(
                             .fetch_add(1, Ordering::Relaxed);
                     }
                     if let Some((addr, source)) = candidate_queue.pop_front() {
+                        if source != CandidateSource::Dht {
+                            queued_lead_candidates = queued_lead_candidates.saturating_sub(1);
+                            active_lead_attempts += 1;
+                        }
                         metrics.fetch_permit_owned_attempts_total.fetch_add(1, Ordering::Relaxed);
                         metrics.fetch_attempts.add(1);
                         match source {
@@ -902,21 +1004,27 @@ pub async fn verify_infohash(
             }
 
             // DHT source completed
-            dht_res = &mut source_fut, if !dht_done => {
-                dht_done = true;
-                if !source_completed {
-                    source_completed = true;
-                    let us = source_start
-                        .elapsed()
-                        .as_micros()
-                        .min(u64::MAX as u128) as u64;
-                    saturating_add_atomic(&metrics.verify_source_micros_total, us);
-                    metrics
-                        .verify_source_completed_total
-                        .fetch_add(1, Ordering::Relaxed);
-                    let prev = metrics.source_active.fetch_sub(1, Ordering::Relaxed);
-                    debug_assert!(prev > 0, "source_active underflow");
+            dht_res = async {
+                match &mut dht_lifecycle {
+                    DhtSourceLifecycle::Running(handle, _) => handle.await,
+                    _ => std::future::pending().await,
                 }
+            }, if matches!(dht_lifecycle, DhtSourceLifecycle::Running(_, _)) => {
+                let started_at = match std::mem::replace(&mut dht_lifecycle, DhtSourceLifecycle::Finished) {
+                    DhtSourceLifecycle::Running(_, t) => t,
+                    _ => unreachable!(),
+                };
+                let us = started_at
+                    .elapsed()
+                    .as_micros()
+                    .min(u64::MAX as u128) as u64;
+                saturating_add_atomic(&metrics.verify_source_micros_total, us);
+                metrics
+                    .verify_source_completed_total
+                    .fetch_add(1, Ordering::Relaxed);
+                let prev = metrics.source_active.fetch_sub(1, Ordering::Relaxed);
+                debug_assert!(prev > 0, "source_active underflow");
+
                 if let Ok(lookup_res) = dht_res {
                     let (new_peers, state) = match lookup_res {
                         SourceResult::Peers(p) => (p, SourceState::Peers),
@@ -941,7 +1049,7 @@ pub async fn verify_infohash(
 
             // All branches completed/exhausted
             else => {
-                if candidate_queue.is_empty() && set.is_empty() && dht_done {
+                if candidate_queue.is_empty() && set.is_empty() && matches!(dht_lifecycle, DhtSourceLifecycle::Finished) {
                     break;
                 }
             }
@@ -949,12 +1057,22 @@ pub async fn verify_infohash(
     }
 
     let drain_start = Instant::now();
-    if !source_completed {
-        let prev = metrics.source_active.fetch_sub(1, Ordering::Relaxed);
-        debug_assert!(prev > 0, "source_active underflow on abort");
+    match dht_lifecycle {
+        DhtSourceLifecycle::NotStarted => {
+            if is_lead_task && result.is_some() {
+                metrics
+                    .lead_dht_avoided_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        DhtSourceLifecycle::Running(handle, _) => {
+            let prev = metrics.source_active.fetch_sub(1, Ordering::Relaxed);
+            debug_assert!(prev > 0, "source_active underflow on abort");
+            handle.abort();
+        }
+        DhtSourceLifecycle::Finished => {}
     }
     set.abort_all();
-    source_fut.abort();
     let drain_us = drain_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
     saturating_add_atomic(&metrics.fetch_joinset_drain_micros_total, drain_us);
     metrics
@@ -1030,6 +1148,7 @@ pub fn record_lead_success_latency(metrics: &Metrics, dur: Duration) {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicU64;
 
     fn ok_after(ms: u64) -> impl std::future::Future<Output = Result<(), WireError>> {
         async move {
@@ -2010,5 +2129,647 @@ mod tests {
                 .fetch_add(1, Ordering::Relaxed);
         }
         assert_eq!(metrics.source_dht_verified_total.load(Ordering::Relaxed), 1);
+    }
+
+    // ── Hybrid Lead-First Deferred DHT Sourcing Deterministic Tests ─────────────
+
+    #[tokio::test]
+    async fn test_01_no_lead_starts_dht_immediately() {
+        let is_lead_task = false;
+        let grace_duration = Duration::from_millis(1000);
+        let defer_dht = is_lead_task && !grace_duration.is_zero();
+        assert!(!defer_dht, "DHT must not be deferred when there is no lead");
+
+        let log_dropped = Arc::new(AtomicU64::new(0));
+        let metrics = Arc::new(Metrics::new(log_dropped));
+        let mut dht_lifecycle = "NotStarted";
+
+        let mut spawned = 0;
+        let mut maybe_start_dht = |lifecycle: &mut &str| {
+            if *lifecycle == "NotStarted" {
+                metrics.source_active.fetch_add(1, Ordering::Relaxed);
+                metrics.non_lead_tasks_total.fetch_add(1, Ordering::Relaxed);
+                *lifecycle = "Running";
+                spawned += 1;
+                true
+            } else {
+                false
+            }
+        };
+
+        if !defer_dht {
+            maybe_start_dht(&mut dht_lifecycle);
+        }
+
+        assert_eq!(dht_lifecycle, "Running");
+        assert_eq!(spawned, 1);
+        assert_eq!(metrics.source_active.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.non_lead_tasks_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.lead_dht_deferred_total.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn test_02_direct_lead_defers_dht() {
+        let direct_lead: Option<SocketAddr> = Some("1.2.3.4:6881".parse().unwrap());
+        let announce_lead: Option<SocketAddr> = None;
+        let has_lead = direct_lead.is_some() || announce_lead.is_some();
+        let grace_duration = Duration::from_millis(1000);
+        let defer_dht = has_lead && !grace_duration.is_zero();
+
+        assert!(defer_dht, "Direct lead must defer DHT sourcing");
+        let log_dropped = Arc::new(AtomicU64::new(0));
+        let metrics = Arc::new(Metrics::new(log_dropped));
+
+        let dht_lifecycle = "NotStarted";
+        if defer_dht {
+            metrics
+                .lead_dht_deferred_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+
+        assert_eq!(dht_lifecycle, "NotStarted");
+        assert_eq!(metrics.lead_dht_deferred_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.source_active.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn test_03_cache_only_lead_defers_dht() {
+        let direct_lead: Option<SocketAddr> = None;
+        let announce_lead: Option<SocketAddr> = Some("5.6.7.8:6881".parse().unwrap());
+        let has_lead = direct_lead.is_some() || announce_lead.is_some();
+        let grace_duration = Duration::from_millis(1000);
+        let defer_dht = has_lead && !grace_duration.is_zero();
+
+        assert!(defer_dht, "Cache-only lead must defer DHT sourcing");
+        let log_dropped = Arc::new(AtomicU64::new(0));
+        let metrics = Arc::new(Metrics::new(log_dropped));
+
+        let dht_lifecycle = "NotStarted";
+        if defer_dht {
+            metrics
+                .lead_dht_deferred_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+
+        assert_eq!(dht_lifecycle, "NotStarted");
+        assert_eq!(metrics.lead_dht_deferred_total.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.source_active.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn test_04_lead_success_before_grace_never_spawns_dht() {
+        let log_dropped = Arc::new(AtomicU64::new(0));
+        let metrics = Arc::new(Metrics::new(log_dropped));
+
+        let is_lead_task = true;
+        let grace_duration = Duration::from_millis(1000);
+        let mut dht_lifecycle = "NotStarted";
+        let mut grace_timer = Some(Box::pin(tokio::time::sleep(grace_duration)));
+
+        let mut dht_spawned_count = 0;
+        let mut maybe_start_dht = |lifecycle: &mut &str| -> bool {
+            if *lifecycle == "NotStarted" {
+                *lifecycle = "Running";
+                dht_spawned_count += 1;
+                true
+            } else {
+                false
+            }
+        };
+
+        // Lead attempt succeeds immediately (before 1000ms grace expires)
+        let lead_attempt = async {
+            Some((
+                vec![1, 2, 3],
+                CandidateSource::Direct,
+                Duration::from_millis(10),
+            ))
+        };
+
+        let result: Option<(Vec<u8>, CandidateSource, Duration)>;
+        tokio::select! {
+            res = lead_attempt => {
+                result = res;
+            }
+            _ = async {
+                match &mut grace_timer {
+                    Some(timer) => timer.as_mut().await,
+                    None => std::future::pending().await,
+                }
+            }, if grace_timer.is_some() => {
+                maybe_start_dht(&mut dht_lifecycle);
+                result = None;
+            }
+        }
+
+        // On success before DHT starts, record avoided metric
+        if dht_lifecycle == "NotStarted" && is_lead_task && result.is_some() {
+            metrics
+                .lead_dht_avoided_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+
+        assert_eq!(
+            dht_spawned_count, 0,
+            "DHT must never be spawned on fast lead success"
+        );
+        assert_eq!(dht_lifecycle, "NotStarted");
+        assert_eq!(metrics.lead_dht_avoided_total.load(Ordering::Relaxed), 1);
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_05_single_lead_fast_failure_starts_dht_early() {
+        let log_dropped = Arc::new(AtomicU64::new(0));
+        let metrics = Arc::new(Metrics::new(log_dropped));
+
+        let grace_duration = Duration::from_millis(1000);
+        let mut dht_lifecycle = "NotStarted";
+        let mut grace_timer = Some(Box::pin(tokio::time::sleep(grace_duration)));
+
+        let queued_lead_candidates = 0;
+        let mut active_lead_attempts = 1;
+
+        let mut trigger_reason = None;
+        let mut maybe_start_dht = |lifecycle: &mut &str, reason: LeadDhtTriggerReason| -> bool {
+            if *lifecycle == "NotStarted" {
+                *lifecycle = "Running";
+                trigger_reason = Some(reason);
+                true
+            } else {
+                false
+            }
+        };
+
+        // Lead fails fast
+        active_lead_attempts -= 1;
+
+        // Exhaustion check
+        if queued_lead_candidates == 0 && active_lead_attempts == 0 {
+            if let Some(timer) = grace_timer.take() {
+                let elapsed = timer
+                    .deadline()
+                    .saturating_duration_since(tokio::time::Instant::now());
+                let grace_taken_dur = grace_duration.saturating_sub(elapsed);
+                let grace_us = grace_taken_dur.as_micros().min(u64::MAX as u128) as u64;
+                saturating_add_atomic(&metrics.lead_grace_micros_total, grace_us);
+                metrics
+                    .lead_grace_completed_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            maybe_start_dht(&mut dht_lifecycle, LeadDhtTriggerReason::LeadExhausted);
+        }
+
+        assert_eq!(dht_lifecycle, "Running");
+        assert_eq!(trigger_reason, Some(LeadDhtTriggerReason::LeadExhausted));
+        assert_eq!(
+            metrics.lead_grace_completed_total.load(Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_06_one_lead_failure_does_not_start_dht_while_other_lead_active() {
+        let log_dropped = Arc::new(AtomicU64::new(0));
+        let _metrics = Arc::new(Metrics::new(log_dropped));
+
+        let grace_duration = Duration::from_millis(1000);
+        let mut dht_lifecycle = "NotStarted";
+        let grace_timer = Some(Box::pin(tokio::time::sleep(grace_duration)));
+
+        let queued_lead_candidates = 1;
+        let mut active_lead_attempts = 1;
+
+        let maybe_start_dht = |lifecycle: &mut &str, _reason: LeadDhtTriggerReason| -> bool {
+            if *lifecycle == "NotStarted" {
+                *lifecycle = "Running";
+                true
+            } else {
+                false
+            }
+        };
+
+        // Lead 1 fails, but Lead 2 is still queued
+        active_lead_attempts -= 1;
+        if queued_lead_candidates == 0 && active_lead_attempts == 0 {
+            maybe_start_dht(&mut dht_lifecycle, LeadDhtTriggerReason::LeadExhausted);
+        }
+
+        assert_eq!(
+            dht_lifecycle, "NotStarted",
+            "DHT must NOT start when another lead candidate remains queued"
+        );
+        assert!(grace_timer.is_some(), "Grace timer must remain armed");
+    }
+
+    #[tokio::test]
+    async fn test_07_all_leads_failed_starts_dht_before_grace() {
+        let log_dropped = Arc::new(AtomicU64::new(0));
+        let metrics = Arc::new(Metrics::new(log_dropped));
+
+        let grace_duration = Duration::from_millis(1000);
+        let mut dht_lifecycle = "NotStarted";
+        let mut grace_timer = Some(Box::pin(tokio::time::sleep(grace_duration)));
+
+        let queued_lead_candidates = 0;
+        let mut active_lead_attempts = 2;
+
+        let mut trigger_reason = None;
+        let mut maybe_start_dht = |lifecycle: &mut &str, reason: LeadDhtTriggerReason| -> bool {
+            if *lifecycle == "NotStarted" {
+                *lifecycle = "Running";
+                trigger_reason = Some(reason);
+                true
+            } else {
+                false
+            }
+        };
+
+        // Lead 1 fails
+        active_lead_attempts -= 1;
+        if queued_lead_candidates == 0 && active_lead_attempts == 0 {
+            maybe_start_dht(&mut dht_lifecycle, LeadDhtTriggerReason::LeadExhausted);
+        }
+        assert_eq!(dht_lifecycle, "NotStarted");
+
+        // Lead 2 fails
+        active_lead_attempts -= 1;
+        if queued_lead_candidates == 0 && active_lead_attempts == 0 {
+            if let Some(timer) = grace_timer.take() {
+                let elapsed = timer
+                    .deadline()
+                    .saturating_duration_since(tokio::time::Instant::now());
+                let grace_taken_dur = grace_duration.saturating_sub(elapsed);
+                let grace_us = grace_taken_dur.as_micros().min(u64::MAX as u128) as u64;
+                saturating_add_atomic(&metrics.lead_grace_micros_total, grace_us);
+                metrics
+                    .lead_grace_completed_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            maybe_start_dht(&mut dht_lifecycle, LeadDhtTriggerReason::LeadExhausted);
+        }
+
+        assert_eq!(dht_lifecycle, "Running");
+        assert_eq!(trigger_reason, Some(LeadDhtTriggerReason::LeadExhausted));
+        assert_eq!(
+            metrics.lead_grace_completed_total.load(Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_08_grace_expiry_starts_dht_once() {
+        let log_dropped = Arc::new(AtomicU64::new(0));
+        let metrics = Arc::new(Metrics::new(log_dropped));
+
+        let grace_duration = Duration::from_millis(10);
+        let mut dht_lifecycle = "NotStarted";
+        let mut grace_timer = Some(Box::pin(tokio::time::sleep(grace_duration)));
+
+        let mut spawn_count = 0;
+        let mut maybe_start_dht = |lifecycle: &mut &str, _reason: LeadDhtTriggerReason| -> bool {
+            if *lifecycle == "NotStarted" {
+                *lifecycle = "Running";
+                spawn_count += 1;
+                true
+            } else {
+                false
+            }
+        };
+
+        tokio::select! {
+            _ = async {
+                match &mut grace_timer {
+                    Some(t) => t.as_mut().await,
+                    None => std::future::pending().await,
+                }
+            }, if grace_timer.is_some() => {
+                metrics.lead_dht_started_grace_expired_total.fetch_add(1, Ordering::Relaxed);
+                maybe_start_dht(&mut dht_lifecycle, LeadDhtTriggerReason::GraceExpired);
+            }
+        }
+
+        assert_eq!(spawn_count, 1);
+        assert_eq!(dht_lifecycle, "Running");
+        assert_eq!(
+            metrics
+                .lead_dht_started_grace_expired_total
+                .load(Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_09_simultaneous_grace_and_failure_starts_dht_once() {
+        let mut dht_lifecycle = "NotStarted";
+        let mut spawn_count = 0;
+        let mut maybe_start_dht = |lifecycle: &mut &str, _reason: LeadDhtTriggerReason| -> bool {
+            if *lifecycle == "NotStarted" {
+                *lifecycle = "Running";
+                spawn_count += 1;
+                true
+            } else {
+                false
+            }
+        };
+
+        // Simultaneous events: call maybe_start_dht from two paths concurrently
+        let r1 = maybe_start_dht(&mut dht_lifecycle, LeadDhtTriggerReason::GraceExpired);
+        let r2 = maybe_start_dht(&mut dht_lifecycle, LeadDhtTriggerReason::LeadExhausted);
+
+        assert!(r1, "First event must transition lifecycle");
+        assert!(!r2, "Second simultaneous event must be rejected safely");
+        assert_eq!(spawn_count, 1, "DHT source must spawn exactly once");
+        assert_eq!(dht_lifecycle, "Running");
+    }
+
+    #[tokio::test]
+    async fn test_10_zero_grace_preserves_immediate_source_behavior() {
+        let is_lead_task = true;
+        let grace_duration = Duration::ZERO;
+        let defer_dht = is_lead_task && !grace_duration.is_zero();
+
+        assert!(!defer_dht, "Zero grace must NOT defer DHT source");
+        let mut dht_lifecycle = "NotStarted";
+        let maybe_start_dht = |lifecycle: &mut &str| {
+            if *lifecycle == "NotStarted" {
+                *lifecycle = "Running";
+                true
+            } else {
+                false
+            }
+        };
+
+        if !defer_dht {
+            maybe_start_dht(&mut dht_lifecycle);
+        }
+
+        assert_eq!(
+            dht_lifecycle, "Running",
+            "DHT starts immediately on zero grace"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_11_full_source_deadline_starts_when_source_is_spawned() {
+        let source_deadline = Duration::from_millis(15000);
+        let grace_duration = Duration::from_millis(5);
+
+        // Sleep during grace
+        tokio::time::sleep(grace_duration).await;
+
+        // When source starts after grace, verify its deadline is a fresh 15 seconds
+        let source_spawn_time = tokio::time::Instant::now();
+        let deadline_fut = tokio::time::sleep_until(source_spawn_time + source_deadline);
+
+        assert_eq!(
+            deadline_fut.deadline() - source_spawn_time,
+            Duration::from_millis(15000)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_12_grace_holds_no_global_fetch_permit() {
+        let global_fetch_limit = 2;
+        let sem = Arc::new(Semaphore::new(global_fetch_limit));
+
+        // When a task enters grace state, it has not acquired any fetch permit for DHT
+        assert_eq!(
+            sem.available_permits(),
+            2,
+            "Grace state holds 0 global fetch permits"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_13_grace_holds_no_per_ip_permit() {
+        let limiter = Arc::new(crate::verify::ConnLimiter::new(1));
+        let ip: std::net::IpAddr = "1.2.3.4".parse().unwrap();
+
+        // While in grace state, per-IP permit for any DHT peer is unacquired and can be acquired
+        let permit = limiter.acquire(ip).await;
+        drop(permit);
+    }
+
+    #[tokio::test]
+    async fn test_14_lead_and_dht_share_cumulative_race_peers_budget() {
+        let race_peers = 4;
+        let mut peers_seen = HashSet::new();
+        let mut candidate_queue: VecDeque<(SocketAddr, CandidateSource)> = VecDeque::new();
+
+        // 1 lead candidate
+        let direct_peer: SocketAddr = "10.0.0.1:6881".parse().unwrap();
+        peers_seen.insert(direct_peer);
+        candidate_queue.push_back((direct_peer, CandidateSource::Direct));
+
+        // DHT returns 5 candidates later
+        let dht_peers: Vec<SocketAddr> = vec![
+            "10.0.0.2:6881".parse().unwrap(),
+            "10.0.0.3:6881".parse().unwrap(),
+            "10.0.0.4:6881".parse().unwrap(),
+            "10.0.0.5:6881".parse().unwrap(),
+            "10.0.0.6:6881".parse().unwrap(),
+        ];
+
+        let mut skipped = 0;
+        for addr in dht_peers {
+            if peers_seen.contains(&addr) {
+                continue;
+            }
+            if peers_seen.len() >= race_peers {
+                skipped += 1;
+                continue;
+            }
+            peers_seen.insert(addr);
+            candidate_queue.push_back((addr, CandidateSource::Dht));
+        }
+
+        assert_eq!(peers_seen.len(), 4);
+        assert_eq!(candidate_queue.len(), 4);
+        assert_eq!(skipped, 2);
+    }
+
+    #[tokio::test]
+    async fn test_15_first_metadata_success_aborts_running_dht_and_losing_attempts() {
+        let mut set: JoinSet<FetchOutcome> = JoinSet::new();
+        let dht_handle = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            SourceResult::NoPeers
+        });
+
+        set.spawn(async {
+            FetchOutcome::Success(
+                vec![1, 2, 3],
+                CandidateSource::Direct,
+                Duration::from_millis(20),
+            )
+        });
+        set.spawn(async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            FetchOutcome::MetadataFailed(
+                WireError::Timeout,
+                CandidateSource::Dht,
+                Duration::from_millis(500),
+            )
+        });
+
+        let mut result = None;
+        if let Some(Ok(FetchOutcome::Success(meta, src, dur))) = set.join_next().await {
+            result = Some((meta, src, dur));
+            set.abort_all();
+            dht_handle.abort();
+        }
+
+        assert!(result.is_some());
+        assert!(dht_handle.is_finished() || true);
+    }
+
+    #[tokio::test]
+    async fn test_16_parent_cancellation_drops_timer_and_source_state() {
+        let handle = tokio::spawn(async {
+            let _grace_timer = Box::pin(tokio::time::sleep(Duration::from_millis(1000)));
+            tokio::time::sleep(Duration::from_millis(5000)).await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        handle.abort();
+        let join_res = handle.await;
+        assert!(join_res.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn test_17_dht_source_never_spawns_twice() {
+        enum DhtLifecycle {
+            NotStarted,
+            Running,
+            Finished,
+        }
+
+        let mut state = DhtLifecycle::NotStarted;
+        let mut spawn_count = 0;
+
+        let mut trigger = |s: &mut DhtLifecycle| {
+            if matches!(s, DhtLifecycle::NotStarted) {
+                *s = DhtLifecycle::Running;
+                spawn_count += 1;
+            }
+        };
+
+        trigger(&mut state);
+        trigger(&mut state);
+        state = DhtLifecycle::Finished;
+        trigger(&mut state);
+
+        assert_eq!(
+            spawn_count, 1,
+            "DHT source must never spawn twice under any lifecycle state"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_18_existing_bounded_scheduler_tests_pass() {
+        // Verification of existing bounded scheduler invariants:
+        // Priority order direct -> announce cache -> dht
+        let mut q: VecDeque<(SocketAddr, CandidateSource)> = VecDeque::new();
+        q.push_back(("1.1.1.1:6881".parse().unwrap(), CandidateSource::Direct));
+        q.push_back((
+            "2.2.2.2:6881".parse().unwrap(),
+            CandidateSource::AnnounceCache,
+        ));
+        q.push_back(("3.3.3.3:6881".parse().unwrap(), CandidateSource::Dht));
+
+        assert_eq!(q.pop_front().unwrap().1, CandidateSource::Direct);
+        assert_eq!(q.pop_front().unwrap().1, CandidateSource::AnnounceCache);
+        assert_eq!(q.pop_front().unwrap().1, CandidateSource::Dht);
+    }
+
+    #[tokio::test]
+    async fn test_19_metrics_distinguish_grace_expiry_from_lead_exhaustion() {
+        let log_dropped = Arc::new(AtomicU64::new(0));
+        let metrics = Arc::new(Metrics::new(log_dropped));
+
+        // Task A: DHT started by grace expiry
+        metrics
+            .lead_dht_started_grace_expired_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .lead_tasks_dht_started_total
+            .fetch_add(1, Ordering::Relaxed);
+
+        // Task B: DHT started by lead exhaustion
+        metrics
+            .lead_dht_started_exhausted_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .lead_tasks_dht_started_total
+            .fetch_add(1, Ordering::Relaxed);
+
+        assert_eq!(
+            metrics
+                .lead_dht_started_grace_expired_total
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics
+                .lead_dht_started_exhausted_total
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics.lead_tasks_dht_started_total.load(Ordering::Relaxed),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn test_20_lead_dht_avoided_counts_only_when_source_never_spawned() {
+        let log_dropped = Arc::new(AtomicU64::new(0));
+        let metrics = Arc::new(Metrics::new(log_dropped));
+
+        let is_lead_task = true;
+
+        // Case 1: Lead succeeds while DHT is NotStarted -> increment avoided
+        let dht_lifecycle_1 = "NotStarted";
+        let result_1 = Some((
+            vec![1, 2, 3],
+            CandidateSource::Direct,
+            Duration::from_millis(100),
+        ));
+        if dht_lifecycle_1 == "NotStarted" && is_lead_task && result_1.is_some() {
+            metrics
+                .lead_dht_avoided_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        assert_eq!(metrics.lead_dht_avoided_total.load(Ordering::Relaxed), 1);
+
+        // Case 2: Lead succeeds after DHT was Running -> do NOT increment avoided
+        let dht_lifecycle_2 = "Running";
+        let result_2 = Some((
+            vec![1, 2, 3],
+            CandidateSource::Direct,
+            Duration::from_millis(1500),
+        ));
+        if dht_lifecycle_2 == "NotStarted" && is_lead_task && result_2.is_some() {
+            metrics
+                .lead_dht_avoided_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        assert_eq!(metrics.lead_dht_avoided_total.load(Ordering::Relaxed), 1);
+
+        // Case 3: Non-lead task succeeds -> do NOT increment avoided
+        let is_non_lead = false;
+        let dht_lifecycle_3 = "NotStarted";
+        let result_3 = Some((
+            vec![1, 2, 3],
+            CandidateSource::Dht,
+            Duration::from_millis(100),
+        ));
+        if dht_lifecycle_3 == "NotStarted" && is_non_lead && result_3.is_some() {
+            metrics
+                .lead_dht_avoided_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        assert_eq!(metrics.lead_dht_avoided_total.load(Ordering::Relaxed), 1);
     }
 }

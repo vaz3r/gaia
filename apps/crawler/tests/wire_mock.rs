@@ -122,7 +122,10 @@ async fn test_non_metadata_extension_before_piece() {
 
         let mut client_hs = [0u8; HANDSHAKE_LEN];
         stream.read_exact(&mut client_hs).await.unwrap();
-        stream.write_all(&server_handshake(&info_hash)).await.unwrap();
+        stream
+            .write_all(&server_handshake(&info_hash))
+            .await
+            .unwrap();
 
         let (_ext_id, payload) = skip_until_extended(&mut stream).await;
         let (dict, _) = decode_prefix(&payload).unwrap();
@@ -150,15 +153,23 @@ async fn test_non_metadata_extension_before_piece() {
     });
 
     let peer_id = crawler::verify::wire::gen_peer_id();
-    let mut session =
-        crawler::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
-            .await
-            .unwrap();
+    let mut session = crawler::verify::wire::WireSession::connect_tcp(
+        addr,
+        &info_hash,
+        &peer_id,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
 
     let result = session
         .fetch_metadata(std::time::Duration::from_secs(5))
         .await;
-    assert!(result.is_ok(), "fetch_metadata should succeed even with ut_pex before piece: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "fetch_metadata should succeed even with ut_pex before piece: {:?}",
+        result.err()
+    );
     assert_eq!(result.unwrap(), expected);
 
     server.await.unwrap();
@@ -179,7 +190,10 @@ async fn test_wrong_piece_number_returns_bad_piece() {
 
         let mut client_hs = [0u8; HANDSHAKE_LEN];
         stream.read_exact(&mut client_hs).await.unwrap();
-        stream.write_all(&server_handshake(&info_hash)).await.unwrap();
+        stream
+            .write_all(&server_handshake(&info_hash))
+            .await
+            .unwrap();
 
         let (_ext_id, _payload) = skip_until_extended(&mut stream).await;
         stream
@@ -211,15 +225,22 @@ async fn test_wrong_piece_number_returns_bad_piece() {
     });
 
     let peer_id = crawler::verify::wire::gen_peer_id();
-    let mut session =
-        crawler::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
-            .await
-            .unwrap();
+    let mut session = crawler::verify::wire::WireSession::connect_tcp(
+        addr,
+        &info_hash,
+        &peer_id,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
 
     let result = session
         .fetch_metadata(std::time::Duration::from_secs(5))
         .await;
-    assert!(matches!(result, Err(crawler::verify::wire::WireError::BadPiece)));
+    assert!(matches!(
+        result,
+        Err(crawler::verify::wire::WireError::BadPiece)
+    ));
 
     server.await.unwrap();
 }
@@ -241,7 +262,10 @@ async fn test_clean_mock_peer_metadata_success() {
 
         let mut client_hs = [0u8; HANDSHAKE_LEN];
         stream.read_exact(&mut client_hs).await.unwrap();
-        stream.write_all(&server_handshake(&info_hash)).await.unwrap();
+        stream
+            .write_all(&server_handshake(&info_hash))
+            .await
+            .unwrap();
 
         let (_ext_id, _payload) = skip_until_extended(&mut stream).await;
         stream
@@ -270,15 +294,23 @@ async fn test_clean_mock_peer_metadata_success() {
     });
 
     let peer_id = crawler::verify::wire::gen_peer_id();
-    let mut session =
-        crawler::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
-            .await
-            .unwrap();
+    let mut session = crawler::verify::wire::WireSession::connect_tcp(
+        addr,
+        &info_hash,
+        &peer_id,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
 
     let result = session
         .fetch_metadata(std::time::Duration::from_secs(5))
         .await;
-    assert!(result.is_ok(), "Clean mock peer should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Clean mock peer should succeed: {:?}",
+        result.err()
+    );
     assert_eq!(result.unwrap(), expected);
 
     server.await.unwrap();
@@ -298,7 +330,10 @@ async fn test_peer_rejects_metadata_request() {
 
         let mut client_hs = [0u8; HANDSHAKE_LEN];
         stream.read_exact(&mut client_hs).await.unwrap();
-        stream.write_all(&server_handshake(&info_hash)).await.unwrap();
+        stream
+            .write_all(&server_handshake(&info_hash))
+            .await
+            .unwrap();
 
         let (_ext_id, _payload) = skip_until_extended(&mut stream).await;
         stream
@@ -319,15 +354,22 @@ async fn test_peer_rejects_metadata_request() {
     });
 
     let peer_id = crawler::verify::wire::gen_peer_id();
-    let mut session =
-        crawler::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
-            .await
-            .unwrap();
+    let mut session = crawler::verify::wire::WireSession::connect_tcp(
+        addr,
+        &info_hash,
+        &peer_id,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
 
     let result = session
         .fetch_metadata(std::time::Duration::from_secs(5))
         .await;
-    assert!(matches!(result, Err(crawler::verify::wire::WireError::Reject)));
+    assert!(matches!(
+        result,
+        Err(crawler::verify::wire::WireError::Reject)
+    ));
 
     server.await.unwrap();
 }
@@ -349,7 +391,10 @@ async fn test_multiple_non_metadata_messages_before_piece() {
 
         let mut client_hs = [0u8; HANDSHAKE_LEN];
         stream.read_exact(&mut client_hs).await.unwrap();
-        stream.write_all(&server_handshake(&info_hash)).await.unwrap();
+        stream
+            .write_all(&server_handshake(&info_hash))
+            .await
+            .unwrap();
 
         let (_ext_id, _payload) = skip_until_extended(&mut stream).await;
         stream
@@ -360,10 +405,7 @@ async fn test_multiple_non_metadata_messages_before_piece() {
         let (_ext_id, _payload) = skip_until_extended(&mut stream).await;
 
         for i in 0..5 {
-            let fake_msg = BValue::dict(vec![(
-                Bytes::from_static(b"fake"),
-                BValue::Int(i),
-            )]);
+            let fake_msg = BValue::dict(vec![(Bytes::from_static(b"fake"), BValue::Int(i))]);
             let fake_bytes = encode_ext_message(2, &fake_msg);
             stream.write_all(&fake_bytes).await.unwrap();
         }
@@ -375,15 +417,23 @@ async fn test_multiple_non_metadata_messages_before_piece() {
     });
 
     let peer_id = crawler::verify::wire::gen_peer_id();
-    let mut session =
-        crawler::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
-            .await
-            .unwrap();
+    let mut session = crawler::verify::wire::WireSession::connect_tcp(
+        addr,
+        &info_hash,
+        &peer_id,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
 
     let result = session
         .fetch_metadata(std::time::Duration::from_secs(5))
         .await;
-    assert!(result.is_ok(), "Should skip 5 non-metadata messages and succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Should skip 5 non-metadata messages and succeed: {:?}",
+        result.err()
+    );
     assert_eq!(result.unwrap(), expected);
 
     server.await.unwrap();
@@ -405,7 +455,10 @@ async fn test_reject_then_piece() {
 
         let mut client_hs = [0u8; HANDSHAKE_LEN];
         stream.read_exact(&mut client_hs).await.unwrap();
-        stream.write_all(&server_handshake(&info_hash)).await.unwrap();
+        stream
+            .write_all(&server_handshake(&info_hash))
+            .await
+            .unwrap();
 
         let (_ext_id, _payload) = skip_until_extended(&mut stream).await;
         stream
@@ -426,15 +479,22 @@ async fn test_reject_then_piece() {
     });
 
     let peer_id = crawler::verify::wire::gen_peer_id();
-    let mut session =
-        crawler::verify::wire::WireSession::connect_tcp(addr, &info_hash, &peer_id, std::time::Duration::from_secs(5))
-            .await
-            .unwrap();
+    let mut session = crawler::verify::wire::WireSession::connect_tcp(
+        addr,
+        &info_hash,
+        &peer_id,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
 
     let result = session
         .fetch_metadata(std::time::Duration::from_secs(5))
         .await;
-    assert!(matches!(result, Err(crawler::verify::wire::WireError::Reject)));
+    assert!(matches!(
+        result,
+        Err(crawler::verify::wire::WireError::Reject)
+    ));
 
     server.await.unwrap();
 }

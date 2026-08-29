@@ -74,7 +74,10 @@ impl BatchWriter {
 
     pub fn push_torrent(&self, ih: Infohash, metadata: &[u8]) {
         let p = parse_info_dict(metadata);
-        let mut buf = self.torrents.lock().expect("batch writer torrents poisoned");
+        let mut buf = self
+            .torrents
+            .lock()
+            .expect("batch writer torrents poisoned");
         buf.push(TorrentEntry {
             ih,
             name: p.name,
@@ -107,7 +110,10 @@ impl BatchWriter {
             buf.drain(..).collect()
         };
         let torrent_batch: Vec<TorrentEntry> = {
-            let mut buf = self.torrents.lock().expect("batch writer torrents poisoned");
+            let mut buf = self
+                .torrents
+                .lock()
+                .expect("batch writer torrents poisoned");
             buf.drain(..).collect()
         };
 
@@ -197,7 +203,11 @@ async fn flush_jobs(
         .copied()
         .collect();
 
-    let no_peers_terminal = if no_peers_terminal_on_first { "true" } else { "false" };
+    let no_peers_terminal = if no_peers_terminal_on_first {
+        "true"
+    } else {
+        "false"
+    };
     let no_metadata_limit = no_metadata_max_retries.max(0);
     for chunk in unique_failed.chunks(flush_chunk) {
         let n = chunk.len();

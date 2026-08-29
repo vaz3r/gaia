@@ -1,5 +1,5 @@
 use crate::dht::node_id::SybilPool;
-use crate::dht::routing_table::{NodeInfo, RoutingTable, encode_compact, cmp_xor, xor};
+use crate::dht::routing_table::{NodeInfo, RoutingTable, cmp_xor, encode_compact, xor};
 use crate::harvest::{HarvestEvent, Source};
 use crate::krpc::codec::BValue;
 use crate::krpc::message::{ANNOUNCE_PEER, FIND_NODE, GET_PEERS, Kind, Message, PING};
@@ -62,7 +62,7 @@ impl Router {
         table: Arc<Mutex<RoutingTable>>,
         harvest_tx: mpsc::Sender<HarvestEvent>,
         metrics: Arc<Metrics>,
-    find_node_response_percent: u8,
+        find_node_response_percent: u8,
     ) -> Arc<Self> {
         Arc::new(Router {
             self_id,
@@ -108,7 +108,10 @@ impl Router {
                     }
                     if q == FIND_NODE {
                         if self.find_node_response_percent < 100
-                            && !crate::router::should_answer(self.find_node_response_percent, rand::random::<u16>())
+                            && !crate::router::should_answer(
+                                self.find_node_response_percent,
+                                rand::random::<u16>(),
+                            )
                         {
                             self.metrics.inbound_find_node_dropped.add(1);
                             return;
@@ -302,19 +305,12 @@ impl Router {
         self.metrics.infohashes_harvested.add(1);
         if self
             .harvest_tx
-            .try_send(HarvestEvent {
-                ih,
-                source,
-                direct,
-            })
+            .try_send(HarvestEvent { ih, source, direct })
             .is_err()
         {
             self.metrics.harvest_try_send_dropped.add(1);
         }
     }
-
-
-
 
     fn extract_target(buf: &[u8]) -> Option<[u8; 20]> {
         let pat = b"6:target20:";
@@ -322,7 +318,7 @@ impl Router {
             let start = pos + pat.len();
             if start + 20 <= buf.len() {
                 let mut t = [0u8; 20];
-                t.copy_from_slice(&buf[start..start+20]);
+                t.copy_from_slice(&buf[start..start + 20]);
                 return Some(t);
             }
         }
@@ -335,46 +331,46 @@ impl Router {
             SybilPool::Bep42 => self.metrics.inbound_find_node_bep42.add(1),
             SybilPool::Random => self.metrics.inbound_find_node_random.add(1),
         }
-        
+
         let nodes = self.closest_phantom(target, 8);
         let compact = crate::dht::routing_table::encode_compact(&nodes);
-        
+
         let mut buf = [0u8; 512];
         let mut pos = 0;
-        
+
         let b1 = b"d1:rd2:id20:";
-        buf[pos..pos+b1.len()].copy_from_slice(b1);
+        buf[pos..pos + b1.len()].copy_from_slice(b1);
         pos += b1.len();
-        
-        buf[pos..pos+20].copy_from_slice(&self.self_id);
+
+        buf[pos..pos + 20].copy_from_slice(&self.self_id);
         pos += 20;
-        
+
         let b2 = b"5:nodes";
-        buf[pos..pos+b2.len()].copy_from_slice(b2);
+        buf[pos..pos + b2.len()].copy_from_slice(b2);
         pos += b2.len();
-        
+
         let mut cursor = std::io::Cursor::new(&mut buf[pos..]);
         write!(cursor, "{}:", compact.len()).unwrap();
         pos += cursor.position() as usize;
-        
-        buf[pos..pos+compact.len()].copy_from_slice(&compact);
+
+        buf[pos..pos + compact.len()].copy_from_slice(&compact);
         pos += compact.len();
-        
+
         let b4 = b"e1:t";
-        buf[pos..pos+b4.len()].copy_from_slice(b4);
+        buf[pos..pos + b4.len()].copy_from_slice(b4);
         pos += b4.len();
-        
+
         let mut cursor = std::io::Cursor::new(&mut buf[pos..]);
         write!(cursor, "{}:", t.len()).unwrap();
         pos += cursor.position() as usize;
-        
-        buf[pos..pos+t.len()].copy_from_slice(t);
+
+        buf[pos..pos + t.len()].copy_from_slice(t);
         pos += t.len();
-        
+
         let b5 = b"1:y1:re";
-        buf[pos..pos+b5.len()].copy_from_slice(b5);
+        buf[pos..pos + b5.len()].copy_from_slice(b5);
         pos += b5.len();
-        
+
         self.try_send(&buf[..pos], from);
     }
 
@@ -384,7 +380,7 @@ impl Router {
             let start = pos + target.len();
             if start + 20 <= buf.len() {
                 let mut ih = [0u8; 20];
-                ih.copy_from_slice(&buf[start..start+20]);
+                ih.copy_from_slice(&buf[start..start + 20]);
                 return Some(ih);
             }
         }
@@ -400,53 +396,53 @@ impl Router {
         self.do_harvest(*ih, crate::harvest::Source::GetPeers, None);
         let token = self.token.read().expect("token").generate(from.ip());
         self.metrics.tokens_issued.add(1);
-        
+
         let nodes = self.closest_phantom(ih, 8);
         let compact = crate::dht::routing_table::encode_compact(&nodes);
-        
+
         let mut buf = [0u8; 512];
         let mut pos = 0;
-        
+
         let b1 = b"d1:rd2:id20:";
-        buf[pos..pos+b1.len()].copy_from_slice(b1);
+        buf[pos..pos + b1.len()].copy_from_slice(b1);
         pos += b1.len();
-        
-        buf[pos..pos+20].copy_from_slice(&self.self_id);
+
+        buf[pos..pos + 20].copy_from_slice(&self.self_id);
         pos += 20;
-        
+
         let b2 = b"5:nodes";
-        buf[pos..pos+b2.len()].copy_from_slice(b2);
+        buf[pos..pos + b2.len()].copy_from_slice(b2);
         pos += b2.len();
-        
+
         let mut cursor = std::io::Cursor::new(&mut buf[pos..]);
         write!(cursor, "{}:", compact.len()).unwrap();
         pos += cursor.position() as usize;
-        
-        buf[pos..pos+compact.len()].copy_from_slice(&compact);
+
+        buf[pos..pos + compact.len()].copy_from_slice(&compact);
         pos += compact.len();
-        
+
         let b3 = b"5:token8:";
-        buf[pos..pos+b3.len()].copy_from_slice(b3);
+        buf[pos..pos + b3.len()].copy_from_slice(b3);
         pos += b3.len();
-        
-        buf[pos..pos+8].copy_from_slice(&token);
+
+        buf[pos..pos + 8].copy_from_slice(&token);
         pos += 8;
-        
+
         let b4 = b"e1:t";
-        buf[pos..pos+b4.len()].copy_from_slice(b4);
+        buf[pos..pos + b4.len()].copy_from_slice(b4);
         pos += b4.len();
-        
+
         let mut cursor = std::io::Cursor::new(&mut buf[pos..]);
         write!(cursor, "{}:", t.len()).unwrap();
         pos += cursor.position() as usize;
-        
-        buf[pos..pos+t.len()].copy_from_slice(t);
+
+        buf[pos..pos + t.len()].copy_from_slice(t);
         pos += t.len();
-        
+
         let b5 = b"1:y1:re";
-        buf[pos..pos+b5.len()].copy_from_slice(b5);
+        buf[pos..pos + b5.len()].copy_from_slice(b5);
         pos += b5.len();
-        
+
         self.try_send(&buf[..pos], from);
     }
 
@@ -455,24 +451,24 @@ impl Router {
         let mut buf = [0u8; 128];
         let mut pos = 0;
         let b1 = b"d1:rd2:id20:";
-        buf[pos..pos+b1.len()].copy_from_slice(b1);
+        buf[pos..pos + b1.len()].copy_from_slice(b1);
         pos += b1.len();
-        buf[pos..pos+20].copy_from_slice(&self.self_id);
+        buf[pos..pos + 20].copy_from_slice(&self.self_id);
         pos += 20;
         let b2 = b"e1:t";
-        buf[pos..pos+b2.len()].copy_from_slice(b2);
+        buf[pos..pos + b2.len()].copy_from_slice(b2);
         pos += b2.len();
-        
+
         let mut cursor = std::io::Cursor::new(&mut buf[pos..]);
         write!(cursor, "{}:", t.len()).unwrap();
         let written = cursor.position() as usize;
         pos += written;
-        
+
         if pos + t.len() + 7 <= buf.len() {
-            buf[pos..pos+t.len()].copy_from_slice(t);
+            buf[pos..pos + t.len()].copy_from_slice(t);
             pos += t.len();
             let b3 = b"1:y1:re";
-            buf[pos..pos+b3.len()].copy_from_slice(b3);
+            buf[pos..pos + b3.len()].copy_from_slice(b3);
             pos += b3.len();
             self.try_send(&buf[..pos], from);
         }
@@ -498,7 +494,6 @@ impl Router {
         }
     }
 
-
     pub async fn send_find_node_fast(
         &self,
         addr: SocketAddr,
@@ -506,99 +501,112 @@ impl Router {
         timeout: Duration,
     ) -> Result<(Vec<NodeInfo>, Vec<NodeInfo>), QueryError> {
         let (txid, rx) = self.register(FIND_NODE);
-        
+
         use std::io::Write;
         let mut buf = [0u8; 256];
         let mut pos = 0;
-        
+
         let b1 = b"d1:ad2:id20:";
-        buf[pos..pos+b1.len()].copy_from_slice(b1);
+        buf[pos..pos + b1.len()].copy_from_slice(b1);
         pos += b1.len();
-        
-        buf[pos..pos+20].copy_from_slice(&self.self_id);
+
+        buf[pos..pos + 20].copy_from_slice(&self.self_id);
         pos += 20;
-        
+
         let b2 = b"6:target20:";
-        buf[pos..pos+b2.len()].copy_from_slice(b2);
+        buf[pos..pos + b2.len()].copy_from_slice(b2);
         pos += b2.len();
-        
-        buf[pos..pos+20].copy_from_slice(target);
+
+        buf[pos..pos + 20].copy_from_slice(target);
         pos += 20;
-        
+
         let b3 = b"e1:q9:find_node1:t";
-        buf[pos..pos+b3.len()].copy_from_slice(b3);
+        buf[pos..pos + b3.len()].copy_from_slice(b3);
         pos += b3.len();
-        
+
         let mut cursor = std::io::Cursor::new(&mut buf[pos..]);
         write!(cursor, "{}:", txid.len()).unwrap();
         pos += cursor.position() as usize;
-        
-        buf[pos..pos+txid.len()].copy_from_slice(&txid);
+
+        buf[pos..pos + txid.len()].copy_from_slice(&txid);
         pos += txid.len();
-        
+
         let b4 = b"1:y1:qe";
-        buf[pos..pos+b4.len()].copy_from_slice(b4);
+        buf[pos..pos + b4.len()].copy_from_slice(b4);
         pos += b4.len();
-        
+
         self.metrics.outbound_queries.add(1);
         if let Err(e) = self.next_socket().send_to(&buf[..pos], addr).await {
             self.tx.take(&txid);
             return Err(QueryError::Io(e));
         }
-        
+
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(bytes)) => {
                 let mut nodes = Vec::new();
                 let mut nodes6 = Vec::new();
-                
+
                 let pat_id = b"2:id20:";
                 if let Some(pos) = bytes.windows(pat_id.len()).position(|w| w == pat_id) {
                     let start = pos + pat_id.len();
                     if start + 20 <= bytes.len() {
                         let mut id = [0u8; 20];
-                        id.copy_from_slice(&bytes[start..start+20]);
+                        id.copy_from_slice(&bytes[start..start + 20]);
                         nodes.push(NodeInfo { id, addr });
                     }
                 }
-                
+
                 let pat_nodes = b"5:nodes";
                 if let Some(pos) = bytes.windows(pat_nodes.len()).position(|w| w == pat_nodes) {
                     let start = pos + pat_nodes.len();
                     let mut colon_pos = 0;
                     for i in start..bytes.len() {
-                        if bytes[i] == b':' { colon_pos = i; break; }
+                        if bytes[i] == b':' {
+                            colon_pos = i;
+                            break;
+                        }
                     }
                     if colon_pos > 0 {
                         if let Ok(len_str) = std::str::from_utf8(&bytes[start..colon_pos]) {
                             if let Ok(len) = len_str.parse::<usize>() {
                                 if colon_pos + 1 + len <= bytes.len() {
-                                    nodes.extend(crate::dht::routing_table::decode_compact(&bytes[colon_pos+1 .. colon_pos+1+len]));
+                                    nodes.extend(crate::dht::routing_table::decode_compact(
+                                        &bytes[colon_pos + 1..colon_pos + 1 + len],
+                                    ));
                                 }
                             }
                         }
                     }
                 }
-                
+
                 let pat_nodes6 = b"6:nodes6";
-                if let Some(pos) = bytes.windows(pat_nodes6.len()).position(|w| w == pat_nodes6) {
+                if let Some(pos) = bytes
+                    .windows(pat_nodes6.len())
+                    .position(|w| w == pat_nodes6)
+                {
                     let start = pos + pat_nodes6.len();
                     let mut colon_pos = 0;
                     for i in start..bytes.len() {
-                        if bytes[i] == b':' { colon_pos = i; break; }
+                        if bytes[i] == b':' {
+                            colon_pos = i;
+                            break;
+                        }
                     }
                     if colon_pos > 0 {
                         if let Ok(len_str) = std::str::from_utf8(&bytes[start..colon_pos]) {
                             if let Ok(len) = len_str.parse::<usize>() {
                                 if colon_pos + 1 + len <= bytes.len() {
-                                    nodes6.extend(crate::dht::routing_table::decode_compact6(&bytes[colon_pos+1 .. colon_pos+1+len]));
+                                    nodes6.extend(crate::dht::routing_table::decode_compact6(
+                                        &bytes[colon_pos + 1..colon_pos + 1 + len],
+                                    ));
                                 }
                             }
                         }
                     }
                 }
-                
+
                 Ok((nodes, nodes6))
-            },
+            }
             Ok(Err(_)) => Err(QueryError::Cancelled),
             Err(_) => {
                 self.tx.take(&txid);
@@ -677,8 +685,13 @@ impl Router {
         }
         self.metrics.routing_new_ids.add(new_ids);
         self.metrics.routing_rejected.add(rejected);
-        self.metrics.routing_table_len.store(table.len() as u64, std::sync::atomic::Ordering::Relaxed);
-        self.metrics.routing_buckets_used.store(table.buckets_used() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.metrics
+            .routing_table_len
+            .store(table.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        self.metrics.routing_buckets_used.store(
+            table.buckets_used() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 
     pub fn routing_nodes(&self) -> Vec<NodeInfo> {
@@ -735,14 +748,14 @@ mod tests {
         assert!(should_answer(100, 50));
         assert!(should_answer(100, 0));
         assert!(should_answer(100, 99));
-        
+
         assert!(should_answer(5, 4));
         assert!(!should_answer(5, 5));
         assert!(!should_answer(5, 99));
 
         assert!(should_answer(1, 0));
         assert!(!should_answer(1, 1));
-        
+
         assert!(!should_answer(0, 0));
         assert!(!should_answer(0, 50));
     }

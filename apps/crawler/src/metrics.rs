@@ -175,6 +175,18 @@ pub struct Metrics {
     pub non_lead_tasks_total: AtomicU64,
     pub non_lead_tasks_queries_total: AtomicU64,
 
+    // Hybrid lead grace metrics
+    pub lead_dht_deferred_total: AtomicU64,
+    pub lead_dht_started_grace_expired_total: AtomicU64,
+    pub lead_dht_started_exhausted_total: AtomicU64,
+    /// Count of lead-bearing tasks where metadata was retrieved from a lead before
+    /// DHT sourcing was spawned, so DHT spawning was avoided. Final SHA-1 validation
+    /// happens afterward in the caller, therefore this counter does not itself guarantee
+    /// a verified torrent.
+    pub lead_dht_avoided_total: AtomicU64,
+    pub lead_grace_micros_total: AtomicU64,
+    pub lead_grace_completed_total: AtomicU64,
+
     // Lead attempt latency buckets (elapsed from attempt start to completion)
     pub lead_success_le_250ms_total: AtomicU64,
     pub lead_success_le_500ms_total: AtomicU64,
@@ -363,6 +375,13 @@ pub struct Snapshot {
     pub lead_tasks_dht_verified_total: u64,
     pub non_lead_tasks_total: u64,
     pub non_lead_tasks_queries_total: u64,
+
+    pub lead_dht_deferred_total: u64,
+    pub lead_dht_started_grace_expired_total: u64,
+    pub lead_dht_started_exhausted_total: u64,
+    pub lead_dht_avoided_total: u64,
+    pub lead_grace_micros_total: u64,
+    pub lead_grace_completed_total: u64,
 
     pub lead_success_le_250ms_total: u64,
     pub lead_success_le_500ms_total: u64,
@@ -596,6 +615,16 @@ impl Metrics {
                 .load(Ordering::Relaxed),
             non_lead_tasks_total: self.non_lead_tasks_total.load(Ordering::Relaxed),
             non_lead_tasks_queries_total: self.non_lead_tasks_queries_total.load(Ordering::Relaxed),
+            lead_dht_deferred_total: self.lead_dht_deferred_total.load(Ordering::Relaxed),
+            lead_dht_started_grace_expired_total: self
+                .lead_dht_started_grace_expired_total
+                .load(Ordering::Relaxed),
+            lead_dht_started_exhausted_total: self
+                .lead_dht_started_exhausted_total
+                .load(Ordering::Relaxed),
+            lead_dht_avoided_total: self.lead_dht_avoided_total.load(Ordering::Relaxed),
+            lead_grace_micros_total: self.lead_grace_micros_total.load(Ordering::Relaxed),
+            lead_grace_completed_total: self.lead_grace_completed_total.load(Ordering::Relaxed),
             lead_success_le_250ms_total: self.lead_success_le_250ms_total.load(Ordering::Relaxed),
             lead_success_le_500ms_total: self.lead_success_le_500ms_total.load(Ordering::Relaxed),
             lead_success_le_1000ms_total: self.lead_success_le_1000ms_total.load(Ordering::Relaxed),

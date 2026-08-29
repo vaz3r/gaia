@@ -144,7 +144,7 @@ impl WireSession {
             .map_err(|_| WireError::Timeout)?
             .map_err(WireError::Io)?;
         stream.set_nodelay(true).ok();
-        
+
         let sock = socket2::SockRef::from(&stream);
         let _ = sock.set_recv_buffer_size(32768);
         let _ = sock.set_send_buffer_size(16384);
@@ -213,7 +213,10 @@ impl WireSession {
         let ours = BValue::dict(vec![
             (
                 Bytes::from_static(b"m"),
-                BValue::dict(vec![(Bytes::from_static(b"ut_metadata"), BValue::Int(OUR_UT_METADATA_ID as i64))]),
+                BValue::dict(vec![(
+                    Bytes::from_static(b"ut_metadata"),
+                    BValue::Int(OUR_UT_METADATA_ID as i64),
+                )]),
             ),
             (
                 Bytes::from_static(b"v"),
@@ -244,7 +247,8 @@ impl WireSession {
         self.metadata_size = dict.get_int(b"metadata_size").map(|v| v as usize);
 
         let reqq = dict.get_int(b"reqq").unwrap_or(0);
-        let all_exts: Vec<String> = m.iter()
+        let all_exts: Vec<String> = m
+            .iter()
             .filter_map(|(k, v)| {
                 if let BValue::Int(id) = v {
                     Some(format!("{}={}", String::from_utf8_lossy(k), id))
@@ -340,7 +344,9 @@ impl WireSession {
             let (ext_id, payload) = match self.read_message(timeout).await {
                 Ok(v) => v,
                 Err(WireError::Io(e)) => {
-                    if e.kind() == std::io::ErrorKind::UnexpectedEof || e.kind() == std::io::ErrorKind::ConnectionReset {
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof
+                        || e.kind() == std::io::ErrorKind::ConnectionReset
+                    {
                         if skipped_non_ext > 0 || skipped_non_metadata > 0 {
                             crate::trace_lifecycle!(
                                 &self.info_hash,
@@ -394,7 +400,9 @@ impl WireSession {
             let data = payload.slice(consumed..);
             metadata.extend_from_slice(&data);
 
-            let total_pieces = known_size.map(|ts| (ts + PIECE_SIZE - 1) / PIECE_SIZE).unwrap_or(0);
+            let total_pieces = known_size
+                .map(|ts| (ts + PIECE_SIZE - 1) / PIECE_SIZE)
+                .unwrap_or(0);
             let piece_status = format!("{}/{}", piece, total_pieces);
             crate::trace_lifecycle!(
                 &self.info_hash,
@@ -513,9 +521,12 @@ mod tests {
                     BValue::Bytes(Bytes::from_static(b"MockPeer")),
                 ),
             ]);
-            sock.write_all(&framed_extended(EXTENDED_HANDSHAKE_ID, encode_to_bytes(&ext)))
-                .await
-                .unwrap();
+            sock.write_all(&framed_extended(
+                EXTENDED_HANDSHAKE_ID,
+                encode_to_bytes(&ext),
+            ))
+            .await
+            .unwrap();
 
             // Read metadata request: client must send using OUR ID (2).
             let (req_ext, _) = read_frame(&mut sock).await;

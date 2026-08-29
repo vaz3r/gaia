@@ -60,10 +60,16 @@ impl Walker {
         while let Some(res) = set.join_next().await {
             if let Ok(Ok((nodes, nodes6))) = res {
                 self.router.metrics().walker_ok.add(1);
-                self.router.metrics().walker_nodes_returned.add(nodes.len() as u64);
+                self.router
+                    .metrics()
+                    .walker_nodes_returned
+                    .add(nodes.len() as u64);
                 self.router.insert_nodes(nodes);
                 if self.parse_nodes6 {
-                    self.router.metrics().walker_nodes_returned.add(nodes6.len() as u64);
+                    self.router
+                        .metrics()
+                        .walker_nodes_returned
+                        .add(nodes6.len() as u64);
                     self.router.insert_nodes(nodes6);
                 }
             }
@@ -85,13 +91,25 @@ impl Walker {
         }
     }
 
-    fn handle(&self, res: Result<Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>, tokio::task::JoinError>) {
+    fn handle(
+        &self,
+        res: Result<
+            Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>,
+            tokio::task::JoinError,
+        >,
+    ) {
         if let Ok(Ok((nodes, nodes6))) = res {
             self.router.metrics().walker_ok.add(1);
-            self.router.metrics().walker_nodes_returned.add(nodes.len() as u64);
+            self.router
+                .metrics()
+                .walker_nodes_returned
+                .add(nodes.len() as u64);
             self.router.insert_nodes(nodes);
             if self.parse_nodes6 {
-                self.router.metrics().walker_nodes_returned.add(nodes6.len() as u64);
+                self.router
+                    .metrics()
+                    .walker_nodes_returned
+                    .add(nodes6.len() as u64);
                 self.router.insert_nodes(nodes6);
             }
         }
@@ -99,7 +117,9 @@ impl Walker {
 
     async fn reap(
         &self,
-        set: &mut tokio::task::JoinSet<Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>>,
+        set: &mut tokio::task::JoinSet<
+            Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>,
+        >,
     ) {
         loop {
             match set.try_join_next() {
@@ -111,7 +131,9 @@ impl Walker {
 
     fn spawn_step(
         &self,
-        set: &mut tokio::task::JoinSet<Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>>,
+        set: &mut tokio::task::JoinSet<
+            Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>,
+        >,
     ) -> bool {
         self.router.metrics().walker_steps.add(1);
         let nodes = self.router.random_routing_nodes(self.alpha);
@@ -146,10 +168,7 @@ impl Walker {
         }
         self.router.metrics().walker_sybil_target.add(1);
         if self.router.sybils.is_empty() {
-            return (
-                self.router.self_id,
-                crate::dht::node_id::random_node_id(),
-            );
+            return (self.router.self_id, crate::dht::node_id::random_node_id());
         }
         let idx = rand::random::<u64>() as usize % self.router.sybils.len();
         let (sybil, _) = self.router.sybils[idx];
@@ -174,7 +193,12 @@ fn find_node_args(id: &[u8; 20], target: [u8; 20]) -> BValue {
     ])
 }
 
-fn ingest(router: &Router, msg: &crate::krpc::message::Message, addr: SocketAddr, parse_nodes6: bool) {
+fn ingest(
+    router: &Router,
+    msg: &crate::krpc::message::Message,
+    addr: SocketAddr,
+    parse_nodes6: bool,
+) {
     if let Kind::Response { r } = &msg.kind {
         router.metrics().walker_ok.add(1);
         if let Some(id) = extract_id20(r, b"id") {
@@ -182,14 +206,18 @@ fn ingest(router: &Router, msg: &crate::krpc::message::Message, addr: SocketAddr
         }
         if let Some(nodes) = r.get_bytes(b"nodes") {
             let decoded = decode_compact(nodes);
-            router.metrics().walker_nodes_returned.add(decoded.len() as u64);
+            router
+                .metrics()
+                .walker_nodes_returned
+                .add(decoded.len() as u64);
             router.insert_nodes(decoded);
         }
-        if parse_nodes6
-            && let Some(nodes) = r.get_bytes(b"nodes6")
-        {
+        if parse_nodes6 && let Some(nodes) = r.get_bytes(b"nodes6") {
             let decoded = crate::dht::routing_table::decode_compact6(nodes);
-            router.metrics().walker_nodes_returned.add(decoded.len() as u64);
+            router
+                .metrics()
+                .walker_nodes_returned
+                .add(decoded.len() as u64);
             router.insert_nodes(decoded);
         }
     }

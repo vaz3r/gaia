@@ -57,7 +57,13 @@ impl VerifyStore {
     }
 
     pub async fn mark_failed(&self, ih: Infohash, error: &str) -> Result<(), sqlx::Error> {
-        crate::trace_lifecycle!(&ih, "job_update", stream = "db", status = "failed", result = error);
+        crate::trace_lifecycle!(
+            &ih,
+            "job_update",
+            stream = "db",
+            status = "failed",
+            result = error
+        );
         let row = sqlx::query("SELECT retry_count FROM verification_jobs WHERE infohash = $1")
             .bind(ih.as_slice())
             .fetch_optional(&self.pool)

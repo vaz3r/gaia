@@ -1,10 +1,10 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Map, Value};
 use tracing::field::Visit;
-use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
+use tracing_subscriber::layer::Context;
 
 pub struct JsonLayer {
     tx: tokio::sync::mpsc::Sender<String>,
@@ -21,11 +21,7 @@ impl<S> Layer<S> for JsonLayer
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
 {
-    fn on_event(
-        &self,
-        event: &tracing::Event<'_>,
-        _ctx: Context<'_, S>,
-    ) {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
         let meta = event.metadata();
 
         let mut fields = Map::new();
@@ -52,10 +48,7 @@ where
         obj.insert("level".into(), Value::String(level.to_string()));
         obj.insert("service".into(), Value::String("crawler".into()));
         obj.insert("stream".into(), Value::String(stream));
-        obj.insert(
-            "target".into(),
-            Value::String(meta.target().to_string()),
-        );
+        obj.insert("target".into(), Value::String(meta.target().to_string()));
 
         for (k, v) in fields {
             obj.insert(k, v);
