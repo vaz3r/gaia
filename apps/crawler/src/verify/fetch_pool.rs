@@ -198,13 +198,13 @@ async fn race_transports<S: Send>(
 }
 
 enum FetchOutcome {
-    ConnectFailed(SocketAddr, WireError),
-    MetadataFailed(WireError),
-    Success(Vec<u8>),
+    ConnectFailed(SocketAddr, WireError, CandidateSource),
+    MetadataFailed(WireError, CandidateSource),
+    Success(Vec<u8>, CandidateSource),
 }
 
 pub enum VerifyResult {
-    Success(Vec<u8>),
+    Success(Vec<u8>, CandidateSource),
     NoPeers,
     SourceTimeout,
     MetadataFailed,
@@ -333,12 +333,34 @@ async fn try_fetch(
             Ok((Transport::Tcp, s)) => {
                 metrics.tcp_connect_ok.add(1);
                 metrics.tcp_connect_actual.add(1);
+                match source {
+                    CandidateSource::Direct => metrics
+                        .source_direct_connect_ok_total
+                        .fetch_add(1, Ordering::Relaxed),
+                    CandidateSource::AnnounceCache => metrics
+                        .source_announce_cache_connect_ok_total
+                        .fetch_add(1, Ordering::Relaxed),
+                    CandidateSource::Dht => metrics
+                        .source_dht_connect_ok_total
+                        .fetch_add(1, Ordering::Relaxed),
+                };
                 transport_str = "tcp";
                 s
             }
             Ok((Transport::Utp, s)) => {
                 metrics.utp_connect_ok.add(1);
                 metrics.utp_connect_actual.add(1);
+                match source {
+                    CandidateSource::Direct => metrics
+                        .source_direct_connect_ok_total
+                        .fetch_add(1, Ordering::Relaxed),
+                    CandidateSource::AnnounceCache => metrics
+                        .source_announce_cache_connect_ok_total
+                        .fetch_add(1, Ordering::Relaxed),
+                    CandidateSource::Dht => metrics
+                        .source_dht_connect_ok_total
+                        .fetch_add(1, Ordering::Relaxed),
+                };
                 transport_str = "utp";
                 s
             }
@@ -350,7 +372,7 @@ async fn try_fetch(
                 metrics
                     .transport_connect_completed_total
                     .fetch_add(1, Ordering::Relaxed);
-                return FetchOutcome::ConnectFailed(addr, e);
+                return FetchOutcome::ConnectFailed(addr, e, source);
             }
         }
     } else {
@@ -359,6 +381,17 @@ async fn try_fetch(
             Ok(s) => {
                 metrics.tcp_connect_ok.add(1);
                 metrics.tcp_connect_actual.add(1);
+                match source {
+                    CandidateSource::Direct => metrics
+                        .source_direct_connect_ok_total
+                        .fetch_add(1, Ordering::Relaxed),
+                    CandidateSource::AnnounceCache => metrics
+                        .source_announce_cache_connect_ok_total
+                        .fetch_add(1, Ordering::Relaxed),
+                    CandidateSource::Dht => metrics
+                        .source_dht_connect_ok_total
+                        .fetch_add(1, Ordering::Relaxed),
+                };
                 crate::trace_lifecycle!(
                     &ih,
                     "connect_result",
@@ -407,6 +440,17 @@ async fn try_fetch(
                             Ok(s) => {
                                 metrics.utp_connect_ok.add(1);
                                 metrics.utp_connect_actual.add(1);
+                                match source {
+                                    CandidateSource::Direct => metrics
+                                        .source_direct_connect_ok_total
+                                        .fetch_add(1, Ordering::Relaxed),
+                                    CandidateSource::AnnounceCache => metrics
+                                        .source_announce_cache_connect_ok_total
+                                        .fetch_add(1, Ordering::Relaxed),
+                                    CandidateSource::Dht => metrics
+                                        .source_dht_connect_ok_total
+                                        .fetch_add(1, Ordering::Relaxed),
+                                };
                                 crate::trace_lifecycle!(
                                     &ih,
                                     "connect_result",
@@ -454,7 +498,7 @@ async fn try_fetch(
                                 metrics
                                     .transport_connect_completed_total
                                     .fetch_add(1, Ordering::Relaxed);
-                                return FetchOutcome::ConnectFailed(addr, utp_err);
+                                return FetchOutcome::ConnectFailed(addr, utp_err, source);
                             }
                         }
                     }
@@ -469,7 +513,7 @@ async fn try_fetch(
                         metrics
                             .transport_connect_completed_total
                             .fetch_add(1, Ordering::Relaxed);
-                        return FetchOutcome::ConnectFailed(addr, tcp_err);
+                        return FetchOutcome::ConnectFailed(addr, tcp_err, source);
                     }
                 }
             }
@@ -503,6 +547,17 @@ async fn try_fetch(
             } else {
                 metrics.utp_metadata_ok.add(1);
             }
+            match source {
+                CandidateSource::Direct => metrics
+                    .source_direct_metadata_ok_total
+                    .fetch_add(1, Ordering::Relaxed),
+                CandidateSource::AnnounceCache => metrics
+                    .source_announce_cache_metadata_ok_total
+                    .fetch_add(1, Ordering::Relaxed),
+                CandidateSource::Dht => metrics
+                    .source_dht_metadata_ok_total
+                    .fetch_add(1, Ordering::Relaxed),
+            };
             peer_outcomes.push(PeerOutcome {
                 ih,
                 peer: addr.to_string(),
@@ -513,10 +568,21 @@ async fn try_fetch(
                 phase: Some("metadata".to_string()),
                 elapsed_ms: Some(metadata_start.elapsed().as_millis().min(i32::MAX as u128) as i32),
             });
-            FetchOutcome::Success(meta)
+            FetchOutcome::Success(meta, source)
         }
         Err(e) => {
             metrics.metadata_failed_io.add(1);
+            match source {
+                CandidateSource::Direct => metrics
+                    .source_direct_metadata_fail_total
+                    .fetch_add(1, Ordering::Relaxed),
+                CandidateSource::AnnounceCache => metrics
+                    .source_announce_cache_metadata_fail_total
+                    .fetch_add(1, Ordering::Relaxed),
+                CandidateSource::Dht => metrics
+                    .source_dht_metadata_fail_total
+                    .fetch_add(1, Ordering::Relaxed),
+            };
             peer_outcomes.push(PeerOutcome {
                 ih,
                 peer: addr.to_string(),
@@ -527,7 +593,7 @@ async fn try_fetch(
                 phase: Some("metadata".to_string()),
                 elapsed_ms: Some(metadata_start.elapsed().as_millis().min(i32::MAX as u128) as i32),
             });
-            FetchOutcome::MetadataFailed(e)
+            FetchOutcome::MetadataFailed(e, source)
         }
     };
     let meta_us = metadata_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
@@ -575,6 +641,9 @@ pub async fn verify_infohash(
     //    Priority 2: AnnouncePeerCache peer
     if let Some(d) = direct {
         if peers_seen.insert(d) && candidate_queue.len() < race_peers {
+            metrics
+                .source_direct_accepted_total
+                .fetch_add(1, Ordering::Relaxed);
             candidate_queue.push_back((d, CandidateSource::Direct));
         }
     }
@@ -587,6 +656,9 @@ pub async fn verify_infohash(
                 peer = announcer.to_string()
             );
             if candidate_queue.len() < race_peers {
+                metrics
+                    .source_announce_cache_accepted_total
+                    .fetch_add(1, Ordering::Relaxed);
                 candidate_queue.push_back((announcer, CandidateSource::AnnounceCache));
             }
         }
@@ -619,7 +691,7 @@ pub async fn verify_infohash(
 
     let mut source_state = SourceState::Timeout;
     let mut dht_done = false;
-    let mut result = None;
+    let mut result: Option<(Vec<u8>, CandidateSource)> = None;
 
     // Persistent permit acquisition future across select! ticks.
     let mut permit_fut: Option<PermitAcquisitionFuture> = None;
@@ -637,51 +709,66 @@ pub async fn verify_infohash(
             // Active attempt completed
             res = set.join_next(), if !set.is_empty() => {
                 match res {
-                    Some(Ok(FetchOutcome::Success(meta))) => {
-                        result = Some(meta);
+                    Some(Ok(FetchOutcome::Success(meta, src))) => {
+                        result = Some((meta, src));
                         break;
                     }
                     Some(Ok(outcome)) => {
                         match outcome {
-                            FetchOutcome::ConnectFailed(_addr, WireError::Timeout) => {
+                            FetchOutcome::ConnectFailed(_addr, WireError::Timeout, src) => {
                                 metrics.fetch_connect_timeout.add(1);
                                 metrics.verify_timeouts.add(1);
+                                match src {
+                                    CandidateSource::Direct => metrics.source_direct_connect_timeout_total.fetch_add(1, Ordering::Relaxed),
+                                    CandidateSource::AnnounceCache => metrics.source_announce_cache_connect_timeout_total.fetch_add(1, Ordering::Relaxed),
+                                    CandidateSource::Dht => metrics.source_dht_connect_timeout_total.fetch_add(1, Ordering::Relaxed),
+                                };
                             }
-                            FetchOutcome::ConnectFailed(_addr, WireError::Io(_)) => {
+                            FetchOutcome::ConnectFailed(_addr, WireError::Io(_), src) => {
                                 metrics.fetch_connect_io.add(1);
+                                match src {
+                                    CandidateSource::Direct => metrics.source_direct_connect_io_total.fetch_add(1, Ordering::Relaxed),
+                                    CandidateSource::AnnounceCache => metrics.source_announce_cache_connect_io_total.fetch_add(1, Ordering::Relaxed),
+                                    CandidateSource::Dht => metrics.source_dht_connect_io_total.fetch_add(1, Ordering::Relaxed),
+                                };
                                 sample_failed_peer(&info_hash, &_addr, &metrics, params.failed_peer_sample_rate.max(1));
                             }
-                            FetchOutcome::ConnectFailed(_addr, _) => {
+                            FetchOutcome::ConnectFailed(_addr, _, src) => {
                                 metrics.fetch_connect_io.add(1);
+                                match src {
+                                    CandidateSource::Direct => metrics.source_direct_connect_io_total.fetch_add(1, Ordering::Relaxed),
+                                    CandidateSource::AnnounceCache => metrics.source_announce_cache_connect_io_total.fetch_add(1, Ordering::Relaxed),
+                                    CandidateSource::Dht => metrics.source_dht_connect_io_total.fetch_add(1, Ordering::Relaxed),
+                                };
                                 sample_failed_peer(&info_hash, &_addr, &metrics, params.failed_peer_sample_rate.max(1));
                             }
-                            FetchOutcome::MetadataFailed(WireError::Timeout) => {
+                            FetchOutcome::MetadataFailed(WireError::Timeout, _src) => {
                                 metrics.fetch_io.add(1);
                                 metrics.verify_timeouts.add(1);
                             }
-                            FetchOutcome::MetadataFailed(WireError::Handshake) => {
+                            FetchOutcome::MetadataFailed(WireError::Handshake, _src) => {
                                 metrics.fetch_handshake.add(1);
                             }
-                            FetchOutcome::MetadataFailed(WireError::NoExtension) => {
+                            FetchOutcome::MetadataFailed(WireError::NoExtension, _src) => {
                                 metrics.fetch_no_extension.add(1);
                             }
-                            FetchOutcome::MetadataFailed(WireError::Reject) => {
+                            FetchOutcome::MetadataFailed(WireError::Reject, _src) => {
                                 metrics.fetch_reject.add(1);
                             }
-                            FetchOutcome::MetadataFailed(WireError::BadPiece) => {
+                            FetchOutcome::MetadataFailed(WireError::BadPiece, _src) => {
                                 metrics.fetch_bad_piece.add(1);
                             }
-                            FetchOutcome::MetadataFailed(WireError::Io(_)) => {
+                            FetchOutcome::MetadataFailed(WireError::Io(_), _src) => {
                                 metrics.fetch_io.add(1);
                             }
-                            FetchOutcome::MetadataFailed(WireError::Eof) => {
+                            FetchOutcome::MetadataFailed(WireError::Eof, _src) => {
                                 metrics.fetch_io.add(1);
                             }
-                            FetchOutcome::MetadataFailed(WireError::Cancelled) => {
+                            FetchOutcome::MetadataFailed(WireError::Cancelled, _src) => {
                                 metrics.fetch_io.add(1);
                             }
-                            FetchOutcome::MetadataFailed(WireError::NoMetadataSize) => {}
-                            FetchOutcome::Success(_) => {}
+                            FetchOutcome::MetadataFailed(WireError::NoMetadataSize, _src) => {}
+                            FetchOutcome::Success(_, _) => {}
                         }
                     }
                     _ => {}
@@ -707,6 +794,11 @@ pub async fn verify_infohash(
                     if let Some((addr, source)) = candidate_queue.pop_front() {
                         metrics.fetch_permit_owned_attempts_total.fetch_add(1, Ordering::Relaxed);
                         metrics.fetch_attempts.add(1);
+                        match source {
+                            CandidateSource::Direct => metrics.source_direct_attempts_total.fetch_add(1, Ordering::Relaxed),
+                            CandidateSource::AnnounceCache => metrics.source_announce_cache_attempts_total.fetch_add(1, Ordering::Relaxed),
+                            CandidateSource::Dht => metrics.source_dht_attempts_total.fetch_add(1, Ordering::Relaxed),
+                        };
                         let ih = info_hash;
                         let pid = peer_id;
                         let metrics_c = metrics.clone();
@@ -773,6 +865,7 @@ pub async fn verify_infohash(
                             continue;
                         }
                         peers_seen.insert(addr);
+                        metrics.source_dht_accepted_total.fetch_add(1, Ordering::Relaxed);
                         candidate_queue.push_back((addr, CandidateSource::Dht));
                     }
                 }
@@ -801,7 +894,7 @@ pub async fn verify_infohash(
         .fetch_add(1, Ordering::Relaxed);
 
     match result {
-        Some(meta) => VerifyResult::Success(meta),
+        Some((meta, src)) => VerifyResult::Success(meta, src),
         None => {
             if peers_seen.is_empty() {
                 match source_state {
@@ -1208,12 +1301,14 @@ mod tests {
 
         // Step 1: Direct peer
         if let Some(d) = direct
-            && seen.insert(d) {
+            && seen.insert(d)
+        {
             queue.push_back((d, CandidateSource::Direct));
         }
         // Step 2: Announce cache
         if let Some(a) = announcer
-            && seen.insert(a) {
+            && seen.insert(a)
+        {
             queue.push_back((a, CandidateSource::AnnounceCache));
         }
         // Step 3: DHT peers
@@ -1400,7 +1495,10 @@ mod tests {
         // Exactly one attempt spawned in step 1, second candidate remains in queue
         assert_eq!(spawned, 1);
         assert_eq!(queue.len(), 1);
-        assert!(permit_fut.is_none(), "Permit future is not yet re-armed before the next scheduler step");
+        assert!(
+            permit_fut.is_none(),
+            "Permit future is not yet re-armed before the next scheduler step"
+        );
 
         // Step 2: Next scheduler progression step
         if permit_fut.is_none() && !queue.is_empty() {
@@ -1460,7 +1558,7 @@ mod tests {
             let _g = FetchActiveGuard::new(metrics.clone());
             tokio::time::sleep(Duration::from_millis(10)).await;
             drop(winning_permit);
-            FetchOutcome::Success(vec![0xAA; 20])
+            FetchOutcome::Success(vec![0xAA; 20], CandidateSource::Direct)
         });
 
         let source_handle = tokio::spawn(async {
@@ -1472,7 +1570,7 @@ mod tests {
         tokio::select! {
             biased;
             res = set.join_next(), if !set.is_empty() => {
-                if let Some(Ok(FetchOutcome::Success(meta))) = res {
+                if let Some(Ok(FetchOutcome::Success(meta, _src))) = res {
                     result = Some(meta);
                 }
             }
@@ -1494,7 +1592,11 @@ mod tests {
 
         assert_eq!(result.unwrap(), vec![0xAA; 20]);
         assert_eq!(queue.len(), 0);
-        assert_eq!(sem.available_permits(), 1, "All semaphore permits must be available and uncorrupted");
+        assert_eq!(
+            sem.available_permits(),
+            1,
+            "All semaphore permits must be available and uncorrupted"
+        );
     }
 
     #[tokio::test]
@@ -1630,5 +1732,156 @@ mod tests {
         }
 
         assert!(start.elapsed() >= Duration::from_millis(50));
+    }
+
+    #[tokio::test]
+    async fn candidate_source_attribution_isolated_by_source_type() {
+        let log_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let metrics = Arc::new(Metrics::new(log_dropped));
+
+        // 1. Direct candidate
+        metrics
+            .source_direct_accepted_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .source_direct_attempts_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .source_direct_connect_ok_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .source_direct_metadata_ok_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .source_direct_verified_total
+            .fetch_add(1, Ordering::Relaxed);
+
+        assert_eq!(
+            metrics.source_direct_verified_total.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics
+                .source_announce_cache_verified_total
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(metrics.source_dht_verified_total.load(Ordering::Relaxed), 0);
+
+        // 2. AnnounceCache candidate
+        metrics
+            .source_announce_cache_accepted_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .source_announce_cache_attempts_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .source_announce_cache_connect_timeout_total
+            .fetch_add(1, Ordering::Relaxed);
+
+        assert_eq!(
+            metrics
+                .source_announce_cache_connect_timeout_total
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics
+                .source_direct_connect_timeout_total
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            metrics
+                .source_dht_connect_timeout_total
+                .load(Ordering::Relaxed),
+            0
+        );
+
+        // 3. DHT candidate
+        metrics
+            .source_dht_accepted_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .source_dht_attempts_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .source_dht_connect_io_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .source_dht_metadata_fail_total
+            .fetch_add(1, Ordering::Relaxed);
+
+        assert_eq!(
+            metrics.source_dht_connect_io_total.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics
+                .source_dht_metadata_fail_total
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            metrics
+                .source_direct_connect_io_total
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            metrics
+                .source_announce_cache_connect_io_total
+                .load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn candidate_source_survives_joinset_and_fetch_outcome() {
+        let mut set: JoinSet<FetchOutcome> = JoinSet::new();
+        set.spawn(
+            async move { FetchOutcome::Success(vec![1, 2, 3], CandidateSource::AnnounceCache) },
+        );
+
+        match set.join_next().await {
+            Some(Ok(FetchOutcome::Success(data, source))) => {
+                assert_eq!(data, vec![1, 2, 3]);
+                assert_eq!(source, CandidateSource::AnnounceCache);
+            }
+            _ => panic!("Expected FetchOutcome::Success with AnnounceCache source"),
+        }
+    }
+
+    #[test]
+    fn sha1_pass_and_fail_attribution() {
+        use sha1::{Digest, Sha1};
+        let log_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let metrics = Arc::new(Metrics::new(log_dropped));
+
+        let meta = vec![1, 2, 3, 4];
+        let mut hasher = Sha1::new();
+        hasher.update(&meta);
+        let correct_ih: [u8; 20] = hasher.finalize().into();
+        let wrong_ih: [u8; 20] = [0xFF; 20];
+
+        // Mismatch: does NOT increment source_dht_verified_total
+        let check_pass = |ih: &[u8; 20], m: &[u8]| Sha1::digest(m).as_slice() == ih.as_slice();
+        if check_pass(&wrong_ih, &meta) {
+            metrics
+                .source_dht_verified_total
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            metrics.sha1_mismatch.add(1);
+        }
+        assert_eq!(metrics.source_dht_verified_total.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.sha1_mismatch.load(Ordering::Relaxed), 1);
+
+        // Match: increments source_dht_verified_total exactly once
+        if check_pass(&correct_ih, &meta) {
+            metrics
+                .source_dht_verified_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        assert_eq!(metrics.source_dht_verified_total.load(Ordering::Relaxed), 1);
     }
 }

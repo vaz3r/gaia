@@ -329,9 +329,26 @@ pub async fn run_pipeline(
             .await;
             let handling_start = Instant::now();
             match verify_result {
-                VerifyResult::Success(meta) if check(&ih, &meta) => {
+                VerifyResult::Success(meta, source) if check(&ih, &meta) => {
                     crate::trace_lifecycle!(&ih, "sha1_check", stream = "verify", result = "pass");
                     metrics.verify_success.add(1);
+                    match source {
+                        fetch_pool::CandidateSource::Direct => {
+                            metrics
+                                .source_direct_verified_total
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        fetch_pool::CandidateSource::AnnounceCache => {
+                            metrics
+                                .source_announce_cache_verified_total
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        fetch_pool::CandidateSource::Dht => {
+                            metrics
+                                .source_dht_verified_total
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
                     if is_direct {
                         metrics.announce_success.add(1);
                     }
@@ -349,7 +366,7 @@ pub async fn run_pipeline(
                         batch_writer.push_verified(ih);
                     }
                 }
-                VerifyResult::Success(_) => {
+                VerifyResult::Success(_, _) => {
                     crate::trace_lifecycle!(&ih, "sha1_check", stream = "verify", result = "fail");
                     metrics.sha1_mismatch.add(1);
                     metrics.verify_fail.add(1);

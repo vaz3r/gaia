@@ -138,6 +138,34 @@ pub struct Metrics {
     pub fetch_joinset_drain_completed_total: AtomicU64,
     pub fetch_permit_owned_attempts_total: AtomicU64,
     pub fetch_candidates_skipped_budget_total: AtomicU64,
+    // Per-candidate-source metrics
+    pub source_direct_accepted_total: AtomicU64,
+    pub source_direct_attempts_total: AtomicU64,
+    pub source_direct_connect_ok_total: AtomicU64,
+    pub source_direct_connect_timeout_total: AtomicU64,
+    pub source_direct_connect_io_total: AtomicU64,
+    pub source_direct_metadata_ok_total: AtomicU64,
+    pub source_direct_metadata_fail_total: AtomicU64,
+    pub source_direct_verified_total: AtomicU64,
+
+    pub source_announce_cache_accepted_total: AtomicU64,
+    pub source_announce_cache_attempts_total: AtomicU64,
+    pub source_announce_cache_connect_ok_total: AtomicU64,
+    pub source_announce_cache_connect_timeout_total: AtomicU64,
+    pub source_announce_cache_connect_io_total: AtomicU64,
+    pub source_announce_cache_metadata_ok_total: AtomicU64,
+    pub source_announce_cache_metadata_fail_total: AtomicU64,
+    pub source_announce_cache_verified_total: AtomicU64,
+
+    pub source_dht_accepted_total: AtomicU64,
+    pub source_dht_attempts_total: AtomicU64,
+    pub source_dht_connect_ok_total: AtomicU64,
+    pub source_dht_connect_timeout_total: AtomicU64,
+    pub source_dht_connect_io_total: AtomicU64,
+    pub source_dht_metadata_ok_total: AtomicU64,
+    pub source_dht_metadata_fail_total: AtomicU64,
+    pub source_dht_verified_total: AtomicU64,
+
     pub result_handling_micros_total: AtomicU64,
     pub result_handling_completed_total: AtomicU64,
     pub source_active: AtomicU64,
@@ -281,6 +309,30 @@ pub struct Snapshot {
     pub fetch_joinset_drain_completed_total: u64,
     pub fetch_permit_owned_attempts_total: u64,
     pub fetch_candidates_skipped_budget_total: u64,
+    pub source_direct_accepted_total: u64,
+    pub source_direct_attempts_total: u64,
+    pub source_direct_connect_ok_total: u64,
+    pub source_direct_connect_timeout_total: u64,
+    pub source_direct_connect_io_total: u64,
+    pub source_direct_metadata_ok_total: u64,
+    pub source_direct_metadata_fail_total: u64,
+    pub source_direct_verified_total: u64,
+    pub source_announce_cache_accepted_total: u64,
+    pub source_announce_cache_attempts_total: u64,
+    pub source_announce_cache_connect_ok_total: u64,
+    pub source_announce_cache_connect_timeout_total: u64,
+    pub source_announce_cache_connect_io_total: u64,
+    pub source_announce_cache_metadata_ok_total: u64,
+    pub source_announce_cache_metadata_fail_total: u64,
+    pub source_announce_cache_verified_total: u64,
+    pub source_dht_accepted_total: u64,
+    pub source_dht_attempts_total: u64,
+    pub source_dht_connect_ok_total: u64,
+    pub source_dht_connect_timeout_total: u64,
+    pub source_dht_connect_io_total: u64,
+    pub source_dht_metadata_ok_total: u64,
+    pub source_dht_metadata_fail_total: u64,
+    pub source_dht_verified_total: u64,
     pub result_handling_micros_total: u64,
     pub result_handling_completed_total: u64,
     pub source_active: u64,
@@ -436,6 +488,60 @@ impl Metrics {
             fetch_candidates_skipped_budget_total: self
                 .fetch_candidates_skipped_budget_total
                 .load(Ordering::Relaxed),
+            source_direct_accepted_total: self.source_direct_accepted_total.load(Ordering::Relaxed),
+            source_direct_attempts_total: self.source_direct_attempts_total.load(Ordering::Relaxed),
+            source_direct_connect_ok_total: self
+                .source_direct_connect_ok_total
+                .load(Ordering::Relaxed),
+            source_direct_connect_timeout_total: self
+                .source_direct_connect_timeout_total
+                .load(Ordering::Relaxed),
+            source_direct_connect_io_total: self
+                .source_direct_connect_io_total
+                .load(Ordering::Relaxed),
+            source_direct_metadata_ok_total: self
+                .source_direct_metadata_ok_total
+                .load(Ordering::Relaxed),
+            source_direct_metadata_fail_total: self
+                .source_direct_metadata_fail_total
+                .load(Ordering::Relaxed),
+            source_direct_verified_total: self.source_direct_verified_total.load(Ordering::Relaxed),
+            source_announce_cache_accepted_total: self
+                .source_announce_cache_accepted_total
+                .load(Ordering::Relaxed),
+            source_announce_cache_attempts_total: self
+                .source_announce_cache_attempts_total
+                .load(Ordering::Relaxed),
+            source_announce_cache_connect_ok_total: self
+                .source_announce_cache_connect_ok_total
+                .load(Ordering::Relaxed),
+            source_announce_cache_connect_timeout_total: self
+                .source_announce_cache_connect_timeout_total
+                .load(Ordering::Relaxed),
+            source_announce_cache_connect_io_total: self
+                .source_announce_cache_connect_io_total
+                .load(Ordering::Relaxed),
+            source_announce_cache_metadata_ok_total: self
+                .source_announce_cache_metadata_ok_total
+                .load(Ordering::Relaxed),
+            source_announce_cache_metadata_fail_total: self
+                .source_announce_cache_metadata_fail_total
+                .load(Ordering::Relaxed),
+            source_announce_cache_verified_total: self
+                .source_announce_cache_verified_total
+                .load(Ordering::Relaxed),
+            source_dht_accepted_total: self.source_dht_accepted_total.load(Ordering::Relaxed),
+            source_dht_attempts_total: self.source_dht_attempts_total.load(Ordering::Relaxed),
+            source_dht_connect_ok_total: self.source_dht_connect_ok_total.load(Ordering::Relaxed),
+            source_dht_connect_timeout_total: self
+                .source_dht_connect_timeout_total
+                .load(Ordering::Relaxed),
+            source_dht_connect_io_total: self.source_dht_connect_io_total.load(Ordering::Relaxed),
+            source_dht_metadata_ok_total: self.source_dht_metadata_ok_total.load(Ordering::Relaxed),
+            source_dht_metadata_fail_total: self
+                .source_dht_metadata_fail_total
+                .load(Ordering::Relaxed),
+            source_dht_verified_total: self.source_dht_verified_total.load(Ordering::Relaxed),
             result_handling_micros_total: self.result_handling_micros_total.load(Ordering::Relaxed),
             result_handling_completed_total: self
                 .result_handling_completed_total
