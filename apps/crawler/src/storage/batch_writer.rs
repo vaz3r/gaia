@@ -394,26 +394,40 @@ async fn delete_verified(pool: &PgPool, infohashes: &[Vec<u8>], flush_chunk: usi
 }
 
 async fn flush_stable_peers(pool: &PgPool, peers: &[std::net::SocketAddr], chunk_size: usize) {
-    for chunk in peers.chunks(chunk_size) {
+    // Deduplicate within the entire batch first to avoid Postgres rejecting
+    // "ON CONFLICT DO UPDATE command cannot affect row a second time" when the
+    // same (ip, port) appears more than once in a single UNNEST statement.
+    let mut counts: std::collections::HashMap<std::net::SocketAddr, i32> =
+        std::collections::HashMap::new();
+    for addr in peers {
+        *counts.entry(*addr).or_insert(0) += 1;
+    }
+
+    let deduped: Vec<(std::net::SocketAddr, i32)> = counts.into_iter().collect();
+
+    for chunk in deduped.chunks(chunk_size) {
         let mut ips = Vec::with_capacity(chunk.len());
         let mut ports = Vec::with_capacity(chunk.len());
+        let mut hit_counts = Vec::with_capacity(chunk.len());
 
-        for addr in chunk {
+        for (addr, count) in chunk {
             ips.push(addr.ip().to_string());
             ports.push(addr.port() as i32);
+            hit_counts.push(*count);
         }
 
         let query = r#"
             INSERT INTO stable_peers (ip, port, metadata_provided_count, first_seen, last_seen)
-            SELECT u.ip, u.port, 1, now(), now()
-            FROM UNNEST($1::inet[], $2::int[]) AS u(ip, port)
-            ON CONFLICT (ip, port) DO UPDATE 
-            SET metadata_provided_count = stable_peers.metadata_provided_count + 1,
+            SELECT u.ip::inet, u.port, u.cnt, now(), now()
+            FROM UNNEST($1::text[], $2::int[], $3::int[]) AS u(ip, port, cnt)
+            ON CONFLICT (ip, port) DO UPDATE
+            SET metadata_provided_count = stable_peers.metadata_provided_count + EXCLUDED.metadata_provided_count,
                 last_seen = now()
         "#;
         if let Err(e) = sqlx::query(query)
             .bind(&ips)
             .bind(&ports)
+            .bind(&hit_counts)
             .execute(pool)
             .await
         {
