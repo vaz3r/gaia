@@ -536,6 +536,16 @@ async fn spawn_node(
     let table = Arc::new(RwLock::new(RoutingTable::new(self_id)));
     load_routing_snapshot(&table, &data_dir.join("routing_table.bin"));
 
+    let inbound_limiter = Arc::new(RateLimiter::new(
+        2.0,
+        10.0,
+        5,
+    ));
+    tokio::spawn(limiter_sweep_loop(
+        inbound_limiter.clone(),
+        Duration::from_secs(5),
+    ));
+
     let tx_table = Arc::new(TxTable::new());
     let router = Router::new(
         self_id,
@@ -549,6 +559,7 @@ async fn spawn_node(
         harvest_tx.clone(),
         metrics.clone(),
         config.dht.find_node_response_percent,
+        inbound_limiter.clone(),
     );
 
     if !use_mmsg {

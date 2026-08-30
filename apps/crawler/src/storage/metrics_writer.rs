@@ -47,6 +47,7 @@ fn snapshot_rows(s: &Snapshot) -> Vec<(&'static str, u64)> {
         ("inbound_ping", s.inbound_ping),
         ("inbound_find_node", s.inbound_find_node),
         ("inbound_find_node_dropped", s.inbound_find_node_dropped),
+        ("inbound_dropped_rate_limit", s.inbound_dropped_rate_limit),
         ("inbound_get_peers", s.inbound_get_peers),
         ("inbound_announce_peer", s.inbound_announce_peer),
         ("inbound_invalid", s.inbound_invalid),

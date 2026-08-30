@@ -47,6 +47,7 @@ pub struct Router {
     harvest_tx: mpsc::Sender<HarvestEvent>,
     metrics: Arc<Metrics>,
     find_node_response_percent: u8,
+    inbound_limiter: Arc<crate::net::rate_limit::RateLimiter>,
 }
 
 impl Router {
@@ -63,6 +64,7 @@ impl Router {
         harvest_tx: mpsc::Sender<HarvestEvent>,
         metrics: Arc<Metrics>,
         find_node_response_percent: u8,
+        inbound_limiter: Arc<crate::net::rate_limit::RateLimiter>,
     ) -> Arc<Self> {
         Arc::new(Router {
             self_id,
@@ -77,6 +79,7 @@ impl Router {
             harvest_tx,
             metrics,
             find_node_response_percent,
+            inbound_limiter,
         })
     }
 
@@ -91,6 +94,10 @@ impl Router {
 
         if let Some(y) = header.y {
             if y == b"q" {
+                if !self.inbound_limiter.allow(from.ip()) {
+                    self.metrics.inbound_dropped_rate_limit.add(1);
+                    return;
+                }
                 if let Some(q) = header.q {
                     if q == PING {
                         self.metrics.inbound_ping.add(1);
