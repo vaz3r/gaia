@@ -1,0 +1,30 @@
+{
+  "version": "baseline-v2",
+  "generation_timestamp": "2026-08-30T19:18:00Z",
+  "total_train_rows": 3953,
+  "original_baseline_v1_rows": 3553,
+  "augmentation_candidates_rows": 400,
+  "augmentation_sample_weight": 0.7,
+  "augmentation_is_pseudo": true,
+  "class_distribution_v2_train": {
+    "Anime": 284,
+    "Other": 1532,
+    "Movies": 507,
+    "Games": 428,
+    "Music": 243,
+    "Applications": 420,
+    "Documentaries": 134,
+    "Television": 405
+  },
+  "class_distribution_augmentation": {
+    "Movies": 126,
+    "Television": 113,
+    "Anime": 28,
+    "Documentaries": 43,
+    "Other": 20,
+    "Applications": 42,
+    "Games": 28
+  },
+  "train_sha256": "e29d2932d63ee2453f611ceaa90ac0dbe0346d3808328d720df9be36b39eb5a4",
+  "validation_sha256": "d0942b0e9ccb193835b568ae3ae94ce2404e3ff5db9604ba097dc94eadd42791"
+}

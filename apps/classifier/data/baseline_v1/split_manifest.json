@@ -1,0 +1,68 @@
+{
+  "version": "baseline-v1",
+  "random_seed": 42,
+  "source_dataset_path": "apps/classifier/data/training_combined_v10_true.jsonl",
+  "source_dataset_sha256": "76b758c31ea99fdec7c7546c9fd63714b2d2f46a9039c5c2e25d0efa608fa681",
+  "reference_dataset_path": "apps/classifier/data/gold_pilot_v1/reference_eval_v1.jsonl",
+  "reference_dataset_sha256": "16c45e847a4626a9ef468c1728bc1786949470a4cb2adb1ef12520ba4a6fb4f2",
+  "normalization_implementation_checksum": "83ee6483831a11b0f9e5728aba85d6775173f129c757853b6a0da589bfba14be",
+  "source_row_count": 4567,
+  "malformed_row_count": 0,
+  "invalid_label_count": 0,
+  "reference_exclusions_by_hash": 0,
+  "reference_exclusions_by_name": 0,
+  "reference_exclusions_by_family": 0,
+  "exact_duplicate_removals": 176,
+  "normalized_name_duplicate_removals": 5,
+  "conflicting_identity_groups_excluded": 95,
+  "clean_row_count": 4180,
+  "training_row_count": 3553,
+  "validation_row_count": 627,
+  "train_class_counts": {
+    "Anime": 256,
+    "Other": 1512,
+    "Movies": 381,
+    "Games": 400,
+    "Music": 243,
+    "Applications": 378,
+    "Documentaries": 91,
+    "Television": 292
+  },
+  "validation_class_counts": {
+    "Other": 267,
+    "Games": 71,
+    "Applications": 67,
+    "Music": 43,
+    "Anime": 45,
+    "Movies": 67,
+    "Television": 51,
+    "Documentaries": 16
+  },
+  "train_pseudo_vs_non_pseudo_counts": {
+    "pseudo": 0,
+    "non_pseudo": 3553
+  },
+  "validation_pseudo_vs_non_pseudo_counts": {
+    "pseudo": 0,
+    "non_pseudo": 627
+  },
+  "train_sample_weight_distribution": {
+    "1.0": 3553
+  },
+  "validation_sample_weight_distribution": {
+    "1.0": 627
+  },
+  "cross_split_overlap_counts": {
+    "hash_overlap": 0,
+    "name_overlap": 0,
+    "family_overlap": 0
+  },
+  "reference_overlap_counts": {
+    "hash_overlap": 0,
+    "name_overlap": 0,
+    "family_overlap": 0
+  },
+  "train_file_sha256": "8c7ead7c3b901cab18c9d593e6b6a905246918753d441140da626c8221398a42",
+  "validation_file_sha256": "d0942b0e9ccb193835b568ae3ae94ce2404e3ff5db9604ba097dc94eadd42791",
+  "creation_timestamp": "2026-08-29T17:12:56.786114+00:00"
+}

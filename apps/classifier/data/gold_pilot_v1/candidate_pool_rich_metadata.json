@@ -1,0 +1,11 @@
+{
+  "extraction_timestamp": "2026-08-29T16:38:06.136465+00:00",
+  "source_time_window_description": "Ascending verified_at deterministic window from craw-db",
+  "query_sha256": "1d544a13b0d8ad5dd1b3896017ca211bca5c012fdae0328702d390d800ec6129",
+  "output_sha256": "6c8cdb65a30ab293e620913d24e1344663c18e2f0befcf49a534be5771dbabe0",
+  "row_count": 3998,
+  "unique_infohash_count": 3998,
+  "malformed_row_count": 2,
+  "rows_with_no_parseable_paths": 0,
+  "read_only_confirmed": true
+}

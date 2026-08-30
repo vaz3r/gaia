@@ -17,11 +17,21 @@ DOC_EXTS = {".pdf", ".epub", ".mobi", ".txt", ".doc", ".docx"}
 def _detect_features(name: str, files: list[str]) -> str:
     parts = []
 
+    video = 0
+    audio = 0
+    subs = 0
+    archives = 0
+    installs = 0
+    docs = 0
+    images = 0
+
     ext_counts = Counter()
     for f in files:
-        dot = f.rfind(".")
-        if dot >= 0:
-            ext_counts[f[dot:].lower()] += 1
+        if isinstance(f, str):
+            dot = f.rfind(".")
+            if dot >= 0:
+                ext_counts[f[dot:].lower()] += 1
+
     if ext_counts:
         video = sum(ext_counts.get(e, 0) for e in VIDEO_EXTS)
         audio = sum(ext_counts.get(e, 0) for e in AUDIO_EXTS)
@@ -41,17 +51,64 @@ def _detect_features(name: str, files: list[str]) -> str:
         if tags:
             parts.append("Media: " + ", ".join(tags))
 
+    # Documentaries (takes precedence over general TV/Movies if clearly factual)
+    is_doc = bool(re.search(
+        r"\b(BBC|PBS|NOVA|National\s*Geographic|Nat\s*Geo|Discovery(\s*Channel)?|Frontline|Horizon|NHK|CuriosityStream|Panorama|Disneynature|Documentary|Docuseries|David\s*Attenborough|History\s*Channel|DW\s*Documentary)\b",
+        name, re.IGNORECASE
+    ))
+
     # Anime / Fansub release patterns
-    is_fansub = bool(re.search(r"\[(Erai-raws|SubsPlease|HorribleSubs|Judas|DKB|ASW|Commie|FFF|Coalgirls|Anime\s*Time|NeoAE|Baha|ANi|VCB-Studio|Kawaiika-Raws|Golumpa)\]", name, re.IGNORECASE))
-    is_anime_ep = bool(re.search(r"\s-\s\d{1,4}(\s*v\d)?\s*\[", name))
+    is_fansub = bool(re.search(
+        r"\[(Erai-raws|SubsPlease|HorribleSubs|Judas|DKB|ASW|Commie|FFF|Coalgirls|Anime\s*Time|NeoAE|Baha|ANi|VCB-Studio|Kawaiika-Raws|Golumpa|EMBER|SweetSub|Lilith-Raws|NC-Raws|LoliHouse|Moozzi2|ReinForce|Kametsu|Yameii|ToonsHub|Nekomoe|Tenshi)\]",
+        name, re.IGNORECASE
+    ))
+    is_anime_station = bool(re.search(r"\b(AT-X|Tokyo\s*MX|BS11|MBS|TBS|TV\s*Tokyo|KBS|Animax|Crunchyroll|Funimation|HIDIVE)\b", name, re.IGNORECASE))
+    is_anime_ep = bool(re.search(r"\s-\s\d{1,4}(\s*v\d)?\s*(\(|\[|\.mkv|\.mp4)", name)) or bool(re.search(r"\b(Batch|OVA|ONA|Special|SP\d{1,2})\b", name, re.IGNORECASE) and (is_fansub or is_anime_station))
     
-    if re.search(r"S\d{1,2}E\d{1,3}", name, re.IGNORECASE):
-        if is_fansub or re.search(r"\b(ANi|Baha|AT-X|Tokyo\s*MX|BS11)\b", name, re.IGNORECASE):
+    # Games release patterns
+    is_game_scene = bool(re.search(
+        r"\b(FitGirl|CODEX|PLAZA|DODI|SKIDROW|RUNE|FLT|EMPRESS|TENOKE|Razor1911|PROPHET|GOG|ElAmigos|KaOs|TinyISO|TiNYiSO|CPY|HOODLUM|RELOADED|DARKSiDERS|TiNYiSO|Goldberg|SteamRip|Steam-Rip)\b",
+        name, re.IGNORECASE
+    ))
+    is_console_rom = bool(re.search(r"\b(NSP|XCI|NSZ|CIA|3DS|VPK|WAD|WBFS|CSO|GCM|NDS|GBA|PS3|PS4|PKG|Switch\s*ROM|ROM\s*Pack|v1\.\d+\.\d+(\s*DLC|\s*Update)?)\b", name, re.IGNORECASE)) or any(
+        f.lower().endswith(('.nsp', '.xci', '.nsz', '.cia', '.3ds', '.vpk', '.wbfs', '.cso', '.nds', '.gba')) for f in files
+    )
+    
+    # Applications patterns
+    is_app_vendor = bool(re.search(
+        r"\b(Adobe|Autodesk|JetBrains|Microsoft\s*Office|Windows\s*(10|11|Server)|macOS|WinPE|AutoCAD|SolidWorks|Ableton|FL\s*Studio|Cubase|CorelDRAW|MATLAB|VMware|IntelliJ|Photoshop|Illustrator|Premiere|Acrobat|Kaspersky|Bitdefender|CCleaner|Acronis|EaseUS|Tenorshare|Driver\s*Booster|Office\s*20\d{2})\b",
+        name, re.IGNORECASE
+    ))
+    is_app_payload = bool(re.search(r"\b(v\d+\.\d+(\.\d+)?|x64|x86|x32|Multilingual|Portable|Crack|Keygen|Patch|Activator|Plugin|VST|VST3|AAX|Win64|macOS|Android|APK|iOS|IPA)\b", name, re.IGNORECASE))
+
+    # Books / E-books / Comics
+    is_ebook = any(f.lower().endswith(('.epub', '.mobi', '.azw3', '.pdf', '.cbr', '.cbz')) for f in files) or bool(re.search(r"\b(eBook|e-book|Audiobook|Comic|Manga|Magazine|EPUB|MOBI)\b", name, re.IGNORECASE))
+    
+    # Courses / Educational
+    is_course = bool(re.search(r"\b(Udemy|Coursera|Pluralsight|Tutorial|Training|Masterclass|LinkedIn\s*Learning|Frontend\s*Masters|Packt|O'?Reilly)\b", name, re.IGNORECASE))
+
+    # JAV / Adult
+    is_adult = bool(re.search(r"\b([A-Z]{3,5}-\d{3,5}|OnlyFans|Brazzers|NaughtyAmerica|BangBros|TeamSkeet|Adult|JAV|Porn|Hentai|18\+|XXX|Uncensored|FC2-PPV-\d+)\b", name, re.IGNORECASE))
+
+    if is_doc:
+        parts.append("Type: Documentary")
+    elif is_fansub or (is_anime_ep and (is_anime_station or not re.search(r"\b(S\d{1,2}E\d{1,3}|Season\s+\d)\b", name, re.IGNORECASE))):
+        parts.append("Type: Anime")
+    elif is_game_scene or is_console_rom:
+        parts.append("Type: Game release")
+    elif is_app_vendor or (is_app_payload and installs and not video and not is_game_scene):
+        parts.append("Type: Application software")
+    elif is_adult:
+        parts.append("Type: Adult media")
+    elif is_course:
+        parts.append("Type: Course tutorial")
+    elif is_ebook and not video:
+        parts.append("Type: Book publication")
+    elif re.search(r"S\d{1,2}E\d{1,3}", name, re.IGNORECASE):
+        if is_anime_station:
             parts.append("Type: Anime episode")
         else:
             parts.append("Type: TV episode")
-    elif is_fansub or (is_anime_ep and re.search(r"\b(1080p|720p|480p|CR|B-Global|ADN|Baha)\b", name, re.IGNORECASE)):
-        parts.append("Type: Anime episode")
     elif re.search(r"Season\s+\d|S\d{1,2}\s", name, re.IGNORECASE):
         parts.append("Type: TV season")
     elif re.search(r"\b(19|20)\d{2}\b", name) and re.search(r"\b(1080p|720p|4K|BluRay|WEBRip|BDRip|HDRip|WEB-DL|x264|x265|HEVC)\b", name, re.IGNORECASE):
@@ -59,7 +116,7 @@ def _detect_features(name: str, files: list[str]) -> str:
     elif re.search(r"\bmkv$|\.avi$|\.mp4$", name, re.IGNORECASE):
         parts.append("Type: Video file")
         
-    if re.search(r"\b(anime|batch|fansub)\b", name, re.IGNORECASE):
+    if re.search(r"\b(anime|batch|fansub)\b", name, re.IGNORECASE) and "Type: Anime" not in parts:
         parts.append("Type: Anime")
         
     # Audio formatting (only if not an obvious video container)
@@ -69,6 +126,8 @@ def _detect_features(name: str, files: list[str]) -> str:
             parts.append("Format: FLAC audio")
         elif re.search(r"\b(MP3|320kbps)\b", name, re.IGNORECASE):
             parts.append("Format: MP3 audio")
+        elif audio and not video and not installs:
+            parts.append("Type: Music album")
             
     if re.search(r"\b(dub|dubbed|VO|VOSTFR|VOST)\b", name, re.IGNORECASE):
         parts.append("Audio: dubbed")

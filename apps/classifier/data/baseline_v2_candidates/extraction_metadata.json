@@ -1,0 +1,20 @@
+{
+  "extraction_timestamp": "2026-08-29T19:09:05.615578+00:00",
+  "source_time_window_description": "Ascending verified_at deterministic window from craw-db",
+  "query_sha256": "867fb9788966669f21ba8d7e4c2e197c4c71ab5b37ec2ffa5704976d516100fb",
+  "blind_sha256": "66479772cf7474083cbe7409067f013d60392c9926b3c54e107e80e7a37c645b",
+  "manifest_sha256": "acdc64048d297e4c8d4b0419eae2006a162a8f2127824b4665b3ab7acb3be326",
+  "template_sha256": "7adf967c3dcbb73bf938a533a07713a89419485618cd4a1e53eb7a5ee7578e17",
+  "row_count": 400,
+  "unique_candidate_id_count": 400,
+  "multi_group_candidates_count": 87,
+  "read_only_confirmed": true,
+  "quotas": {
+    "anime_tv_sparse": 120,
+    "movies_other": 100,
+    "games_applications": 80,
+    "anime_movies": 50,
+    "documentaries_media": 50
+  },
+  "multi_file_records_with_paths": 83
+}
