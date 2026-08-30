@@ -4,11 +4,14 @@ ARG CRAW_GIT_HASH=unknown
 ENV CRAW_GIT_HASH=${CRAW_GIT_HASH}
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 COPY . .
-RUN cargo build --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release && \
+    cp /app/target/release/crawler /tmp/crawler
 
 FROM debian:bookworm-slim
 RUN useradd -m -u 10001 crawler && mkdir -p /home/crawler/data && chown -R crawler:crawler /home/crawler
-COPY --from=builder /app/target/release/crawler /usr/local/bin/crawler
+COPY --from=builder /tmp/crawler /usr/local/bin/crawler
 COPY --from=builder /app/config /etc/crawler/config
 USER crawler
 WORKDIR /home/crawler
