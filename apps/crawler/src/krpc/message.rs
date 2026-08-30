@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 pub const PING: &[u8] = b"ping";
 pub const FIND_NODE: &[u8] = b"find_node";
+pub const SAMPLE_INFOHASHES: &[u8] = b"sample_infohashes";
 pub const GET_PEERS: &[u8] = b"get_peers";
 pub const ANNOUNCE_PEER: &[u8] = b"announce_peer";
 

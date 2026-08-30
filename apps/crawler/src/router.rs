@@ -83,6 +83,32 @@ impl Router {
         })
     }
 
+    pub fn random_sybil_id(&self) -> NodeId {
+        if self.sybils.is_empty() {
+            self.self_id
+        } else {
+            let idx = rand::random::<u64>() as usize % self.sybils.len();
+            self.sybils[idx].0
+        }
+    }
+
+    pub fn closest_sybil(&self, target: &[u8; 20]) -> NodeId {
+        if self.sybils.is_empty() {
+            return self.self_id;
+        }
+        let mut best_id = self.self_id;
+        let mut best_dist = crate::dht::routing_table::xor(target, &best_id);
+        
+        for (sid, _) in &self.sybils {
+            let dist = crate::dht::routing_table::xor(target, sid);
+            if dist < best_dist {
+                best_dist = dist;
+                best_id = *sid;
+            }
+        }
+        best_id
+    }
+
     pub fn handle_datagram(&self, buf: &[u8], from: SocketAddr) {
         let header = match crate::krpc::scanner::scan(buf) {
             Some(h) => h,
@@ -492,7 +518,7 @@ impl Router {
         &self.send_socks[idx]
     }
 
-    fn try_send(&self, buf: &[u8], addr: SocketAddr) {
+    pub fn try_send(&self, buf: &[u8], addr: SocketAddr) {
         match self.next_socket().try_send_to(buf, addr) {
             Ok(_) => {}
             Err(_) => {
@@ -505,6 +531,7 @@ impl Router {
         &self,
         addr: SocketAddr,
         target: &[u8; 20],
+        sender_id: &[u8; 20],
         timeout: Duration,
     ) -> Result<(Vec<NodeInfo>, Vec<NodeInfo>), QueryError> {
         let (txid, rx) = self.register(FIND_NODE);
@@ -517,7 +544,7 @@ impl Router {
         buf[pos..pos + b1.len()].copy_from_slice(b1);
         pos += b1.len();
 
-        buf[pos..pos + 20].copy_from_slice(&self.self_id);
+        buf[pos..pos + 20].copy_from_slice(sender_id);
         pos += 20;
 
         let b2 = b"6:target20:";
@@ -652,7 +679,7 @@ impl Router {
         }
     }
 
-    fn register(&self, method: &[u8]) -> (Bytes, oneshot::Receiver<Bytes>) {
+    pub fn register(&self, method: &[u8]) -> (Bytes, oneshot::Receiver<Bytes>) {
         for _ in 0..32 {
             let txid = Bytes::copy_from_slice(&rand::random::<[u8; 2]>());
             let kind = match method {
@@ -660,6 +687,7 @@ impl Router {
                 FIND_NODE => TxKind::FindNode,
                 GET_PEERS => TxKind::GetPeers,
                 ANNOUNCE_PEER => TxKind::AnnouncePeer,
+                crate::krpc::message::SAMPLE_INFOHASHES => TxKind::SampleInfohashes,
                 _ => TxKind::Ping,
             };
             let (tx, rx) = oneshot::channel();

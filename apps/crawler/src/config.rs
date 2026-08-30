@@ -191,8 +191,8 @@ impl Default for DhtConfig {
             walker_interval_ms: 250,
             walker_query_timeout_secs: 5,
             walker_self_explore_prob: 0.1,
-            sybil_count: 16,
-            sybil_bep42_ratio: 1.0 / 3.0,
+            sybil_count: 128,
+            sybil_bep42_ratio: 0.125,
             find_node_response_percent: 100,
             routing_k: 8,
             source_k: 8,
@@ -433,6 +433,7 @@ impl Config {
         self.dht.walker_interval_ms =
             env_u64("CRAW_WALKER_INTERVAL_MS", self.dht.walker_interval_ms);
         self.dht.sybil_count = env_usize("CRAW_SYBILS", self.dht.sybil_count);
+        self.dht.sybil_bep42_ratio = env_f64("CRAW_SYBIL_BEP42_RATIO", self.dht.sybil_bep42_ratio);
         self.dht.source_deadline_ms =
             env_u64("CRAW_SOURCE_DEADLINE_MS", self.dht.source_deadline_ms);
         self.dht.source_query_timeout_secs = env_u64(

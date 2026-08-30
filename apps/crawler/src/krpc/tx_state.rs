@@ -10,6 +10,7 @@ pub enum TxKind {
     FindNode,
     GetPeers,
     AnnouncePeer,
+    SampleInfohashes,
 }
 
 #[derive(Debug)]

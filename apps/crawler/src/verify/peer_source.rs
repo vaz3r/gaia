@@ -212,10 +212,11 @@ fn spawn_query(
     let router = router.clone();
     let ih = info_hash;
     let addr = node.addr;
+    let sender_id = router.closest_sybil(&info_hash);
     let args = BValue::dict(vec![
         (
             Bytes::from_static(b"id"),
-            BValue::Bytes(Bytes::copy_from_slice(&router.self_id)),
+            BValue::Bytes(Bytes::copy_from_slice(&sender_id)),
         ),
         (
             Bytes::from_static(b"info_hash"),

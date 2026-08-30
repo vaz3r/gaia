@@ -153,6 +153,7 @@ async fn main() {
             &bootstrap,
             metrics.clone(),
             harvest_tx.clone(),
+            fresh_verify_tx.clone(),
             &mut node_routers,
         )
         .await;
@@ -442,6 +443,7 @@ async fn spawn_node(
     bootstrap: &[SocketAddr],
     metrics: Arc<Metrics>,
     harvest_tx: mpsc::Sender<HarvestEvent>,
+    fresh_verify_tx: mpsc::Sender<[u8; 20]>,
     node_routers: &mut Vec<Arc<Router>>,
 ) {
     let data_dir = config.data_dir.join(format!("node_{node_index}"));
@@ -533,7 +535,9 @@ async fn spawn_node(
 
     let send_socks_arc = Arc::new(send_socks);
 
-    let table = Arc::new(RwLock::new(RoutingTable::new(self_id)));
+    let mut table_ids = vec![self_id];
+    table_ids.extend(sybils.iter().map(|(id, _)| *id));
+    let table = Arc::new(RwLock::new(RoutingTable::new(table_ids)));
     load_routing_snapshot(&table, &data_dir.join("routing_table.bin"));
 
     let inbound_limiter = Arc::new(RateLimiter::new(
@@ -603,6 +607,11 @@ async fn spawn_node(
     tokio::spawn(async move {
         walker.run().await;
     });
+    tokio::spawn(crate::dht::bep51::run_bep51_worker(
+        router.clone(),
+        Duration::from_secs(10),
+        fresh_verify_tx.clone(),
+    ));
     tokio::spawn(limiter_sweep_loop(
         limiter.clone(),
         Duration::from_secs(config.rate_limit_sweep_interval_secs),

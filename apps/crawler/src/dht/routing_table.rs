@@ -49,19 +49,80 @@ fn bucket_index(self_id: &NodeId, id: &NodeId) -> usize {
 }
 
 pub struct RoutingTable {
+    tables: Vec<SingleRoutingTable>,
+}
+
+impl RoutingTable {
+    pub fn new(self_ids: Vec<NodeId>) -> Self {
+        RoutingTable {
+            tables: self_ids.into_iter().map(SingleRoutingTable::new).collect(),
+        }
+    }
+
+    pub fn insert(&mut self, node: NodeInfo) -> bool {
+        self.tables.iter_mut().any(|t| t.insert(node.clone()))
+    }
+
+    pub fn closest(&self, target: &NodeId, n: usize) -> Vec<NodeInfo> {
+        let mut all_nodes = Vec::new();
+        for table in &self.tables {
+            all_nodes.extend(table.closest(target, n));
+        }
+        all_nodes.sort_unstable_by(|a, b| cmp_xor(target, &a.id, &b.id));
+        all_nodes.dedup_by(|a, b| a.id == b.id);
+        all_nodes.truncate(n);
+        all_nodes
+    }
+    pub fn all(&self) -> Vec<NodeInfo> {
+        let mut result = Vec::new();
+        for t in &self.tables {
+            result.extend(t.all());
+        }
+        result.sort_unstable_by_key(|n| n.id);
+        result.dedup_by(|a, b| a.id == b.id);
+        result
+    }
+
+    pub fn len(&self) -> usize {
+        self.tables.iter().map(|t| t.len()).sum()
+    }
+
+    pub fn buckets_used(&self) -> usize {
+        self.tables.iter().map(|t| t.buckets_used()).sum()
+    }
+
+    pub fn contains_id(&self, id: &NodeId) -> bool {
+        self.tables.iter().any(|t| t.contains_id(id))
+    }
+
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn random_nodes(&self, n: usize) -> Vec<NodeInfo> {
+        if self.tables.is_empty() {
+            return Vec::new();
+        }
+        let t = &self.tables[rand::random::<u64>() as usize % self.tables.len()];
+        t.random_nodes(n)
+    }
+}
+
+pub struct SingleRoutingTable {
     self_id: NodeId,
     buckets: Vec<VecDeque<NodeInfo>>,
 }
 
-impl RoutingTable {
+impl SingleRoutingTable {
     pub fn new(self_id: NodeId) -> Self {
-        RoutingTable {
-            self_id,
-            buckets: (0..160).map(|_| VecDeque::new()).collect(),
+        let mut buckets = Vec::with_capacity(160);
+        for _ in 0..160 {
+            buckets.push(VecDeque::with_capacity(K));
         }
+        SingleRoutingTable { self_id, buckets }
     }
 
-    #[allow(dead_code)]
     pub fn self_id(&self) -> NodeId {
         self.self_id
     }
@@ -239,7 +300,7 @@ mod tests {
 
     #[test]
     fn insert_and_closest() {
-        let mut rt = RoutingTable::new([0u8; 20]);
+        let mut rt = RoutingTable::new(vec![[0u8; 20]]);
         let mut nodes = Vec::new();
         for i in 1..17u8 {
             let mut id = [0u8; 20];
@@ -259,7 +320,7 @@ mod tests {
 
     #[test]
     fn random_nodes_populated_table() {
-        let mut rt = RoutingTable::new([0u8; 20]);
+        let mut rt = RoutingTable::new(vec![[0u8; 20]]);
         for i in 0..400u16 {
             let mut id = [0u8; 20];
             id[0] = (i >> 8) as u8;
@@ -284,7 +345,7 @@ mod tests {
         // So a flood of distinct ids saturates only the far buckets (K=8 each)
         // and the total length plateaus well below 160*K. This documents the
         // intrinsic property: a healthy table is ~100-400 nodes, not 1280.
-        let mut rt = RoutingTable::new([0u8; 20]);
+        let mut rt = RoutingTable::new(vec![[0u8; 20]]);
         let mut new_at_insert = 0u64;
         for i in 0..500_000u64 {
             let id = rand::random::<[u8; 20]>();
@@ -299,13 +360,11 @@ mod tests {
             });
         }
         assert_eq!(new_at_insert, 500_000);
-        let top = rt.bucket_fill(159) + rt.bucket_fill(158) + rt.bucket_fill(157);
         let total = rt.buckets_used();
         assert!(rt.len() > 50 && rt.len() < 512, "len={}", rt.len());
         assert!(
             total < 40,
             "only far buckets fill under uniform ids, used={total}"
         );
-        let _ = top;
     }
 }
