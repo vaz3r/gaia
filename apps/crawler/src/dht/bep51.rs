@@ -1,11 +1,10 @@
-use crate::router::Router;
+use crate::dht::node_id::random_node_id;
 use crate::dht::routing_table::NodeInfo;
-use crate::krpc::NodeId;
+use crate::krpc::message::Message;
+use crate::router::Router;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use crate::krpc::message::Message;
-use crate::dht::node_id::random_node_id;
 
 pub async fn run_bep51_worker(
     router: Arc<Router>,
@@ -22,9 +21,7 @@ pub async fn run_bep51_worker(
         let nodes = router.random_routing_nodes(10);
         for node in nodes {
             let r = router.clone();
-            set.spawn(async move {
-                send_sample_infohashes(&r, node).await
-            });
+            set.spawn(async move { send_sample_infohashes(&r, node).await });
         }
 
         while let Some(res) = set.join_next().await {
@@ -37,10 +34,7 @@ pub async fn run_bep51_worker(
     }
 }
 
-async fn send_sample_infohashes(
-    router: &Arc<Router>,
-    node: NodeInfo,
-) -> Result<Vec<[u8; 20]>, ()> {
+async fn send_sample_infohashes(router: &Arc<Router>, node: NodeInfo) -> Result<Vec<[u8; 20]>, ()> {
     let (txid, rx) = router.register(crate::krpc::message::SAMPLE_INFOHASHES);
     let sender_id = router.random_sybil_id();
     let target = random_node_id();
@@ -74,9 +68,9 @@ async fn send_sample_infohashes(
 
     match tokio::time::timeout(Duration::from_secs(5), rx).await {
         Ok(Ok(bytes)) => {
-            if let Ok(msg) = Message::parse(&bytes) {
-                if let crate::krpc::message::Kind::Response { r } = msg.kind {
-                    if let Some(samples) = r.get_bytes(b"samples") {
+            if let Ok(msg) = Message::parse(&bytes)
+                && let crate::krpc::message::Kind::Response { r } = msg.kind
+                    && let Some(samples) = r.get_bytes(b"samples") {
                         let mut infohashes = Vec::new();
                         let mut i = 0;
                         while i + 20 <= samples.len() {
@@ -87,8 +81,6 @@ async fn send_sample_infohashes(
                         }
                         return Ok(infohashes);
                     }
-                }
-            }
             Err(())
         }
         _ => Err(()),

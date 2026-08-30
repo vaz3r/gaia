@@ -134,7 +134,7 @@ pub async fn source_peers(
             inflight -= 1;
 
             if !new_nodes.is_empty() {
-                candidates.extend(new_nodes.drain(..));
+                candidates.append(&mut new_nodes);
                 candidates.sort_unstable_by(|a, b| cmp_xor(&info_hash, &a.id, &b.id));
                 candidates.dedup_by(|a, b| a.id == b.id);
                 candidates.truncate(k);

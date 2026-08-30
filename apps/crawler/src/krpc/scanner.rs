@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 
 #[derive(Debug, Default)]
 pub struct KrpcHeader<'a> {
@@ -7,7 +6,7 @@ pub struct KrpcHeader<'a> {
     pub q: Option<&'a [u8]>,
 }
 
-pub fn scan(input: &[u8]) -> Option<KrpcHeader> {
+pub fn scan(input: &[u8]) -> Option<KrpcHeader<'_>> {
     if input.is_empty() || input[0] != b'd' {
         return None;
     }
@@ -20,10 +19,7 @@ pub fn scan(input: &[u8]) -> Option<KrpcHeader> {
         }
 
         // Parse key
-        let key = match parse_string(input, &mut pos) {
-            Some(s) => s,
-            None => return None, // malformed
-        };
+        let key = parse_string(input, &mut pos)?;
 
         // Match key and parse value or skip
         if key == b"t" {

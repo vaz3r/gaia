@@ -540,11 +540,7 @@ async fn spawn_node(
     let table = Arc::new(RwLock::new(RoutingTable::new(table_ids)));
     load_routing_snapshot(&table, &data_dir.join("routing_table.bin"));
 
-    let inbound_limiter = Arc::new(RateLimiter::new(
-        2.0,
-        10.0,
-        5,
-    ));
+    let inbound_limiter = Arc::new(RateLimiter::new(2.0, 10.0, 5));
     tokio::spawn(limiter_sweep_loop(
         inbound_limiter.clone(),
         Duration::from_secs(5),
@@ -666,7 +662,11 @@ fn load_routing_snapshot(table: &Arc<RwLock<RoutingTable>>, path: &std::path::Pa
     );
 }
 
-async fn routing_snapshot_loop(table: Arc<RwLock<RoutingTable>>, path: PathBuf, interval: Duration) {
+async fn routing_snapshot_loop(
+    table: Arc<RwLock<RoutingTable>>,
+    path: PathBuf,
+    interval: Duration,
+) {
     let mut tick = tokio::time::interval(interval);
     loop {
         tick.tick().await;

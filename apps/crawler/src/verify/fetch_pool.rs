@@ -13,7 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::OwnedSemaphorePermit;
 use tokio::task::JoinSet;
 
 #[derive(Clone)]
@@ -37,8 +37,8 @@ fn sample_failed_peer(ih: &Infohash, addr: &SocketAddr, metrics: &Metrics, rate:
     let count = metrics.fetch_connect_io.load(Ordering::Relaxed);
     let hash = count
         .wrapping_mul(0x517c1b7275698a01)
-        .wrapping_mul(u64::from(ih[0] as u64) | 1);
-    if hash % rate == 0 {
+        .wrapping_mul((ih[0] as u64) | 1);
+    if hash.is_multiple_of(rate) {
         tracing::warn!(
             addr = %addr,
             ih_prefix = ?&ih[..4],
@@ -201,19 +201,19 @@ async fn race_transports<S: Send>(
 enum FetchOutcome {
     ConnectFailed(SocketAddr, WireError, CandidateSource, Duration),
     MetadataFailed(WireError, CandidateSource, Duration),
-    Success(Vec<u8>, CandidateSource, Duration),
+    Success(Vec<u8>, std::net::SocketAddr, CandidateSource, Duration),
 }
 
 fn outcome_source(outcome: &FetchOutcome) -> CandidateSource {
     match outcome {
         FetchOutcome::ConnectFailed(_, _, s, _) => *s,
         FetchOutcome::MetadataFailed(_, s, _) => *s,
-        FetchOutcome::Success(_, s, _) => *s,
+        FetchOutcome::Success(_, _, s, _) => *s,
     }
 }
 
 pub enum VerifyResult {
-    Success(Vec<u8>, CandidateSource, Duration),
+    Success(Vec<u8>, std::net::SocketAddr, CandidateSource, Duration),
     NoPeers,
     SourceTimeout,
     MetadataFailed,
@@ -588,7 +588,7 @@ async fn try_fetch(
                 phase: Some("metadata".to_string()),
                 elapsed_ms: Some(metadata_start.elapsed().as_millis().min(i32::MAX as u128) as i32),
             });
-            FetchOutcome::Success(meta, source, start.elapsed())
+            FetchOutcome::Success(meta, addr, source, start.elapsed())
         }
         Err(e) => {
             metrics.metadata_failed_io.add(1);
@@ -636,7 +636,8 @@ pub async fn verify_infohash(
     direct: Option<SocketAddr>,
     peer_outcomes: Arc<PeerOutcomeWriter>,
     conn_limiter: Arc<crate::verify::ConnLimiter>,
-    fetch_limit: Arc<Semaphore>,
+    fetch_limit: Arc<tokio::sync::Semaphore>,
+    negative_cache: Arc<dashmap::DashMap<std::net::IpAddr, tokio::time::Instant>>,
 ) -> VerifyResult {
     let race_peers = params.race_peers.max(1);
     let peer_id = gen_peer_id();
@@ -654,16 +655,15 @@ pub async fn verify_infohash(
     // 1) Enqueue the highest-quality leads in priority order:
     //    Priority 1: Direct peer supplied by announce_peer
     //    Priority 2: AnnouncePeerCache peer
-    if let Some(d) = direct {
-        if peers_seen.insert(d) && candidate_queue.len() < race_peers {
+    if let Some(d) = direct
+        && peers_seen.insert(d) && candidate_queue.len() < race_peers {
             metrics
                 .source_direct_accepted_total
                 .fetch_add(1, Ordering::Relaxed);
             candidate_queue.push_back((d, CandidateSource::Direct));
         }
-    }
-    if let Some(announcer) = announce_peer_cache.get(&info_hash) {
-        if peers_seen.insert(announcer) {
+    if let Some(announcer) = announce_peer_cache.get(&info_hash)
+        && peers_seen.insert(announcer) {
             crate::trace_lifecycle!(
                 &info_hash,
                 "announce_peer_injected",
@@ -677,7 +677,6 @@ pub async fn verify_infohash(
                 candidate_queue.push_back((announcer, CandidateSource::AnnounceCache));
             }
         }
-    }
 
     let is_lead_task = !candidate_queue.is_empty();
     if is_lead_task {
@@ -767,7 +766,7 @@ pub async fn verify_infohash(
     }
 
     let mut source_state = SourceState::Timeout;
-    let mut result: Option<(Vec<u8>, CandidateSource, Duration)> = None;
+    let mut result: Option<(Vec<u8>, std::net::SocketAddr, CandidateSource, Duration)> = None;
 
     // Persistent permit acquisition future across select! ticks.
     let mut permit_fut: Option<PermitAcquisitionFuture> = None;
@@ -789,8 +788,8 @@ pub async fn verify_infohash(
             // Active attempt completed
             res = set.join_next(), if !set.is_empty() => {
                 match res {
-                    Some(Ok(FetchOutcome::Success(meta, src, dur))) => {
-                        result = Some((meta, src, dur));
+                    Some(Ok(FetchOutcome::Success(meta, addr, src, dur))) => {
+                        result = Some((meta, addr, src, dur));
                         break;
                     }
                     Some(Ok(outcome)) => {
@@ -800,6 +799,7 @@ pub async fn verify_infohash(
                         }
                         match outcome {
                             FetchOutcome::ConnectFailed(_addr, WireError::Timeout, src, dur) => {
+                                negative_cache.insert(_addr.ip(), tokio::time::Instant::now() + std::time::Duration::from_secs(900));
                                 metrics.fetch_connect_timeout.add(1);
                                 metrics.verify_timeouts.add(1);
                                 match src {
@@ -817,6 +817,7 @@ pub async fn verify_infohash(
                                 }
                             }
                             FetchOutcome::ConnectFailed(_addr, WireError::Io(_), src, dur) => {
+                                negative_cache.insert(_addr.ip(), tokio::time::Instant::now() + std::time::Duration::from_secs(900));
                                 metrics.fetch_connect_io.add(1);
                                 match src {
                                     CandidateSource::Direct => {
@@ -904,7 +905,7 @@ pub async fn verify_infohash(
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
-                            FetchOutcome::Success(_, _, _) => {}
+                            FetchOutcome::Success(_, _, _, _) => {}
                         }
 
                         // Check lead exhaustion condition after a lead failure
@@ -958,6 +959,11 @@ pub async fn verify_infohash(
                             .fetch_add(1, Ordering::Relaxed);
                     }
                     if let Some((addr, source)) = candidate_queue.pop_front() {
+                        if let Some(exp) = negative_cache.get(&addr.ip())
+                            && *exp > tokio::time::Instant::now() {
+                                drop(permit);
+                                continue;
+                            }
                         if source != CandidateSource::Dht {
                             queued_lead_candidates = queued_lead_candidates.saturating_sub(1);
                             active_lead_attempts += 1;
@@ -1080,7 +1086,7 @@ pub async fn verify_infohash(
         .fetch_add(1, Ordering::Relaxed);
 
     match result {
-        Some((meta, src, dur)) => VerifyResult::Success(meta, src, dur),
+        Some((meta, peer, src, dur)) => VerifyResult::Success(meta, peer, src, dur),
         None => {
             if peers_seen.is_empty() {
                 match source_state {
@@ -1149,7 +1155,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use std::sync::atomic::AtomicU64;
-
+    use tokio::sync::Semaphore;
     fn ok_after(ms: u64) -> impl std::future::Future<Output = Result<(), WireError>> {
         async move {
             tokio::time::sleep(Duration::from_millis(ms)).await;
@@ -1797,6 +1803,7 @@ mod tests {
             drop(winning_permit);
             FetchOutcome::Success(
                 vec![0xAA; 20],
+                "127.0.0.1:6881".parse().unwrap(),
                 CandidateSource::Direct,
                 Duration::from_millis(10),
             )
@@ -1811,7 +1818,7 @@ mod tests {
         tokio::select! {
             biased;
             res = set.join_next(), if !set.is_empty() => {
-                if let Some(Ok(FetchOutcome::Success(meta, _src, _dur))) = res {
+                if let Some(Ok(FetchOutcome::Success(meta, _addr, _src, _dur))) = res {
                     result = Some(meta);
                 }
             }
@@ -2083,13 +2090,14 @@ mod tests {
         set.spawn(async move {
             FetchOutcome::Success(
                 vec![1, 2, 3],
+                "127.0.0.1:6881".parse().unwrap(),
                 CandidateSource::AnnounceCache,
                 Duration::from_millis(150),
             )
         });
 
         match set.join_next().await {
-            Some(Ok(FetchOutcome::Success(data, source, dur))) => {
+            Some(Ok(FetchOutcome::Success(data, _addr, source, dur))) => {
                 assert_eq!(data, vec![1, 2, 3]);
                 assert_eq!(source, CandidateSource::AnnounceCache);
                 assert_eq!(dur, Duration::from_millis(150));
@@ -2241,12 +2249,13 @@ mod tests {
         let lead_attempt = async {
             Some((
                 vec![1, 2, 3],
+                "127.0.0.1:6881".parse::<std::net::SocketAddr>().unwrap(),
                 CandidateSource::Direct,
                 Duration::from_millis(10),
             ))
         };
 
-        let result: Option<(Vec<u8>, CandidateSource, Duration)>;
+        let result: Option<(Vec<u8>, std::net::SocketAddr, CandidateSource, Duration)>;
         tokio::select! {
             res = lead_attempt => {
                 result = res;
@@ -2600,6 +2609,7 @@ mod tests {
         set.spawn(async {
             FetchOutcome::Success(
                 vec![1, 2, 3],
+                "127.0.0.1:6881".parse().unwrap(),
                 CandidateSource::Direct,
                 Duration::from_millis(20),
             )
@@ -2614,8 +2624,8 @@ mod tests {
         });
 
         let mut result = None;
-        if let Some(Ok(FetchOutcome::Success(meta, src, dur))) = set.join_next().await {
-            result = Some((meta, src, dur));
+        if let Some(Ok(FetchOutcome::Success(meta, addr, src, dur))) = set.join_next().await {
+            result = Some((meta, addr, src, dur));
             set.abort_all();
             dht_handle.abort();
         }

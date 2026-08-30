@@ -98,7 +98,7 @@ impl Router {
         }
         let mut best_id = self.self_id;
         let mut best_dist = crate::dht::routing_table::xor(target, &best_id);
-        
+
         for (sid, _) in &self.sybils {
             let dist = crate::dht::routing_table::xor(target, sid);
             if dist < best_dist {
@@ -157,13 +157,11 @@ impl Router {
                     }
                 }
             } else if y == b"r" || y == b"e" {
-                if let Some(t) = header.t {
-                    if let Some(entry) = self.tx.take(t) {
-                        if let Some(reply) = entry.reply {
+                if let Some(t) = header.t
+                    && let Some(entry) = self.tx.take(t)
+                        && let Some(reply) = entry.reply {
                             let _ = reply.send(Bytes::copy_from_slice(buf));
                         }
-                    }
-                }
                 return;
             }
         }
@@ -600,17 +598,14 @@ impl Router {
                             break;
                         }
                     }
-                    if colon_pos > 0 {
-                        if let Ok(len_str) = std::str::from_utf8(&bytes[start..colon_pos]) {
-                            if let Ok(len) = len_str.parse::<usize>() {
-                                if colon_pos + 1 + len <= bytes.len() {
+                    if colon_pos > 0
+                        && let Ok(len_str) = std::str::from_utf8(&bytes[start..colon_pos])
+                            && let Ok(len) = len_str.parse::<usize>()
+                                && colon_pos + 1 + len <= bytes.len() {
                                     nodes.extend(crate::dht::routing_table::decode_compact(
                                         &bytes[colon_pos + 1..colon_pos + 1 + len],
                                     ));
                                 }
-                            }
-                        }
-                    }
                 }
 
                 let pat_nodes6 = b"6:nodes6";
@@ -626,17 +621,14 @@ impl Router {
                             break;
                         }
                     }
-                    if colon_pos > 0 {
-                        if let Ok(len_str) = std::str::from_utf8(&bytes[start..colon_pos]) {
-                            if let Ok(len) = len_str.parse::<usize>() {
-                                if colon_pos + 1 + len <= bytes.len() {
+                    if colon_pos > 0
+                        && let Ok(len_str) = std::str::from_utf8(&bytes[start..colon_pos])
+                            && let Ok(len) = len_str.parse::<usize>()
+                                && colon_pos + 1 + len <= bytes.len() {
                                     nodes6.extend(crate::dht::routing_table::decode_compact6(
                                         &bytes[colon_pos + 1..colon_pos + 1 + len],
                                     ));
                                 }
-                            }
-                        }
-                    }
                 }
 
                 Ok((nodes, nodes6))

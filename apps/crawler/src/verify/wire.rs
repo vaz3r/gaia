@@ -264,7 +264,7 @@ impl WireSession {
             stream = "fetch",
             client = client.as_deref().unwrap_or("unknown"),
             ut_metadata = self.ut_metadata as u32,
-            metadata_size = self.metadata_size.unwrap_or(0) as usize,
+            metadata_size = { self.metadata_size.unwrap_or(0) },
             reqq = reqq,
             extensions = all_exts.join(",").as_str()
         );
@@ -401,7 +401,7 @@ impl WireSession {
             metadata.extend_from_slice(&data);
 
             let total_pieces = known_size
-                .map(|ts| (ts + PIECE_SIZE - 1) / PIECE_SIZE)
+                .map(|ts| ts.div_ceil(PIECE_SIZE))
                 .unwrap_or(0);
             let piece_status = format!("{}/{}", piece, total_pieces);
             crate::trace_lifecycle!(

@@ -1,5 +1,3 @@
-use std::env;
-use std::process::Command;
 
 #[test]
 #[cfg(target_os = "linux")]

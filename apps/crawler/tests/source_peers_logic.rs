@@ -52,8 +52,7 @@ fn decode_compact_parses_all_nodes() {
 #[test]
 fn closest_returns_sorted_by_xor_distance() {
     let ih = Infohash::from([0xFF; 20]);
-    let mut nodes = vec![
-        NodeInfo {
+    let mut nodes = [NodeInfo {
             id: [0x01; 20],
             addr: "1.1.1.1:6881".parse().unwrap(),
         },
@@ -64,8 +63,7 @@ fn closest_returns_sorted_by_xor_distance() {
         NodeInfo {
             id: [0x80; 20],
             addr: "3.3.3.3:6881".parse().unwrap(),
-        },
-    ];
+        }];
     nodes.sort_by_key(|n| xor(&ih, &n.id));
     assert_eq!(nodes[0].id, [0xFE; 20], "0xFE should be closest to 0xFF");
     assert_eq!(nodes[1].id, [0x80; 20]);

@@ -1,6 +1,6 @@
 use crate::dht::routing_table::{NodeInfo, decode_compact};
 use crate::krpc::codec::BValue;
-use crate::krpc::message::{FIND_NODE, Kind, Message};
+use crate::krpc::message::Kind;
 use crate::metrics::Add1;
 use crate::net::rate_limit::RateLimiter;
 use crate::router::Router;
@@ -55,7 +55,6 @@ impl Walker {
                 router
                     .send_find_node_fast(addr, &target, &sender, query_timeout)
                     .await
-                    .map(|(n, n6)| (n, n6))
             });
         }
         while let Some(res) = set.join_next().await {

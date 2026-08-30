@@ -25,6 +25,7 @@ pub struct BatchWriter {
     pool: PgPool,
     jobs: Mutex<Vec<JobUpdate>>,
     torrents: Mutex<Vec<TorrentEntry>>,
+    stable_peers: Mutex<Vec<std::net::SocketAddr>>,
     backoffs: Vec<Duration>,
     max_retries: i32,
     no_peers_terminal_on_first: bool,
@@ -50,6 +51,7 @@ impl BatchWriter {
             pool,
             jobs: Mutex::new(Vec::with_capacity(4096)),
             torrents: Mutex::new(Vec::with_capacity(4096)),
+            stable_peers: Mutex::new(Vec::with_capacity(4096)),
             backoffs,
             max_retries,
             no_peers_terminal_on_first,
@@ -72,7 +74,12 @@ impl BatchWriter {
         buf.push(JobUpdate::Failed(ih, error.to_owned()));
     }
 
-    pub fn push_torrent(&self, ih: Infohash, metadata: &[u8]) {
+    pub fn push_torrent(&self, ih: Infohash, metadata: &[u8], peer_addr: std::net::SocketAddr) {
+        let mut stable = self
+            .stable_peers
+            .lock()
+            .expect("batch writer stable_peers poisoned");
+        stable.push(peer_addr);
         let p = parse_info_dict(metadata);
         let mut buf = self
             .torrents
@@ -107,6 +114,13 @@ impl BatchWriter {
 
         let job_batch: Vec<JobUpdate> = {
             let mut buf = self.jobs.lock().expect("batch writer jobs poisoned");
+            buf.drain(..).collect()
+        };
+        let stable_peers_batch: Vec<std::net::SocketAddr> = {
+            let mut buf = self
+                .stable_peers
+                .lock()
+                .expect("batch writer stable_peers poisoned");
             buf.drain(..).collect()
         };
         let torrent_batch: Vec<TorrentEntry> = {
@@ -146,11 +160,13 @@ impl BatchWriter {
                 })
                 .collect();
         }
-        if !torrent_batch.is_empty() {
-            if flush_torrents(&self.pool, &torrent_batch, self.torrent_flush_chunk).await {
+        if !torrent_batch.is_empty()
+            && flush_torrents(&self.pool, &torrent_batch, self.torrent_flush_chunk).await {
                 self.torrents_written
                     .fetch_add(torrent_batch.len() as u64, Ordering::Relaxed);
             }
+        if !stable_peers_batch.is_empty() {
+            flush_stable_peers(&self.pool, &stable_peers_batch, self.flush_chunk).await;
         }
         if !verified_ihs.is_empty() {
             delete_verified(&self.pool, &verified_ihs, self.flush_chunk).await;
@@ -373,6 +389,35 @@ async fn delete_verified(pool: &PgPool, infohashes: &[Vec<u8>], flush_chunk: usi
             Err(e) => {
                 tracing::warn!(error = %e, "batch: delete verified jobs failed");
             }
+        }
+    }
+}
+
+async fn flush_stable_peers(pool: &PgPool, peers: &[std::net::SocketAddr], chunk_size: usize) {
+    for chunk in peers.chunks(chunk_size) {
+        let mut ips = Vec::with_capacity(chunk.len());
+        let mut ports = Vec::with_capacity(chunk.len());
+
+        for addr in chunk {
+            ips.push(addr.ip().to_string());
+            ports.push(addr.port() as i32);
+        }
+
+        let query = r#"
+            INSERT INTO stable_peers (ip, port, metadata_provided_count, first_seen, last_seen)
+            SELECT u.ip, u.port, 1, now(), now()
+            FROM UNNEST($1::inet[], $2::int[]) AS u(ip, port)
+            ON CONFLICT (ip, port) DO UPDATE 
+            SET metadata_provided_count = stable_peers.metadata_provided_count + 1,
+                last_seen = now()
+        "#;
+        if let Err(e) = sqlx::query(query)
+            .bind(&ips)
+            .bind(&ports)
+            .execute(pool)
+            .await
+        {
+            tracing::error!(error = %e, "failed to batch insert stable_peers");
         }
     }
 }

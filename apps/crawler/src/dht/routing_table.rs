@@ -176,18 +176,17 @@ impl SingleRoutingTable {
                         dist,
                         node: node.clone(),
                     });
-                } else if let Some(max_node) = heap.peek() {
-                    if dist < max_node.dist {
+                } else if let Some(max_node) = heap.peek()
+                    && dist < max_node.dist {
                         heap.pop();
                         heap.push(DistanceNode {
                             dist,
                             node: node.clone(),
                         });
                     }
-                }
             }
         }
-        
+
         let mut result: Vec<NodeInfo> = heap.into_iter().map(|w| w.node).collect();
         result.sort_unstable_by(|a, b| cmp_xor(target, &a.id, &b.id));
         result

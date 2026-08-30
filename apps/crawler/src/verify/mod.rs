@@ -178,6 +178,16 @@ pub async fn run_pipeline(
 ) {
     let pipeline_limit = Arc::new(Semaphore::new(config.pipeline_limit.max(1)));
     let fetch_limit = Arc::new(Semaphore::new(config.fetch_limit.max(1)));
+    let negative_cache = Arc::new(dashmap::DashMap::new());
+    let nc_clone = negative_cache.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            let now = tokio::time::Instant::now();
+            nc_clone.retain(|_, v| *v > now);
+        }
+    });
     let next_router = AtomicUsize::new(0);
     // Fair-drain batch: after this many consecutive fresh/announce items, force
     // one retry-channel item so a backlogged verify queue is never starved.
@@ -196,27 +206,18 @@ pub async fn run_pipeline(
 
         let (ih, direct, came_from_scheduler) = loop {
             // 1) Announce (direct peer) has top priority.
-            match announce_rx.try_recv() {
-                Ok((ih, addr)) => break (ih, Some(addr), false),
-                Err(_) => {}
-            }
+            if let Ok((ih, addr)) = announce_rx.try_recv() { break (ih, Some(addr), false) }
             // 2) Fresh discoveries, batched so they cannot monopolize the queue.
             if fresh_streak < fresh_batch {
-                match fresh_rx.try_recv() {
-                    Ok(ih) => {
-                        fresh_streak += 1;
-                        break (ih, None, false);
-                    }
-                    Err(_) => {}
+                if let Ok(ih) = fresh_rx.try_recv() {
+                    fresh_streak += 1;
+                    break (ih, None, false);
                 }
             }
             // 3) Retry channel: guaranteed slot after every fresh_batch.
-            match rx.try_recv() {
-                Ok(ih) => {
-                    fresh_streak = 0;
-                    break (ih, None, true);
-                }
-                Err(_) => {}
+            if let Ok(ih) = rx.try_recv() {
+                fresh_streak = 0;
+                break (ih, None, true);
             }
             // 4) Everything momentarily empty: block on the first producer.
             break tokio::select! {
@@ -305,6 +306,7 @@ pub async fn run_pipeline(
         let conn_limiter = conn_limiter.clone();
         let params = config.params.clone();
         let fetch_limit = fetch_limit.clone();
+        let negative_cache = negative_cache.clone();
         tokio::spawn(async move {
             let _pipeline_permit = _pipeline_permit;
             metrics.pipeline_spawned_total.add(1);
@@ -326,11 +328,12 @@ pub async fn run_pipeline(
                 peer_outcomes,
                 conn_limiter,
                 fetch_limit,
+                negative_cache,
             )
             .await;
             let handling_start = Instant::now();
             match verify_result {
-                VerifyResult::Success(meta, source, dur) if check(&ih, &meta) => {
+                VerifyResult::Success(meta, peer_addr, source, dur) if check(&ih, &meta) => {
                     crate::trace_lifecycle!(&ih, "sha1_check", stream = "verify", result = "pass");
                     metrics.verify_success.add(1);
                     match source {
@@ -366,7 +369,7 @@ pub async fn run_pipeline(
                     if is_direct {
                         metrics.announce_success.add(1);
                     }
-                    batch_writer.push_torrent(ih, &meta);
+                    batch_writer.push_torrent(ih, &meta, peer_addr);
                     crate::trace_lifecycle!(
                         &ih,
                         "persist_torrents",
@@ -380,7 +383,7 @@ pub async fn run_pipeline(
                         batch_writer.push_verified(ih);
                     }
                 }
-                VerifyResult::Success(_, _, _) => {
+                VerifyResult::Success(_, _, _, _) => {
                     crate::trace_lifecycle!(&ih, "sha1_check", stream = "verify", result = "fail");
                     metrics.sha1_mismatch.add(1);
                     metrics.verify_fail.add(1);

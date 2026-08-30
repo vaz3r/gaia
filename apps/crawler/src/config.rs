@@ -371,19 +371,17 @@ impl Config {
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_CONFIG_PATH));
 
         let default_path = config_dir.join("default.toml");
-        if let Ok(contents) = std::fs::read_to_string(&default_path) {
-            if let Ok(toml_cfg) = toml::from_str::<PartialConfig>(&contents) {
+        if let Ok(contents) = std::fs::read_to_string(&default_path)
+            && let Ok(toml_cfg) = toml::from_str::<PartialConfig>(&contents) {
                 toml_cfg.merge_into(&mut cfg);
             }
-        }
 
         // 2. Load profile TOML (if present).
         let profile_path = config_dir.join(format!("{profile}.toml"));
-        if let Ok(contents) = std::fs::read_to_string(&profile_path) {
-            if let Ok(toml_cfg) = toml::from_str::<PartialConfig>(&contents) {
+        if let Ok(contents) = std::fs::read_to_string(&profile_path)
+            && let Ok(toml_cfg) = toml::from_str::<PartialConfig>(&contents) {
                 toml_cfg.merge_into(&mut cfg);
             }
-        }
 
         // 3. Apply env overrides (highest precedence).
         cfg.apply_env();
@@ -406,7 +404,7 @@ impl Config {
         }
         self.worker_threads = env_usize("CRAW_WORKERS", self.worker_threads).max(1);
         self.nodes = env_usize("CRAW_NODES", self.nodes).max(1);
-        self.port_base = env_u64("CRAW_PORT_BASE", 0).max(0) as u16;
+        self.port_base = env_u64("CRAW_PORT_BASE", 0) as u16;
         if self.port_base == 0 {
             self.port_base = self.bind_addr.port();
         }
