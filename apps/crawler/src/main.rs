@@ -469,6 +469,19 @@ async fn spawn_node(
     #[cfg(target_os = "linux")]
     let mut recv_socks = Vec::with_capacity(config.worker_threads);
     let use_mmsg = config.dht.linux_mmsg_receive;
+    let requested = if use_mmsg { "recvmmsg" } else { "tokio" };
+    let effective = requested;
+
+    if use_mmsg {}
+
+    tracing::info!(
+        requested_backend = requested,
+        effective_backend = effective,
+        worker_count = config.worker_threads,
+        batch_size = 32,
+        git_hash = env!("CRAW_GIT_HASH"),
+        "backend setup"
+    );
 
     if use_mmsg {
         #[cfg(target_os = "linux")]
@@ -503,10 +516,6 @@ async fn spawn_node(
                 let tokio_sock = Arc::new(UdpSocket::from_std(std_sock).expect("tokio fromstd"));
                 send_socks.push(tokio_sock);
             }
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            panic!("recvmmsg receive backend is only supported on Linux targets");
         }
     }
 

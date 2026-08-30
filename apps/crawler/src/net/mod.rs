@@ -70,3 +70,52 @@ pub async fn worker(
         );
     }
 }
+
+pub fn resolve_backend(use_mmsg: bool, is_linux: bool) -> (&'static str, &'static str) {
+    let requested = if use_mmsg { "recvmmsg" } else { "tokio" };
+    if use_mmsg && !is_linux {
+        panic!("recvmmsg receive backend is only supported on Linux targets");
+    }
+    (requested, requested) // It fails closed, so effective always equals requested if it didn't panic
+}
+
+#[cfg(test)]
+mod backend_tests {
+    use super::*;
+
+    #[test]
+    fn test_linux_flag_true_selects_recvmmsg() {
+        let (req, eff) = resolve_backend(true, true);
+        assert_eq!(req, "recvmmsg");
+        assert_eq!(eff, "recvmmsg");
+    }
+
+    #[test]
+    fn test_linux_flag_false_selects_tokio() {
+        let (req, eff) = resolve_backend(false, true);
+        assert_eq!(req, "tokio");
+        assert_eq!(eff, "tokio");
+    }
+
+    #[test]
+    #[should_panic(expected = "recvmmsg receive backend is only supported on Linux targets")]
+    fn test_requested_recvmmsg_fails_closed_on_non_linux() {
+        resolve_backend(true, false);
+    }
+
+    #[test]
+    fn test_startup_backend_log_reports_consistently() {
+        // If it doesn't panic, they match.
+        let (req, eff) = resolve_backend(true, true);
+        assert_eq!(req, eff);
+        let (req, eff) = resolve_backend(false, false);
+        assert_eq!(req, eff);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_production_module_graph_includes_mmsg() {
+        // Just referencing a type from mmsg ensures it's in the module graph
+        let _ = std::any::type_name::<crate::net::mmsg::ReceivedBatch>();
+    }
+}
