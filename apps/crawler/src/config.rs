@@ -208,7 +208,7 @@ impl Default for DhtConfig {
             rate_limit_burst: 64.0,
             rate_limit_bucket_ttl_secs: 600,
             token_window_secs: 300,
-            linux_mmsg_receive: false,
+            linux_mmsg_receive: true,
         }
     }
 }
