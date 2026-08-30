@@ -34,7 +34,7 @@ use std::net::SocketAddr;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::io::unix::AsyncFd;
 use tokio::net::UdpSocket;
@@ -533,7 +533,7 @@ async fn spawn_node(
 
     let send_socks_arc = Arc::new(send_socks);
 
-    let table = Arc::new(Mutex::new(RoutingTable::new(self_id)));
+    let table = Arc::new(RwLock::new(RoutingTable::new(self_id)));
     load_routing_snapshot(&table, &data_dir.join("routing_table.bin"));
 
     let tx_table = Arc::new(TxTable::new());
@@ -626,7 +626,7 @@ fn load_or_create_secret(path: &std::path::Path) -> [u8; 32] {
     secret
 }
 
-fn load_routing_snapshot(table: &Arc<Mutex<RoutingTable>>, path: &std::path::Path) {
+fn load_routing_snapshot(table: &Arc<RwLock<RoutingTable>>, path: &std::path::Path) {
     let Ok(data) = std::fs::read(path) else {
         return;
     };
@@ -634,7 +634,7 @@ fn load_routing_snapshot(table: &Arc<Mutex<RoutingTable>>, path: &std::path::Pat
         return;
     };
     {
-        let mut rt = table.lock().expect("routing table poisoned");
+        let mut rt = table.write().expect("routing table poisoned");
         for n in nodes {
             rt.insert(n);
         }
@@ -646,11 +646,11 @@ fn load_routing_snapshot(table: &Arc<Mutex<RoutingTable>>, path: &std::path::Pat
     );
 }
 
-async fn routing_snapshot_loop(table: Arc<Mutex<RoutingTable>>, path: PathBuf, interval: Duration) {
+async fn routing_snapshot_loop(table: Arc<RwLock<RoutingTable>>, path: PathBuf, interval: Duration) {
     let mut tick = tokio::time::interval(interval);
     loop {
         tick.tick().await;
-        let nodes = table.lock().expect("routing table poisoned").all();
+        let nodes = table.read().expect("routing table poisoned").all();
         if let Ok(data) = bincode::serialize(&nodes) {
             let tmp = path.with_extension("bin.tmp");
             if std::fs::write(&tmp, data).is_ok() {

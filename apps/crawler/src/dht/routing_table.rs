@@ -84,15 +84,52 @@ impl RoutingTable {
     }
 
     pub fn closest(&self, target: &NodeId, n: usize) -> Vec<NodeInfo> {
-        let mut all: Vec<NodeInfo> = self
-            .buckets
-            .iter()
-            .flat_map(|b| b.iter())
-            .cloned()
-            .collect();
-        all.sort_unstable_by(|a, b| cmp_xor(target, &a.id, &b.id));
-        all.truncate(n);
-        all
+        #[derive(Clone)]
+        struct DistanceNode {
+            dist: [u8; 20],
+            node: NodeInfo,
+        }
+        impl PartialEq for DistanceNode {
+            fn eq(&self, other: &Self) -> bool {
+                self.dist == other.dist
+            }
+        }
+        impl Eq for DistanceNode {}
+        impl PartialOrd for DistanceNode {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.dist.cmp(&other.dist))
+            }
+        }
+        impl Ord for DistanceNode {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                self.dist.cmp(&other.dist)
+            }
+        }
+
+        let mut heap = std::collections::BinaryHeap::with_capacity(n);
+        for bucket in &self.buckets {
+            for node in bucket {
+                let dist = xor(target, &node.id);
+                if heap.len() < n {
+                    heap.push(DistanceNode {
+                        dist,
+                        node: node.clone(),
+                    });
+                } else if let Some(max_node) = heap.peek() {
+                    if dist < max_node.dist {
+                        heap.pop();
+                        heap.push(DistanceNode {
+                            dist,
+                            node: node.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        
+        let mut result: Vec<NodeInfo> = heap.into_iter().map(|w| w.node).collect();
+        result.sort_unstable_by(|a, b| cmp_xor(target, &a.id, &b.id));
+        result
     }
 
     pub fn all(&self) -> Vec<NodeInfo> {

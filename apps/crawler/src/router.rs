@@ -10,7 +10,7 @@ use crate::metrics::{Add1, Metrics};
 use bytes::Bytes;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, oneshot};
@@ -43,7 +43,7 @@ pub struct Router {
     send_idx: AtomicUsize,
     tx: Arc<TxTable>,
     token: Arc<RwLock<TokenGenerator>>,
-    table: Arc<Mutex<RoutingTable>>,
+    table: Arc<RwLock<RoutingTable>>,
     harvest_tx: mpsc::Sender<HarvestEvent>,
     metrics: Arc<Metrics>,
     find_node_response_percent: u8,
@@ -59,7 +59,7 @@ impl Router {
         send_socks: Arc<Vec<Arc<UdpSocket>>>,
         tx: Arc<TxTable>,
         token: Arc<RwLock<TokenGenerator>>,
-        table: Arc<Mutex<RoutingTable>>,
+        table: Arc<RwLock<RoutingTable>>,
         harvest_tx: mpsc::Sender<HarvestEvent>,
         metrics: Arc<Metrics>,
         find_node_response_percent: u8,
@@ -196,7 +196,7 @@ impl Router {
         if sybils.len() < count {
             let known = self
                 .table
-                .lock()
+                .read()
                 .expect("routing table poisoned")
                 .closest(target, count - sybils.len());
             sybils.extend(known);
@@ -669,7 +669,7 @@ impl Router {
     }
 
     pub fn insert_nodes(&self, nodes: Vec<NodeInfo>) {
-        let mut table = self.table.lock().expect("routing table poisoned");
+        let mut table = self.table.write().expect("routing table poisoned");
         self.metrics.routing_insert_calls.add(nodes.len() as u64);
         let mut new_ids = 0u64;
         let mut rejected = 0u64;
@@ -695,7 +695,7 @@ impl Router {
     }
 
     pub fn routing_nodes(&self) -> Vec<NodeInfo> {
-        self.table.lock().expect("routing table poisoned").all()
+        self.table.read().expect("routing table poisoned").all()
     }
 
     pub fn metrics(&self) -> &Arc<Metrics> {
@@ -704,14 +704,14 @@ impl Router {
 
     pub fn random_routing_nodes(&self, n: usize) -> Vec<NodeInfo> {
         self.table
-            .lock()
+            .read()
             .expect("routing table poisoned")
             .random_nodes(n)
     }
 
     pub fn closest_nodes(&self, target: &[u8; 20], n: usize) -> Vec<NodeInfo> {
         self.table
-            .lock()
+            .read()
             .expect("routing table poisoned")
             .closest(target, n)
     }
