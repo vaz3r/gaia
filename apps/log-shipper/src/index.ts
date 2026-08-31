@@ -1,17 +1,17 @@
-const fs = require('fs-extra');
-const path = require('path');
-const axios = require('axios');
-const FormData = require('form-data');
-const crypto = require('crypto');
-const pino = require('pino');
+import fs from 'fs-extra';
+import path from 'path';
+import axios from 'axios';
+import FormData from 'form-data';
+import crypto from 'crypto';
+import pino from 'pino';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
 const SOURCE_DIR = process.env.SOURCE_DIR || '/logs';
 const RECEIVER_URL = process.env.RECEIVER_URL || 'http://log-receiver:3000';
 const API_KEY = process.env.API_KEY;
-const SCAN_INTERVAL_MS = parseInt(process.env.SCAN_INTERVAL_MS) || 300000;
-const FILE_MIN_AGE_MS = parseInt(process.env.FILE_MIN_AGE_MS) || 120000;
+const SCAN_INTERVAL_MS = process.env.SCAN_INTERVAL_MS ? parseInt(process.env.SCAN_INTERVAL_MS, 10) : 300000;
+const FILE_MIN_AGE_MS = process.env.FILE_MIN_AGE_MS ? parseInt(process.env.FILE_MIN_AGE_MS, 10) : 120000;
 const HOST_NAME = process.env.HOST_NAME || 'gaia';
 
 if (!API_KEY) {
@@ -20,27 +20,33 @@ if (!API_KEY) {
 }
 
 const MANIFEST_PATH = path.join(SOURCE_DIR, 'processed.json');
-let processedManifest = {};
 
-async function loadManifest() {
+interface ProcessedFile {
+  checksum: string;
+  shippedAt: string;
+}
+
+let processedManifest: Record<string, ProcessedFile> = {};
+
+async function loadManifest(): Promise<void> {
   try {
     if (await fs.pathExists(MANIFEST_PATH)) {
       processedManifest = await fs.readJson(MANIFEST_PATH);
     }
-  } catch (error) {
+  } catch (error: any) {
     logger.warn({ error: error.message }, 'Could not load manifest, starting fresh');
   }
 }
 
-async function saveManifest() {
+async function saveManifest(): Promise<void> {
   try {
     await fs.writeJson(MANIFEST_PATH, processedManifest);
-  } catch (error) {
+  } catch (error: any) {
     logger.error({ error: error.message }, 'Failed to save manifest');
   }
 }
 
-function calculateChecksum(filePath) {
+function calculateChecksum(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
     const stream = fs.createReadStream(filePath);
@@ -50,7 +56,7 @@ function calculateChecksum(filePath) {
   });
 }
 
-async function scanAndShip() {
+async function scanAndShip(): Promise<void> {
   logger.info('Starting scan...');
   try {
     await fs.ensureDir(SOURCE_DIR);
@@ -64,14 +70,12 @@ async function scanAndShip() {
       const filePath = path.join(SOURCE_DIR, file);
       const stats = await fs.stat(filePath);
       
-      // Check if file is old enough to ensure crawler is done writing to it
       if (now - stats.mtimeMs < FILE_MIN_AGE_MS) {
         continue;
       }
 
       if (processedManifest[file]) {
         logger.debug({ file }, 'File already processed, skipping');
-        // Delete it if it still exists (maybe we failed to delete it last time)
         try {
           await fs.remove(filePath);
           logger.info({ file }, 'Cleaned up leftover processed file');
@@ -103,11 +107,10 @@ async function scanAndShip() {
           processedManifest[file] = { checksum, shippedAt: new Date().toISOString() };
           await saveManifest();
           
-          // Delete file from source!
           await fs.remove(filePath);
           logger.info({ file }, 'Deleted file from source directory');
         }
-      } catch (error) {
+      } catch (error: any) {
         if (error.response && error.response.status === 200 && error.response.data && error.response.data.status === 'duplicate') {
            logger.info({ event: 'file_duplicate', file }, 'File was a duplicate on receiver');
            processedManifest[file] = { checksum, shippedAt: new Date().toISOString() };
@@ -118,7 +121,7 @@ async function scanAndShip() {
         }
       }
     }
-  } catch (error) {
+  } catch (error: any) {
     logger.error({ error: error.message }, 'Error during scan loop');
   }
 }
