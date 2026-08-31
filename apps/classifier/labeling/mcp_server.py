@@ -123,7 +123,7 @@ class ClassificationResult(BaseModel):
 
 # --- Tools ---
 @mcp.tool
-def get_unclassified_batch(limit: int = 10) -> dict:
+def get_unclassified_batch(limit: int = 50) -> dict:
     """
     Fetches unclassified torrents from PostgreSQL.
 
