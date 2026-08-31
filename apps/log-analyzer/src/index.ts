@@ -9,6 +9,7 @@ dotenv.config();
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.set('json replacer', (key: string, value: any) => typeof value === 'bigint' ? Number(value) : value);
 
 const PORT = process.env.PORT || 3001;
 const LOGS_DIR = process.env.LOGS_DIR || '/logs';
