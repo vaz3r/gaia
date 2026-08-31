@@ -100,12 +100,11 @@ mcp = FastMCP(
     instructions=(
         "You are a BitTorrent metadata classifier. "
         "1. Call get_labeling_instructions() first to learn the categories and rules. "
-        "2. Call get_unclassified_batch(limit=50) to get torrents with full metadata "
+        "2. Call get_unclassified_batch() to get 50 torrents with full metadata "
         "(name, file_count, total_size_bytes, extensions, top_folders, largest_files). "
         "3. Classify each torrent using ALL the metadata provided. "
         "4. Call record_classifications(results) to log your observations. "
-        "5. Repeat from step 2 until hasMore is false. "
-        "Always use limit=50 for batches."
+        "5. Repeat from step 2 until hasMore is false."
     ),
     version="1.0.0",
 )
@@ -123,21 +122,17 @@ class ClassificationResult(BaseModel):
 
 # --- Tools ---
 @mcp.tool
-def get_unclassified_batch(limit: int = 50) -> dict:
+def get_unclassified_batch() -> dict:
     """
-    Fetches unclassified torrents from PostgreSQL.
-    IMPORTANT: Always call with limit=50. Do not use any other limit value.
+    Fetches 50 unclassified torrents from PostgreSQL.
 
-    Returns torrents that have NOT been classified yet (not in labeled_results table).
+    Returns torrents that have NOT been classified yet.
     Each torrent includes: infohash, name, file_count, total_size_bytes, extensions, top_folders, largest_files.
-
-    Args:
-        limit: Number of torrents to fetch. MUST be 50.
 
     Returns:
         dict with keys: torrents, hasMore, batchId, totalClassified, totalRemaining, instructions
     """
-    limit = min(max(limit, 1), 100)
+    limit = 50
     conn = get_db()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -271,7 +266,7 @@ def get_unclassified_batch(limit: int = 50) -> dict:
                 "top_folders (directory structure), largest_files (top 3 by size with names and sizes). "
                 "Use all this metadata to classify. "
                 "Then call record_classifications() to log your observations. "
-                "After saving, call get_unclassified_batch(limit=50) for the next batch. "
+                "Call get_unclassified_batch() again for the next batch. "
                 "Repeat until hasMore is false."
             ),
         }
