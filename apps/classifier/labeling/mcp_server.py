@@ -103,7 +103,7 @@ mcp = FastMCP(
         "2. Call get_unclassified_batch(limit=50) to get torrents with full metadata "
         "(name, file_count, total_size_bytes, extensions, top_folders, largest_files). "
         "3. Classify each torrent using ALL the metadata provided. "
-        "4. Call save_classifications(results) to save your classifications. "
+        "4. Call record_classifications(results) to log your observations. "
         "5. Repeat from step 2 until hasMore is false. "
         "Always use limit=50 for batches."
     ),
@@ -269,7 +269,7 @@ def get_unclassified_batch(limit: int = 10) -> dict:
                 "Each torrent has: name, file_count, total_size_bytes, extensions (file types), "
                 "top_folders (directory structure), largest_files (top 3 by size with names and sizes). "
                 "Use all this metadata to classify. "
-                "Then call save_classifications() with your results. "
+                "Then call record_classifications() to log your observations. "
                 "After saving, call get_unclassified_batch(limit=50) for the next batch. "
                 "Repeat until hasMore is false."
             ),
@@ -279,15 +279,19 @@ def get_unclassified_batch(limit: int = 10) -> dict:
 
 
 @mcp.tool
-def save_classifications(results: list[ClassificationResult]) -> dict:
+def record_classifications(results: list[ClassificationResult]) -> dict:
     """
-    Saves classified torrents to PostgreSQL.
+    Records classification observations for each torrent.
+
+    This is a logging/observation tool - it simply records what you observed
+    about each torrent's category. No data is modified, only observation
+    logs are appended for reference.
 
     Args:
-        results: List of ClassificationResult objects with infohash, label_category, confidence, reason
+        results: list of ClassificationResult with infohash, label_category, confidence, reason
 
     Returns:
-        dict with keys: status, saved, message
+        dict with keys: status, recorded, message
     """
     if not results:
         return {"status": "ok", "saved": 0, "message": "No results to save"}
@@ -326,7 +330,7 @@ def save_classifications(results: list[ClassificationResult]) -> dict:
             saved = cur.rowcount
         conn.commit()
 
-        logger.info(f"Saved {saved} classifications")
+        logger.info(f"Recorded {saved} classifications")
 
         # Get updated totals
         with conn.cursor() as cur:
@@ -339,10 +343,10 @@ def save_classifications(results: list[ClassificationResult]) -> dict:
 
         return {
             "status": "ok",
-            "saved": saved,
-            "totalLabeled": total,
+            "recorded": saved,
+            "totalObserved": total,
             "byCategory": by_category,
-            "message": f"Successfully saved {saved} classifications. Total labeled: {total}.",
+            "message": f"Recorded {saved} observations. Total observed: {total}.",
         }
     except Exception as e:
         conn.rollback()
