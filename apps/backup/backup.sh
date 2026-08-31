@@ -11,8 +11,8 @@ FILENAME="craw-backup-${TIMESTAMP}.dump"
 
 echo "[$(date -Iseconds)] Streaming pg_dump to rclone destination: ${REMOTE}/${FILENAME}"
 
-# pg_dump to rclone rcat
-PGPASSWORD="${PG_PASSWORD}" pg_dump -h "${DB_HOST}" -p "${DB_PORT}" -U "${POSTGRES_USER}" -Fc "${POSTGRES_DB}" | rclone rcat "${REMOTE}/${FILENAME}"
+# pg_dump to rclone rcat with zstd compression
+PGPASSWORD="${PG_PASSWORD}" pg_dump -h "${DB_HOST}" -p "${DB_PORT}" -U "${POSTGRES_USER}" -Fc -Z zstd "${POSTGRES_DB}" | rclone rcat "${REMOTE}/${FILENAME}"
 
 echo "[$(date -Iseconds)] Upload complete. Pruning old backups (keeping ${KEEP_COUNT})..."
 

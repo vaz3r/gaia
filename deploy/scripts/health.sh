@@ -22,14 +22,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-if [ -f "$REPO_ROOT/deploy/targets/workspace-production/.env" ]; then
+# Find the target env
+TARGET="${1:-gaia-node}"
+if [[ "$TARGET" == --* ]]; then
+    TARGET="gaia-node" # Fallback if first arg is a flag
+fi
+ENV_FILE="$REPO_ROOT/deploy/targets/$TARGET/.env"
+
+if [ -f "$ENV_FILE" ]; then
     set -a
     # shellcheck disable=SC1091
-    source "$REPO_ROOT/deploy/targets/workspace-production/.env"
+    source "$ENV_FILE"
     set +a
     
     # Map environment variables for the script
-    export DB_HOST="$DEPLOY_HOST"
+    export DB_HOST="${DB_HOST:-$DEPLOY_HOST}"
     export DB_PASSWORD="${PG_PASSWORD:-}"
 fi
 
@@ -55,7 +62,7 @@ while [ $# -gt 0 ]; do
                 if grep -qx "$1" "$(dirname "$0")/.health-hosts"; then HOST="${1#--}"; fi
             fi
             echo "unknown arg: $1" >&2; exit 1 ;;
-        *) HOST="$1" ;;
+        *) TARGET_ARG="$1" ;;
     esac
     shift
 done
@@ -134,14 +141,14 @@ q "SELECT count(*) FILTER (WHERE verified_at > now() - interval '1 hour') AS v1h
    FROM torrents;"
 
 echo "=== CONTAINER ==="
-docker inspect gaia-crawler --format 'image={{.Config.Image}}uptime={{.State.StartedAt}}restarts={{.RestartCount}}' 2>/dev/null || echo "container inspect failed"
+docker inspect gaia-crawler --format 'image={{.Config.Image}}uptime={{.State.StartedAt}}restarts={{.RestartCount}}'  || echo "container inspect failed"
 
 echo "=== DOCKER_PS ==="
-docker ps --filter name=gaia-crawler --format '{{.Names}}${{.Status}}${{.Image}}' 2>/dev/null || true
+docker ps --filter name=gaia-crawler --format '{{.Names}}${{.Status}}${{.Image}}'  || true
 
 if [ "$NO_LOGS" != "1" ]; then
 echo "=== EFFECTIVE_CONFIG ==="
-ls -t /home/ubuntu/gaia-data/logs/crawler-*.jsonl 2>/dev/null | head -3 | xargs grep -h '"effective config"' 2>/dev/null | head -1 || echo "(none)"
+ls -t /home/ubuntu/gaia-data/logs/crawler-*.jsonl  | head -3 | xargs grep -h '"effective config"' 2>/dev/null | head -1 || echo "(none)"
 
 echo "=== LOG_ANOMALIES ==="
 python3 - /home/ubuntu/gaia-data/logs "$FROM_TS" <<'PY'
@@ -218,7 +225,7 @@ RS
 # NOTE: ssh drops empty args, so use sentinels for unset values.
 SESS_ARG="${SESSION_OVERRIDE:-__none__}"
 SINCE_ARG="${SINCE_OVERRIDE:-__none__}"
-RAW="$($SSH "$HOST" "bash -s" "$WINDOW" "$SESS_ARG" "$SINCE_ARG" "$NO_LOGS" "$DB_CONN" <<<"$REMOTE_SCRIPT" 2>/dev/null)" || {
+RAW="$($SSH "$HOST" "bash -s" "$WINDOW" "$SESS_ARG" "$SINCE_ARG" "$NO_LOGS" "$DB_CONN" <<<"$REMOTE_SCRIPT" )" || {
     echo "ERROR: remote capture failed" >&2
     exit 1
 }
@@ -520,5 +527,5 @@ else
 fi
 printf '%s\n' "$FMT" > "$HIST_DIR/$OUT"
 ln -sfn "$OUT" "$HIST_DIR/latest.txt"
-ln -sfn "$OUT" "$HIST_DIR/latest.$EXT" 2>/dev/null || true
+ln -sfn "$OUT" "$HIST_DIR/latest.$EXT"  || true
 echo "  (history: $HIST_DIR/$OUT)" >&2
