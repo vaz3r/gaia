@@ -1,9 +1,9 @@
-name: gaia
+name: gaia-crawler
 
 services:
   crawler:
     build:
-      context: ../../apps/crawler
+      context: ../../../apps/crawler
       dockerfile: Dockerfile
       args:
         CRAW_GIT_HASH: ${GIT_COMMIT:-unknown}
@@ -13,8 +13,8 @@ services:
     restart: unless-stopped
     network_mode: host
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@${DB_HOST:?DB_HOST required}:${PG_PORT:-5432}/${POSTGRES_DB:-craw}?sslmode=disable
-      CRAW_EXTERNAL_IP: ${CRAW_EXTERNAL_IP:?CRAW_EXTERNAL_IP required}
+      DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@${DB_HOST}:${PG_PORT:-5432}/${POSTGRES_DB:-craw}?sslmode=disable
+      CRAW_EXTERNAL_IP: ${CRAW_EXTERNAL_IP}
       CRAW_PIPELINE_LIMIT: ${CRAW_PIPELINE_LIMIT:-4000}
       CRAW_FETCH_LIMIT: ${CRAW_FETCH_LIMIT:-1200}
       CRAW_RACE_PEERS: ${CRAW_RACE_PEERS:-12}
@@ -39,30 +39,18 @@ services:
       - /home/${DEPLOY_USER:-ubuntu}/gaia-data/logs:/data/logs
       - /home/${DEPLOY_USER:-ubuntu}/gaia/apps/crawler/config:/etc/crawler/config:ro
 
-  dashboard:
-    build:
-      context: ../../apps/dashboard
-      dockerfile: Dockerfile
-    image: gaia-dashboard:${GIT_COMMIT:-latest}
-    container_name: gaia-dashboard
-    init: true
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@${DB_HOST}:${PG_PORT:-5432}/${POSTGRES_DB:-craw}?sslmode=disable
-      PORT: ${DASH_PORT:-3000}
-
   log-shipper:
     build:
-      context: ../../apps/log-shipper
+      context: ../../../apps/log-shipper
+    image: gaia-log-shipper:${GIT_COMMIT:-latest}
     container_name: gaia-log-shipper
     restart: unless-stopped
     environment:
       SOURCE_DIR: /logs
-      RECEIVER_URL: http://100.87.194.112:3100
+      RECEIVER_URL: ${RECEIVER_URL:-http://100.87.194.112:3100}
       API_KEY: ${LOG_SHIPPER_API_KEY}
       SCAN_INTERVAL_MS: 300000
       FILE_MIN_AGE_MS: 120000
-      HOST_NAME: gaia
+      HOST_NAME: gaia-node
     volumes:
       - /home/${DEPLOY_USER:-ubuntu}/gaia-data/logs:/logs

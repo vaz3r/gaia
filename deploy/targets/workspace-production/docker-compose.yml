@@ -1,0 +1,30 @@
+name: gaia-production
+
+services:
+  dashboard:
+    build:
+      context: ../../../apps/dashboard
+      dockerfile: Dockerfile
+    image: gaia-dashboard:${GIT_COMMIT:-latest}
+    container_name: gaia-dashboard
+    init: true
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@${DB_HOST}:${PG_PORT:-5432}/${POSTGRES_DB:-craw}?sslmode=disable
+      PORT: ${DASH_PORT:-3000}
+
+  log-receiver:
+    build:
+      context: ../../../apps/log-receiver
+    image: gaia-log-receiver:${GIT_COMMIT:-latest}
+    container_name: gaia-log-receiver
+    restart: unless-stopped
+    environment:
+      STORAGE_DIR: /logs
+      API_KEY: ${LOG_SHIPPER_API_KEY}
+      PORT: 3000
+    ports:
+      - "100.87.194.112:3100:3000"
+    volumes:
+      - /mnt/gaia/logs/crawler:/logs
