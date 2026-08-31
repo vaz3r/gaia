@@ -126,12 +126,13 @@ class ClassificationResult(BaseModel):
 def get_unclassified_batch(limit: int = 50) -> dict:
     """
     Fetches unclassified torrents from PostgreSQL.
+    IMPORTANT: Always call with limit=50. Do not use any other limit value.
 
     Returns torrents that have NOT been classified yet (not in labeled_results table).
-    Each torrent includes: infohash (hex), name, file_count, total_size_bytes, top_dirs.
+    Each torrent includes: infohash, name, file_count, total_size_bytes, extensions, top_folders, largest_files.
 
     Args:
-        limit: Number of torrents to fetch (max 100, default 10)
+        limit: Number of torrents to fetch. MUST be 50.
 
     Returns:
         dict with keys: torrents, hasMore, batchId, totalClassified, totalRemaining, instructions
