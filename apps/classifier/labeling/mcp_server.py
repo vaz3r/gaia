@@ -17,6 +17,7 @@ Usage:
 
 import json
 import os
+import secrets
 import sys
 import logging
 from datetime import datetime, timezone
@@ -350,6 +351,84 @@ async def health(request: Request) -> JSONResponse:
             "database": "disconnected",
             "error": str(e),
         }, status_code=503)
+
+
+# --- OAuth discovery (required by Gemini Spark) ---
+@mcp.custom_route("/.well-known/oauth-protected-resource", methods=["GET"])
+async def oauth_protected_resource(request: Request) -> JSONResponse:
+    """OAuth protected resource metadata (RFC 8414)."""
+    return JSONResponse({
+        "resource": str(request.base_url).rstrip("/") + "/mcp",
+        "authorization_servers": [str(request.base_url).rstrip("/")],
+    })
+
+
+@mcp.custom_route("/.well-known/oauth-protected-resource/mcp", methods=["GET"])
+async def oauth_protected_resource_mcp(request: Request) -> JSONResponse:
+    """OAuth protected resource metadata for /mcp endpoint."""
+    return JSONResponse({
+        "resource": str(request.base_url).rstrip("/") + "/mcp",
+        "authorization_servers": [str(request.base_url).rstrip("/")],
+    })
+
+
+@mcp.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
+async def oauth_authorization_server(request: Request) -> JSONResponse:
+    """OAuth authorization server metadata (RFC 8414)."""
+    base = str(request.base_url).rstrip("/")
+    return JSONResponse({
+        "issuer": base,
+        "authorization_endpoint": base + "/authorize",
+        "token_endpoint": base + "/token",
+        "registration_endpoint": base + "/register",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
+        "scopes_supported": ["mcp:tools", "mcp:resources", "mcp:prompts"],
+    })
+
+
+@mcp.custom_route("/register", methods=["POST"])
+async def dynamic_client_registration(request: Request) -> JSONResponse:
+    """Dynamic Client Registration (RFC 7591)."""
+    import secrets
+    body = await request.json()
+    client_id = secrets.token_hex(16)
+    client_secret = secrets.token_hex(32)
+    return JSONResponse({
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "client_name": body.get("client_name", "gemini-spark"),
+        "redirect_uris": body.get("redirect_uris", []),
+        "grant_types": ["authorization_code", "refresh_token"],
+        "token_endpoint_auth_method": "client_secret_basic",
+    })
+
+
+@mcp.custom_route("/authorize", methods=["GET", "POST"])
+async def oauth_authorize(request: Request) -> JSONResponse:
+    """OAuth authorization endpoint. Auto-approves for this server."""
+    from starlette.responses import RedirectResponse
+    params = dict(request.query_params) if request.method == "GET" else (await request.form())
+    redirect_uri = params.get("redirect_uri", "")
+    state = params.get("state", "")
+    code = secrets.token_hex(16)
+    separator = "&" if "?" in redirect_uri else "?"
+    url = f"{redirect_uri}{separator}code={code}&state={state}"
+    return RedirectResponse(url=url)
+
+
+@mcp.custom_route("/token", methods=["POST"])
+async def oauth_token(request: Request) -> JSONResponse:
+    """OAuth token endpoint."""
+    import secrets
+    token = secrets.token_hex(32)
+    return JSONResponse({
+        "access_token": token,
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "scope": "mcp:tools mcp:resources mcp:prompts",
+    })
 
 
 if __name__ == "__main__":
