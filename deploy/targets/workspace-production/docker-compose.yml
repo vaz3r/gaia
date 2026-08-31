@@ -31,7 +31,7 @@ services:
 
   postgres:
     image: postgres:16
-    container_name: craw-db
+    container_name: gaia-postgres
     restart: unless-stopped
     ports:
       - "5432:5432"
@@ -40,11 +40,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-craw}
       POSTGRES_PASSWORD: ${PG_PASSWORD}
     volumes:
-      - pg-data:/var/lib/postgresql/data
+      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/postgres:/var/lib/postgresql/data
       - ../../../deploy/postgres/postgresql.workspace-production.conf:/etc/postgresql/production.conf
     command: ["postgres", "-c", "config_file=/etc/postgresql/production.conf"]
-
-volumes:
-  pg-data:
-    external: true
-    name: craw-stack_pg-data
