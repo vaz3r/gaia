@@ -57,3 +57,23 @@ services:
       - "3001:3001"
     volumes:
       - /mnt/gaia/logs/crawler:/logs:ro
+
+  backup:
+    build:
+      context: ../../../apps/backup
+    image: gaia-backup:${GIT_COMMIT:-latest}
+    container_name: gaia-backup
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-crawler}
+      POSTGRES_DB: ${POSTGRES_DB:-craw}
+      PG_PASSWORD: ${PG_PASSWORD}
+      RCLONE_REMOTE_PATH: "gdrive:/"
+      BACKUP_CRON: "0 2 * * *"
+      BACKUP_KEEP_COUNT: "2"
+    depends_on:
+      - postgres
+    volumes:
+      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/rclone.conf:/root/.config/rclone/rclone.conf:ro
