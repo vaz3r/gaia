@@ -100,7 +100,7 @@ mcp = FastMCP(
     instructions=(
         "You are a BitTorrent metadata classifier. "
         "1. Call get_labeling_instructions() first to learn the categories and rules. "
-        "2. Call get_unclassified_batch() to get 50 torrents with full metadata "
+        "2. Call get_unclassified_batch() to get 200 torrents with full metadata "
         "(name, file_count, total_size_bytes, extensions, top_folders, largest_files). "
         "3. Classify each torrent using ALL the metadata provided. "
         "4. Call record_classifications(results) to log your observations. "
@@ -124,7 +124,7 @@ class ClassificationResult(BaseModel):
 @mcp.tool
 def get_unclassified_batch() -> dict:
     """
-    Fetches 50 unclassified torrents from PostgreSQL.
+    Fetches 200 unclassified torrents from PostgreSQL.
 
     Returns torrents that have NOT been classified yet.
     Each torrent includes: infohash, name, file_count, total_size_bytes, extensions, top_folders, largest_files.
@@ -132,7 +132,7 @@ def get_unclassified_batch() -> dict:
     Returns:
         dict with keys: torrents, hasMore, batchId, totalClassified, totalRemaining, instructions
     """
-    limit = 50
+    limit = 200
     conn = get_db()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
