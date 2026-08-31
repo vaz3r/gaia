@@ -28,7 +28,7 @@ app.get('/api/metrics/routing-table', async (req, res) => {
       SELECT 
         ts::TIMESTAMP AS time, 
         routing_table 
-      FROM read_json_auto('${TARGET_GLOB}', ignore_errors=true)
+      FROM read_json_auto('${TARGET_GLOB}', ignore_errors=true, sample_size=-1)
       WHERE routing_table IS NOT NULL
       ORDER BY time DESC
       LIMIT 100
@@ -50,7 +50,7 @@ app.get('/api/metrics/discovery-sources', async (req, res) => {
         source_dht_verified,
         source_direct_verified,
         source_announce_cache_verified
-      FROM read_json_auto('${TARGET_GLOB}', ignore_errors=true)
+      FROM read_json_auto('${TARGET_GLOB}', ignore_errors=true, sample_size=-1)
       WHERE message = 'candidate source metrics'
       ORDER BY time DESC
       LIMIT 100
@@ -72,7 +72,7 @@ app.get('/api/metrics/slow-queries', async (req, res) => {
         elapsed_secs::DOUBLE AS duration_secs,
         "db.statement" AS query_statement,
         rows_affected
-      FROM read_json_auto('${TARGET_GLOB}', ignore_errors=true)
+      FROM read_json_auto('${TARGET_GLOB}', ignore_errors=true, sample_size=-1)
       WHERE message = 'slow statement: execution time exceeded alert threshold'
       ORDER BY duration_secs DESC
       LIMIT 50
@@ -93,8 +93,8 @@ app.post('/api/query', async (req, res) => {
       return res.status(400).json({ error: 'Missing sql parameter' });
     }
     
-    // Inject the glob path dynamically for safety so the frontend just says `FROM logs`
-    const safeSql = sql.replace(/FROM logs/gi, `FROM read_json_auto('${TARGET_GLOB}', ignore_errors=true)`);
+    // Inject the glob path dynamically for safety so the frontend just says FROM logs
+    const safeSql = sql.replace(/FROM logs/gi, `FROM read_json_auto('${TARGET_GLOB}', ignore_errors=true, sample_size=-1)`);
     
     const rows = await db.all(safeSql);
     res.json(rows);
