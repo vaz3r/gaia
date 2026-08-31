@@ -100,10 +100,12 @@ mcp = FastMCP(
     instructions=(
         "You are a BitTorrent metadata classifier. "
         "1. Call get_labeling_instructions() first to learn the categories and rules. "
-        "2. Call get_unclassified_batch(limit=10) to get torrents. "
-        "3. Classify each torrent based on the instructions. "
+        "2. Call get_unclassified_batch(limit=50) to get torrents with full metadata "
+        "(name, file_count, total_size_bytes, extensions, top_folders, largest_files). "
+        "3. Classify each torrent using ALL the metadata provided. "
         "4. Call save_classifications(results) to save your classifications. "
-        "5. Repeat from step 2 until hasMore is false."
+        "5. Repeat from step 2 until hasMore is false. "
+        "Always use limit=50 for batches."
     ),
     version="1.0.0",
 )
@@ -156,14 +158,55 @@ def get_unclassified_batch(limit: int = 10) -> dict:
                     CASE
                         WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
                             (
-                                SELECT array_agg(elem->>'path')
+                                SELECT array_agg(DISTINCT ext)
                                 FROM (
-                                    SELECT jsonb_array_elements(t.files) AS elem
-                                    LIMIT 5
+                                    SELECT
+                                        CASE
+                                            WHEN jsonb_array_length(elem->'path') > 0 THEN
+                                                lower(split_part(elem->'path'->>-1, '.', -1))
+                                            ELSE NULL
+                                        END AS ext
+                                    FROM jsonb_array_elements(t.files) AS elem
+                                ) sub
+                                WHERE ext IS NOT NULL AND ext != ''
+                                LIMIT 10
+                            )
+                        ELSE NULL
+                    END AS extensions,
+                    CASE
+                        WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                            (
+                                SELECT array_agg(DISTINCT folder)
+                                FROM (
+                                    SELECT
+                                        CASE
+                                            WHEN jsonb_array_length(elem->'path') > 1 THEN
+                                                elem->'path'->>0
+                                            ELSE NULL
+                                        END AS folder
+                                    FROM jsonb_array_elements(t.files) AS elem
+                                ) sub
+                                WHERE folder IS NOT NULL
+                                LIMIT 10
+                            )
+                        ELSE NULL
+                    END AS top_folders,
+                    CASE
+                        WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                            (
+                                SELECT jsonb_agg(jsonb_build_object(
+                                    'name', sub.elem->'path'->>-1,
+                                    'size', sub.elem->'length'
+                                ))
+                                FROM (
+                                    SELECT elem
+                                    FROM jsonb_array_elements(t.files) AS elem
+                                    ORDER BY (elem->'length')::bigint DESC
+                                    LIMIT 3
                                 ) sub
                             )
-                        ELSE ARRAY[t.name]
-                    END AS top_dirs
+                        ELSE NULL
+                    END AS largest_files
                 FROM torrents t
                 WHERE NOT EXISTS (
                     SELECT 1 FROM labeled_results lr
@@ -191,14 +234,19 @@ def get_unclassified_batch(limit: int = 10) -> dict:
         # Format torrents
         torrents = []
         for row in rows:
-            top_dirs = row["top_dirs"] or [row["name"]]
+            extensions = row["extensions"] or []
+            top_folders = row["top_folders"] or []
+            largest_files = row["largest_files"] or []
+
             torrents.append(
                 {
                     "infohash": row["infohash"],
                     "name": row["name"],
                     "file_count": row["file_count"],
                     "total_size_bytes": row["total_size"],
-                    "top_dirs": top_dirs[:5],
+                    "extensions": extensions,
+                    "top_folders": top_folders,
+                    "largest_files": largest_files,
                 }
             )
 
@@ -218,8 +266,11 @@ def get_unclassified_batch(limit: int = 10) -> dict:
             "totalRemaining": total_remaining,
             "instructions": (
                 "Classify each torrent into one of the 8 categories. "
+                "Each torrent has: name, file_count, total_size_bytes, extensions (file types), "
+                "top_folders (directory structure), largest_files (top 3 by size with names and sizes). "
+                "Use all this metadata to classify. "
                 "Then call save_classifications() with your results. "
-                "After saving, call get_unclassified_batch() again for the next batch. "
+                "After saving, call get_unclassified_batch(limit=50) for the next batch. "
                 "Repeat until hasMore is false."
             ),
         }
