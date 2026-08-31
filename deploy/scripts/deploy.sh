@@ -35,11 +35,21 @@ set +a
 
 : "${DEPLOY_HOST:?DEPLOY_HOST required in target .env}"
 : "${DEPLOY_USER:?DEPLOY_USER required in target .env}"
-: "${DEPLOY_SSH_KEY:?DEPLOY_SSH_KEY required in target .env}"
 : "${DEPLOY_REMOTE_GIT:?DEPLOY_REMOTE_GIT required in target .env}"
 : "${DEPLOY_REMOTE_DATA:?DEPLOY_REMOTE_DATA required in target .env}"
 
-SSH="ssh -i $DEPLOY_SSH_KEY -o StrictHostKeyChecking=no $DEPLOY_USER@$DEPLOY_HOST"
+# SSH Configuration
+if [ -n "${DEPLOY_PASSWORD:-}" ]; then
+    # Use sshpass for password authentication
+    SSH="sshpass -p $DEPLOY_PASSWORD ssh -o StrictHostKeyChecking=no $DEPLOY_USER@$DEPLOY_HOST"
+elif [ -n "${DEPLOY_SSH_KEY:-}" ]; then
+    # Use SSH key authentication
+    SSH="ssh -i $DEPLOY_SSH_KEY -o StrictHostKeyChecking=no $DEPLOY_USER@$DEPLOY_HOST"
+else
+    # Fallback to interactive prompt
+    SSH="ssh -o StrictHostKeyChecking=no $DEPLOY_USER@$DEPLOY_HOST"
+fi
+
 TAG=$(git rev-parse --short "$REF")
 REMOTE_TARGET_DIR="$DEPLOY_REMOTE_GIT/deploy/targets/$TARGET"
 
@@ -58,7 +68,7 @@ $SSH "cd $DEPLOY_REMOTE_GIT && git fetch origin && git checkout $TAG"
 
 # ── 3. Ensure data directories exist ──
 echo "[3/4] Ensuring data directories..."
-$SSH "sudo mkdir -p ${DEPLOY_REMOTE_DATA}/crawler ${DEPLOY_REMOTE_DATA}/logs /mnt/gaia/logs/crawler && sudo chown -R 10001:10001 ${DEPLOY_REMOTE_DATA} /mnt/gaia/logs || true"
+$SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S mkdir -p ${DEPLOY_REMOTE_DATA}/crawler ${DEPLOY_REMOTE_DATA}/logs /mnt/gaia/logs/crawler && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R 10001:10001 ${DEPLOY_REMOTE_DATA} /mnt/gaia/logs || true"
 
 # ── 4. Build and deploy services ──
 echo "[4/4] Building and deploying compose stack..."
