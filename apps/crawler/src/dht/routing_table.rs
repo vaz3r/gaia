@@ -83,8 +83,8 @@ impl RoutingTable {
             all_nodes.extend(table.closest(target, n));
         }
         all_nodes.sort_unstable_by(|a, b| {
-            let pen_a = if a.query_count > 0 && !a.last_useful { 1 } else if a.fail_count > 2 { 2 } else { 0 };
-            let pen_b = if b.query_count > 0 && !b.last_useful { 1 } else if b.fail_count > 2 { 2 } else { 0 };
+            let pen_a = if a.fail_count > 2 { 3 } else if a.query_count > 0 && !a.last_useful { 2 } else if a.fail_count > 0 { 1 } else { 0 };
+            let pen_b = if b.fail_count > 2 { 3 } else if b.query_count > 0 && !b.last_useful { 2 } else if b.fail_count > 0 { 1 } else { 0 };
             pen_a.cmp(&pen_b).then_with(|| cmp_xor(target, &a.id, &b.id))
         });
         all_nodes.dedup_by(|a, b| a.id == b.id);
@@ -171,11 +171,25 @@ impl SingleRoutingTable {
             existing.addr = node.addr;
             return true;
         }
-        if bucket.len() >= K {
-            bucket.pop_front();
+        if bucket.len() < K {
+            bucket.push_back(node);
+            return true;
         }
-        bucket.push_back(node);
-        true
+        let mut worst_idx = 0;
+        let mut worst_score = -1;
+        for (i, n) in bucket.iter().enumerate() {
+            let score = if n.fail_count > 2 { 3 } else if n.query_count > 0 && !n.last_useful { 2 } else if n.fail_count > 0 { 1 } else { 0 };
+            if score > worst_score {
+                worst_score = score;
+                worst_idx = i;
+            }
+        }
+        if worst_score > 0 {
+            bucket.remove(worst_idx);
+            bucket.push_back(node);
+            return true;
+        }
+        false
     }
 
     pub fn closest(&self, target: &NodeId, n: usize) -> Vec<NodeInfo> {
@@ -205,7 +219,7 @@ impl SingleRoutingTable {
         let mut heap = std::collections::BinaryHeap::with_capacity(n);
         for bucket in &self.buckets {
             for node in bucket {
-                let penalty = if node.query_count > 0 && !node.last_useful { 1 } else if node.fail_count > 2 { 2 } else { 0 };
+                let penalty = if node.fail_count > 2 { 3 } else if node.query_count > 0 && !node.last_useful { 2 } else if node.fail_count > 0 { 1 } else { 0 };
                 let dist = xor(target, &node.id);
                 let cand = DistanceNode { penalty, dist, node: node.clone() };
                 if heap.len() < n {
@@ -376,9 +390,9 @@ mod tests {
             if !rt.contains_id(&id) {
                 new_at_insert += 1;
             }
-            rt.insert(NodeInfo { id, addr: format!("1.2.3.{, query_count: 0, fail_count: 0, last_useful: false }:6881", (i % 250) as u8 + 1)
+            rt.insert(NodeInfo { id, addr: format!("1.2.3.{}:6881", (i % 250) as u8 + 1)
                     .parse()
-                    .unwrap(),
+                    .unwrap(), query_count: 0, fail_count: 0, last_useful: false
             });
         }
         assert_eq!(new_at_insert, 500_000);

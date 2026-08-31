@@ -799,7 +799,7 @@ pub async fn verify_infohash(
                         }
                         match outcome {
                             FetchOutcome::ConnectFailed(_addr, WireError::Timeout, src, dur) => {
-                                negative_cache.insert(_addr.ip(), tokio::time::Instant::now() + std::time::Duration::from_secs(900));
+                                negative_cache.insert(_addr.ip(), tokio::time::Instant::now() + std::time::Duration::from_secs(60));
                                 metrics.fetch_connect_timeout.add(1);
                                 metrics.verify_timeouts.add(1);
                                 match src {
@@ -817,7 +817,7 @@ pub async fn verify_infohash(
                                 }
                             }
                             FetchOutcome::ConnectFailed(_addr, WireError::Io(_), src, dur) => {
-                                negative_cache.insert(_addr.ip(), tokio::time::Instant::now() + std::time::Duration::from_secs(900));
+                                negative_cache.insert(_addr.ip(), tokio::time::Instant::now() + std::time::Duration::from_secs(60));
                                 metrics.fetch_connect_io.add(1);
                                 match src {
                                     CandidateSource::Direct => {

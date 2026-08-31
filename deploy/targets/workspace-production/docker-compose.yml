@@ -1,0 +1,59 @@
+name: gaia-production
+
+services:
+  dashboard:
+    build:
+      context: ../../../apps/dashboard
+      dockerfile: Dockerfile
+    image: gaia-dashboard:${GIT_COMMIT:-latest}
+    container_name: gaia-dashboard
+    init: true
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@${DB_HOST}:${PG_PORT:-5432}/${POSTGRES_DB:-craw}?sslmode=disable
+      PORT: ${DASH_PORT:-3000}
+
+  log-receiver:
+    build:
+      context: ../../../apps/log-receiver
+    image: gaia-log-receiver:${GIT_COMMIT:-latest}
+    container_name: gaia-log-receiver
+    restart: unless-stopped
+    environment:
+      STORAGE_DIR: /logs
+      API_KEY: ${LOG_SHIPPER_API_KEY}
+      PORT: 3000
+    ports:
+      - "100.87.194.112:3100:3000"
+    volumes:
+      - /mnt/gaia/logs/crawler:/logs
+
+  postgres:
+    image: postgres:16
+    container_name: gaia-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-crawler}
+      POSTGRES_DB: ${POSTGRES_DB:-craw}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+    volumes:
+      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/postgres:/var/lib/postgresql/data
+      - ../../../deploy/postgres/postgresql.workspace-production.conf:/etc/postgresql/production.conf
+    command: ["postgres", "-c", "config_file=/etc/postgresql/production.conf"]
+
+  log-analyzer:
+    build:
+      context: ../../../apps/log-analyzer
+    image: gaia-log-analyzer:${GIT_COMMIT:-latest}
+    container_name: gaia-log-analyzer
+    restart: unless-stopped
+    environment:
+      LOGS_DIR: /logs
+      PORT: 3001
+    ports:
+      - "3001:3001"
+    volumes:
+      - /mnt/gaia/logs/crawler:/logs:ro
