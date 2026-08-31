@@ -75,6 +75,11 @@ data/train_seed.jsonl
 data/val_seed.jsonl
 data/labeled.jsonl
 
+# ── Labeling pipeline ────────────────────────────────────────────────────────
+# Unlabeled batches are regenerated from DB, don't track
+labeling/batches/
+# Labeled output is tracked (smaller, user-created)
+
 # ── What to KEEP in data/ ─────────────────────────────────────────────────────
 # data/training_combined_v10_true.jsonl     ← canonical training set (tracked)
 # data/manual_eval_set_1000.jsonl           ← natural test set (tracked)
