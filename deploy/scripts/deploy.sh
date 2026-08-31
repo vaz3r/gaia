@@ -68,7 +68,7 @@ $SSH "cd $DEPLOY_REMOTE_GIT && git fetch origin && git checkout $TAG"
 
 # ── 3. Ensure data directories exist ──
 echo "[3/4] Ensuring data directories..."
-$SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S mkdir -p ${DEPLOY_REMOTE_DATA}/crawler ${DEPLOY_REMOTE_DATA}/logs /mnt/gaia/logs/crawler && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R 10001:10001 ${DEPLOY_REMOTE_DATA} /mnt/gaia/logs || true"
+$SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S mkdir -p ${DEPLOY_REMOTE_DATA}/crawler ${DEPLOY_REMOTE_DATA}/postgres ${DEPLOY_REMOTE_DATA}/logs /mnt/gaia/logs/crawler && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R 10001:10001 ${DEPLOY_REMOTE_DATA} /mnt/gaia/logs || true"
 
 # ── 4. Build and deploy services ──
 echo "[4/4] Building and deploying compose stack..."

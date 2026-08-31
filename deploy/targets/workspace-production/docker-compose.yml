@@ -28,3 +28,17 @@ services:
       - "100.87.194.112:3100:3000"
     volumes:
       - /mnt/gaia/logs/crawler:/logs
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: gaia-postgres
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-crawler}
+      POSTGRES_DB: ${POSTGRES_DB:-craw}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+    volumes:
+      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/postgres:/var/lib/postgresql/data
+      - ../../../deploy/postgres/postgresql.workspace-production.conf:/etc/postgresql/postgresql.conf
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
