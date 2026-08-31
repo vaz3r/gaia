@@ -26,10 +26,10 @@ app.get('/api/metrics/routing-table', async (req, res) => {
   try {
     const query = `
       SELECT 
-        ts::TIMESTAMP AS time, 
-        routing_table 
-      FROM read_json_auto('${TARGET_GLOB}', ignore_errors=true, sample_size=-1)
-      WHERE routing_table IS NOT NULL
+        (json->>'ts')::TIMESTAMP AS time, 
+        (json->>'routing_table')::BIGINT AS routing_table 
+      FROM read_json_objects('${TARGET_GLOB}')
+      WHERE json->>'routing_table' IS NOT NULL
       ORDER BY time DESC
       LIMIT 100
     `;
@@ -46,12 +46,12 @@ app.get('/api/metrics/discovery-sources', async (req, res) => {
   try {
     const query = `
       SELECT 
-        ts::TIMESTAMP AS time,
-        source_dht_verified,
-        source_direct_verified,
-        source_announce_cache_verified
-      FROM read_json_auto('${TARGET_GLOB}', ignore_errors=true, sample_size=-1)
-      WHERE message = 'candidate source metrics'
+        (json->>'ts')::TIMESTAMP AS time,
+        (json->>'source_dht_verified')::BIGINT AS source_dht_verified,
+        (json->>'source_direct_verified')::BIGINT AS source_direct_verified,
+        (json->>'source_announce_cache_verified')::BIGINT AS source_announce_cache_verified
+      FROM read_json_objects('${TARGET_GLOB}')
+      WHERE json->>'message' = 'candidate source metrics'
       ORDER BY time DESC
       LIMIT 100
     `;
@@ -68,12 +68,12 @@ app.get('/api/metrics/slow-queries', async (req, res) => {
   try {
     const query = `
       SELECT 
-        ts::TIMESTAMP AS time,
-        elapsed_secs::DOUBLE AS duration_secs,
-        "db.statement" AS query_statement,
-        rows_affected
-      FROM read_json_auto('${TARGET_GLOB}', ignore_errors=true, sample_size=-1)
-      WHERE message = 'slow statement: execution time exceeded alert threshold'
+        (json->>'ts')::TIMESTAMP AS time,
+        (json->>'elapsed_secs')::DOUBLE AS duration_secs,
+        (json->>'db.statement') AS query_statement,
+        (json->>'rows_affected')::BIGINT AS rows_affected
+      FROM read_json_objects('${TARGET_GLOB}')
+      WHERE json->>'message' = 'slow statement: execution time exceeded alert threshold'
       ORDER BY duration_secs DESC
       LIMIT 50
     `;
@@ -94,7 +94,7 @@ app.post('/api/query', async (req, res) => {
     }
     
     // Inject the glob path dynamically for safety so the frontend just says FROM logs
-    const safeSql = sql.replace(/FROM logs/gi, `FROM read_json_auto('${TARGET_GLOB}', ignore_errors=true, sample_size=-1)`);
+    const safeSql = sql.replace(/FROM logs/gi, `FROM read_json_objects('${TARGET_GLOB}')`);
     
     const rows = await db.all(safeSql);
     res.json(rows);
