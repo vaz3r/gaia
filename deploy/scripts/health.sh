@@ -22,11 +22,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-if [ -f "$SCRIPT_DIR/../config.env" ]; then
+if [ -f "$REPO_ROOT/deploy/targets/workspace-production/.env" ]; then
     set -a
     # shellcheck disable=SC1091
-    source "$SCRIPT_DIR/../config.env"
+    source "$REPO_ROOT/deploy/targets/workspace-production/.env"
     set +a
+    
+    # Map environment variables for the script
+    export DB_HOST="$DEPLOY_HOST"
+    export DB_PASSWORD="${PG_PASSWORD:-}"
 fi
 
 HOST="${DEPLOY_HOST:-zerone}"
