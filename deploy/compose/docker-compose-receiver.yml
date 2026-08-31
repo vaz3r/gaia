@@ -1,0 +1,16 @@
+name: gaia-receiver
+
+services:
+  log-receiver:
+    build:
+      context: ../../apps/log-receiver
+    container_name: gaia-log-receiver
+    restart: unless-stopped
+    environment:
+      STORAGE_DIR: /logs
+      API_KEY: ${LOG_SHIPPER_API_KEY}
+      PORT: 3000
+    ports:
+      - "100.87.194.112:3100:3000"
+    volumes:
+      - /mnt/gaia/logs/crawler:/logs

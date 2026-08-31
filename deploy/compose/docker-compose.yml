@@ -51,3 +51,18 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@${DB_HOST}:${PG_PORT:-5432}/${POSTGRES_DB:-craw}?sslmode=disable
       PORT: ${DASH_PORT:-3000}
+
+  log-shipper:
+    build:
+      context: ../../apps/log-shipper
+    container_name: gaia-log-shipper
+    restart: unless-stopped
+    environment:
+      SOURCE_DIR: /logs
+      RECEIVER_URL: http://100.87.194.112:3100
+      API_KEY: ${LOG_SHIPPER_API_KEY}
+      SCAN_INTERVAL_MS: 300000
+      FILE_MIN_AGE_MS: 120000
+      HOST_NAME: gaia
+    volumes:
+      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/logs:/logs
