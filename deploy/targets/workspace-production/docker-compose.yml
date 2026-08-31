@@ -76,4 +76,4 @@ services:
     depends_on:
       - postgres
     volumes:
-      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/rclone.conf:/root/.config/rclone/rclone.conf:ro
+      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/rclone:/root/.config/rclone
