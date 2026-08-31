@@ -43,3 +43,5 @@ apps/classifier/train_*.sh
 apps/classifier/data/fix_*.py
 apps/classifier/data/extract_*.sh
 
+apps/classifier/data/production_pool/pooled_labeled.jsonl
+apps/classifier/data/production_pool/pooled_unlabeled.jsonl

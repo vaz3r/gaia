@@ -66,10 +66,10 @@ LABEL2ID = {c: i for i, c in enumerate(FIXED_CLASSES)}
 
 SEED = 42
 MAX_LENGTH = 256
-BATCH_SIZE = 16
+BATCH_SIZE = 32
 LEARNING_RATE = 2.5e-5
 WEIGHT_DECAY = 0.01
-EPOCHS = 5
+EPOCHS = 3
 WARMUP_RATIO = 0.10
 MAX_GRAD_NORM = 1.0
 
@@ -78,17 +78,14 @@ def set_seed(seed: int = SEED):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.set_num_threads(8)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    if torch.backends.mps.is_available():
-        torch.mps.manual_seed(seed)
 
 
 def get_device() -> torch.device:
     if torch.cuda.is_available():
         return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
     return torch.device("cpu")
 
 
@@ -274,14 +271,17 @@ def train_and_evaluate(model_name: str = "sentence-transformers/all-MiniLM-L12-v
     out_dir = Path("data/models/transformer/production_v1")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    local_tokenizer_path = out_dir / "tokenizer"
+    tok_source = str(local_tokenizer_path) if local_tokenizer_path.exists() else model_name
+    tokenizer = AutoTokenizer.from_pretrained(tok_source, local_files_only=local_tokenizer_path.exists())
     config = AutoConfig.from_pretrained(
         model_name,
         num_labels=len(FIXED_CLASSES),
         id2label=ID2LABEL,
         label2id=LABEL2ID,
+        local_files_only=False,
     )
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, config=config)
+    model = AutoModelForSequenceClassification.from_pretrained(model_name, config=config, local_files_only=False)
     model.to(device)
 
     train_texts, train_labels, train_weights = build_training_pool()
