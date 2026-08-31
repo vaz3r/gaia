@@ -1,16 +1,9 @@
-FROM node:22-alpine AS builder
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY tsconfig.json ./
-COPY src ./src
-RUN npm run build
+FROM alpine:latest
+RUN apk add --no-cache postgresql16-client rclone bash tzdata jq
 
-FROM node:22-alpine
-RUN apk add --no-cache postgresql-client
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci --omit=dev
-COPY --from=builder /app/dist ./dist
+COPY backup.sh /app/backup.sh
+RUN chmod +x /app/backup.sh
 
-CMD ["npm", "start"]
+# Run once on startup, then crond in foreground
+CMD /app/backup.sh && echo "${BACKUP_CRON:-0 2 * * *} /app/backup.sh" > /etc/crontabs/root && crond -f -d 8
