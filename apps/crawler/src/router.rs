@@ -217,10 +217,7 @@ impl Router {
         let mut sybils: Vec<NodeInfo> = self
             .sybils
             .iter()
-            .map(|(id, _)| NodeInfo {
-                id: *id,
-                addr: public_addr,
-            })
+            .map(|(id, _)| NodeInfo { id: *id, addr: public_addr, query_count: 0, fail_count: 0, last_useful: false })
             .collect();
         sybils.sort_unstable_by(|a, b| cmp_xor(target, &a.id, &b.id));
         sybils.truncate(count);
@@ -584,7 +581,7 @@ impl Router {
                     if start + 20 <= bytes.len() {
                         let mut id = [0u8; 20];
                         id.copy_from_slice(&bytes[start..start + 20]);
-                        nodes.push(NodeInfo { id, addr });
+                        nodes.push(NodeInfo { id, addr, query_count: 0, fail_count: 0, last_useful: false });
                     }
                 }
 
@@ -693,6 +690,12 @@ impl Router {
             }
         }
         unreachable!("txid space exhausted")
+    }
+
+    pub fn record_query(&self, id: &crate::krpc::NodeId, useful: bool, failed: bool) {
+        if let Ok(mut table) = self.table.write() {
+            table.record_query(id, useful, failed);
+        }
     }
 
     pub fn insert_nodes(&self, nodes: Vec<NodeInfo>) {

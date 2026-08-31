@@ -8,6 +8,12 @@ pub const K: usize = 8;
 pub struct NodeInfo {
     pub id: NodeId,
     pub addr: SocketAddr,
+    #[serde(default)]
+    pub query_count: u32,
+    #[serde(default)]
+    pub fail_count: u32,
+    #[serde(default)]
+    pub last_useful: bool,
 }
 
 pub fn xor(a: &NodeId, b: &NodeId) -> NodeId {
@@ -59,6 +65,14 @@ impl RoutingTable {
         }
     }
 
+    pub fn record_query(&mut self, id: &NodeId, useful: bool, failed: bool) {
+        for t in &mut self.tables {
+            if t.record_query(id, useful, failed) {
+                break;
+            }
+        }
+    }
+
     pub fn insert(&mut self, node: NodeInfo) -> bool {
         self.tables.iter_mut().any(|t| t.insert(node.clone()))
     }
@@ -68,7 +82,11 @@ impl RoutingTable {
         for table in &self.tables {
             all_nodes.extend(table.closest(target, n));
         }
-        all_nodes.sort_unstable_by(|a, b| cmp_xor(target, &a.id, &b.id));
+        all_nodes.sort_unstable_by(|a, b| {
+            let pen_a = if a.query_count > 0 && !a.last_useful { 1 } else if a.fail_count > 2 { 2 } else { 0 };
+            let pen_b = if b.query_count > 0 && !b.last_useful { 1 } else if b.fail_count > 2 { 2 } else { 0 };
+            pen_a.cmp(&pen_b).then_with(|| cmp_xor(target, &a.id, &b.id))
+        });
         all_nodes.dedup_by(|a, b| a.id == b.id);
         all_nodes.truncate(n);
         all_nodes
@@ -127,6 +145,22 @@ impl SingleRoutingTable {
         self.self_id
     }
 
+    pub fn record_query(&mut self, id: &NodeId, useful: bool, failed: bool) -> bool {
+        let idx = bucket_index(&self.self_id, id);
+        let bucket = &mut self.buckets[idx];
+        if let Some(existing) = bucket.iter_mut().find(|n| &n.id == id) {
+            existing.query_count = existing.query_count.saturating_add(1);
+            if failed {
+                existing.fail_count = existing.fail_count.saturating_add(1);
+            } else {
+                existing.fail_count = 0;
+                existing.last_useful = useful;
+            }
+            return true;
+        }
+        false
+    }
+
     pub fn insert(&mut self, node: NodeInfo) -> bool {
         if node.id == self.self_id {
             return false;
@@ -147,42 +181,39 @@ impl SingleRoutingTable {
     pub fn closest(&self, target: &NodeId, n: usize) -> Vec<NodeInfo> {
         #[derive(Clone)]
         struct DistanceNode {
+            penalty: u32,
             dist: [u8; 20],
             node: NodeInfo,
         }
         impl PartialEq for DistanceNode {
             fn eq(&self, other: &Self) -> bool {
-                self.dist == other.dist
+                self.penalty == other.penalty && self.dist == other.dist
             }
         }
         impl Eq for DistanceNode {}
         impl PartialOrd for DistanceNode {
             fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-                Some(self.dist.cmp(&other.dist))
+                Some(self.cmp(other))
             }
         }
         impl Ord for DistanceNode {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-                self.dist.cmp(&other.dist)
+                self.penalty.cmp(&other.penalty).then_with(|| self.dist.cmp(&other.dist))
             }
         }
 
         let mut heap = std::collections::BinaryHeap::with_capacity(n);
         for bucket in &self.buckets {
             for node in bucket {
+                let penalty = if node.query_count > 0 && !node.last_useful { 1 } else if node.fail_count > 2 { 2 } else { 0 };
                 let dist = xor(target, &node.id);
+                let cand = DistanceNode { penalty, dist, node: node.clone() };
                 if heap.len() < n {
-                    heap.push(DistanceNode {
-                        dist,
-                        node: node.clone(),
-                    });
+                    heap.push(cand);
                 } else if let Some(max_node) = heap.peek()
-                    && dist < max_node.dist {
+                    && cand < *max_node {
                         heap.pop();
-                        heap.push(DistanceNode {
-                            dist,
-                            node: node.clone(),
-                        });
+                        heap.push(cand);
                     }
             }
         }
@@ -266,10 +297,7 @@ pub fn decode_compact(bytes: &[u8]) -> Vec<NodeInfo> {
         let ip =
             std::net::Ipv4Addr::new(bytes[i + 20], bytes[i + 21], bytes[i + 22], bytes[i + 23]);
         let port = u16::from_be_bytes([bytes[i + 24], bytes[i + 25]]);
-        nodes.push(NodeInfo {
-            id,
-            addr: SocketAddr::new(std::net::IpAddr::V4(ip), port),
-        });
+        nodes.push(NodeInfo { id, addr: SocketAddr::new(std::net::IpAddr::V4(ip), port), query_count: 0, fail_count: 0, last_useful: false });
         i += 26;
     }
     nodes
@@ -284,10 +312,7 @@ pub fn decode_compact6(bytes: &[u8]) -> Vec<NodeInfo> {
         let mut v6 = [0u8; 16];
         v6.copy_from_slice(&bytes[i + 20..i + 36]);
         let port = u16::from_be_bytes([bytes[i + 36], bytes[i + 37]]);
-        nodes.push(NodeInfo {
-            id,
-            addr: SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::from(v6)), port),
-        });
+        nodes.push(NodeInfo { id, addr: SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::from(v6)), port), query_count: 0, fail_count: 0, last_useful: false });
         i += 38;
     }
     nodes
@@ -305,7 +330,7 @@ mod tests {
             let mut id = [0u8; 20];
             id[0] = i;
             let addr: SocketAddr = format!("1.2.3.{}:{}", i, 6881).parse().unwrap();
-            let ni = NodeInfo { id, addr };
+            let ni = NodeInfo { id, addr, query_count: 0, fail_count: 0, last_useful: false };
             rt.insert(ni.clone());
             nodes.push(ni);
         }
@@ -327,7 +352,7 @@ mod tests {
             let addr: SocketAddr = format!("10.{}.{}.{}:6881", i % 200, (i / 200) % 200, i % 250)
                 .parse()
                 .unwrap();
-            rt.insert(NodeInfo { id, addr });
+            rt.insert(NodeInfo { id, addr, query_count: 0, fail_count: 0, last_useful: false });
         }
         assert!(rt.len() > 0);
         for _ in 0..100 {
@@ -351,9 +376,7 @@ mod tests {
             if !rt.contains_id(&id) {
                 new_at_insert += 1;
             }
-            rt.insert(NodeInfo {
-                id,
-                addr: format!("1.2.3.{}:6881", (i % 250) as u8 + 1)
+            rt.insert(NodeInfo { id, addr: format!("1.2.3.{, query_count: 0, fail_count: 0, last_useful: false }:6881", (i % 250) as u8 + 1)
                     .parse()
                     .unwrap(),
             });

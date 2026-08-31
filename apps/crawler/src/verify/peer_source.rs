@@ -52,7 +52,7 @@ pub async fn source_peers(
     // soon as any query completes, instead of blocking a whole round on the
     // slowest peer. The global deadline wraps the entire loop, bounding the
     // worst case; on expiry we abort and return whatever peers we found.
-    let mut set: JoinSet<(SocketAddr, Result<Message, QueryError>)> = JoinSet::new();
+    let mut set: JoinSet<(crate::krpc::NodeId, SocketAddr, Result<Message, QueryError>)> = JoinSet::new();
     let mut inflight: usize = 0;
     let mut new_nodes: Vec<NodeInfo> = Vec::new();
     let mut total_queries: usize = 0;
@@ -85,7 +85,7 @@ pub async fn source_peers(
 
         while inflight > 0 {
             match set.join_next().await {
-                Some(Ok((node_addr, Ok(msg)))) => {
+                Some(Ok((node_id, node_addr, Ok(msg)))) => {
                     if let Kind::Response { r } = &msg.kind {
                         metrics.source_responses.add(1);
                         succeeded += 1;
@@ -121,12 +121,18 @@ pub async fn source_peers(
                             node = node_addr.to_string(),
                             peers_returned = returned_here
                         );
-                        if let Some(nodes) = r.get_bytes(b"nodes") {
+                        let has_nodes = if let Some(nodes) = r.get_bytes(b"nodes") {
                             new_nodes.extend(decode_compact(nodes));
-                        }
+                            true
+                        } else { false };
+                        router.record_query(&node_id, returned_here > 0 || has_nodes, false);
                     }
                 }
-                Some(Ok((_, Err(_)))) | Some(Err(_)) => {
+                Some(Ok((node_id, _, Err(_)))) => {
+                    metrics.source_timeout.add(1);
+                    router.record_query(&node_id, false, true);
+                }
+                Some(Err(_)) => {
                     metrics.source_timeout.add(1);
                 }
                 None => break,
@@ -201,7 +207,7 @@ pub async fn source_peers(
 }
 
 fn spawn_query(
-    set: &mut JoinSet<(SocketAddr, Result<Message, QueryError>)>,
+    set: &mut JoinSet<(crate::krpc::NodeId, SocketAddr, Result<Message, QueryError>)>,
     router: &Arc<Router>,
     info_hash: Infohash,
     node: NodeInfo,
@@ -233,13 +239,14 @@ fn spawn_query(
             .non_lead_tasks_queries_total
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
+    let node_id = node.id;
     set.spawn(async move {
         let node_str = addr.to_string();
         crate::trace_lifecycle!(&ih, "source_query", stream = "dht", node = node_str);
         let res = router
             .send_query(GET_PEERS, addr, args, query_timeout)
             .await;
-        (addr, res)
+        (node_id, addr, res)
     });
 }
 
