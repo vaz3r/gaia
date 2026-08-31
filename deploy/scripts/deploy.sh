@@ -64,7 +64,7 @@ $SSH "sudo mkdir -p ${REMOTE_DATA}/crawler ${REMOTE_DATA}/logs && sudo chown -R 
 
 # Services to deploy (e.g. "crawler" alone on crawler-only hosts, or
 # "crawler dashboard" where the dashboard also runs).
-DEPLOY_SERVICES="${DEPLOY_SERVICES:-crawler dashboard}"
+DEPLOY_SERVICES="${DEPLOY_SERVICES:-crawler dashboard log-shipper}"
 
 # ── 3. Verify Docker Compose file exists ──
 if ! $SSH "test -f $REMOTE_COMPOSE/docker-compose.yml"; then
