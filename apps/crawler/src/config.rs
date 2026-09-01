@@ -466,6 +466,22 @@ impl Config {
         self.fetch.lead_source_grace_ms =
             env_u64("CRAW_LEAD_SOURCE_GRACE_MS", self.fetch.lead_source_grace_ms);
 
+        // storage / janitor
+        self.storage.janitor_interval_secs =
+            env_u64("CRAW_JANITOR_INTERVAL", self.storage.janitor_interval_secs);
+        self.storage.janitor_batch_size =
+            env_u64("CRAW_JANITOR_BATCH_SIZE", self.storage.janitor_batch_size as u64) as i64;
+        self.storage.janitor_batch_sleep_ms =
+            env_u64("CRAW_JANITOR_BATCH_SLEEP_MS", self.storage.janitor_batch_sleep_ms);
+        self.storage.janitor_dead_retention_secs =
+            env_u64("CRAW_JANITOR_DEAD_RETENTION_SECS", self.storage.janitor_dead_retention_secs);
+
+        // fetch (tcp/utp timeout)
+        self.fetch.tcp_timeout_secs =
+            env_u64("CRAW_TCP_TIMEOUT_SECS", self.fetch.tcp_timeout_secs);
+        self.fetch.utp_timeout_secs =
+            env_u64("CRAW_UTP_TIMEOUT_SECS", self.fetch.utp_timeout_secs);
+
         // harvest
         self.harvest.harvest_channel_capacity = env_usize(
             "CRAW_HARVEST_CHANNEL_CAPACITY",
