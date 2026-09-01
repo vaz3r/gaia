@@ -1,0 +1,18 @@
+# DeBERTa-v3-small training config
+# Raw metadata mode, DeepSeek-labeled training data
+
+text_builder:
+  max_name_chars: 300
+
+transformer:
+  model_name: microsoft/deberta-v3-small
+  batch_size: 16
+  max_length: 256                 # 512 causes O(n^2) disentangled attention to freeze M1; 256 is sufficient for torrent names
+  epochs: 4                     # DeBERTa converges faster than MiniLM; 6 risks overfitting on 5K samples
+  learning_rate: 1e-5
+  warmup_ratio: 0.15            # 15% warmup to safely ease into disentangled attention layers
+  weight_decay: 0.01
+  grad_clip: 1.0
+
+classifier:
+  confidence_threshold: 0.45

@@ -1,0 +1,13 @@
+# DeBERTa-v3-small inference config (ONNX INT8)
+# Used by --mode transformer with --config config/deberta_inference.yaml
+
+transformer:
+  model_path: data/models/transformer_deberta/model_int8.onnx
+  tokenizer_path: data/models/transformer_deberta/tokenizer
+  encoder_path: data/models/transformer_deberta/label_encoder.joblib
+  model_name: deberta-v3-small
+  max_length: 256
+  batch_size: 16
+
+text_builder:
+  max_name_chars: 300

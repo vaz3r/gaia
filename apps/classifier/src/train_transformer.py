@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Train a transformer classifier for torrent metadata.
 
@@ -115,6 +116,7 @@ def main():
             config = yaml.safe_load(f)
 
     tr_cfg = config.get("transformer", {})
+    model_name = tr_cfg.get("model_name", "sentence-transformers/all-MiniLM-L12-v2")
     epochs = int(args.epochs or tr_cfg.get("epochs", 4))
     lr = float(args.lr or tr_cfg.get("learning_rate", 2e-5))
     batch_size = int(tr_cfg.get("batch_size", 16))
@@ -140,8 +142,8 @@ def main():
     logger.info("Train: %d | Val: %d", len(train_texts), len(val_texts))
 
     # Tokenize
-    logger.info("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L12-v2")
+    logger.info("Loading tokenizer from %s...", model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.save_pretrained(str(out_dir / "tokenizer"))
 
     logger.info("Encoding datasets...")
@@ -160,7 +162,7 @@ def main():
 
     # Model
     model = AutoModelForSequenceClassification.from_pretrained(
-        "sentence-transformers/all-MiniLM-L12-v2", num_labels=n_classes
+        model_name, num_labels=n_classes
     )
     device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
     logger.info("Device: %s", device)

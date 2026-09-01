@@ -190,13 +190,18 @@ def run_transformer_mode(torrents: list[dict], config: dict, output_f):
     batch_size = tr_cfg.get("batch_size", 32)
     max_length = tr_cfg.get("max_length", 256)
 
-    # Load Single Stage
+    model_path = tr_cfg.get("model_path", "data/models/transformer/single_stage/model_int8.onnx")
+    tokenizer_path = tr_cfg.get("tokenizer_path", "data/models/transformer/single_stage/tokenizer")
+    encoder_path = tr_cfg.get("encoder_path", "data/models/transformer/single_stage/label_encoder.joblib")
+    model_name = tr_cfg.get("model_name", "minilm-l12-int8")
+
+    # Load model
     backend = TransformerOnnxBackend(
-        model_path="data/models/transformer/single_stage/model_int8.onnx",
-        tokenizer_path="data/models/transformer/single_stage/tokenizer",
+        model_path=model_path,
+        tokenizer_path=tokenizer_path,
         max_length=max_length,
     )
-    le = joblib.load("data/models/transformer/single_stage/label_encoder.joblib")
+    le = joblib.load(encoder_path)
     classes = le.classes_
 
     texts = [build_input_text(row, config) for row in torrents]
@@ -229,9 +234,9 @@ def run_transformer_mode(torrents: list[dict], config: dict, output_f):
             "infohash": row.get("infohash", row.get("id", "")),
             "category": category,
             "confidence": round(confidence, 4),
-            "method": "transformer_onnx_singlestage",
-            "model": "minilm-l12-int8",
-            "classifier": "single_stage",
+            "method": "transformer_onnx",
+            "model": model_name,
+            "classifier": Path(model_path).parent.name,
             "top_candidates": top_candidates,
         }
         output_f.write(json.dumps(entry) + "\n")

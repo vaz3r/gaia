@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import sys
 import logging
 from pathlib import Path
@@ -7,18 +8,28 @@ import subprocess
 logging.basicConfig(level=logging.INFO, stream=sys.stderr, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger('export_onnx')
 
-MODEL_DIR = Path("data/models/transformer/single_stage")
+DEFAULT_MODEL_DIR = Path("data/models/transformer/single_stage")
+
 
 def main():
-    logger.info("Exporting to ONNX using Optimum...")
+    parser = argparse.ArgumentParser(description="Export transformer model to ONNX INT8")
+    parser.add_argument(
+        "--model_dir",
+        default=str(DEFAULT_MODEL_DIR),
+        help="Directory containing model/ checkpoint (default: data/models/transformer/single_stage)",
+    )
+    args = parser.parse_args()
+
+    model_dir = Path(args.model_dir)
+    logger.info("Exporting to ONNX using Optimum from %s...", model_dir)
     
     cmd = [
         "optimum-cli", "export", "onnx",
-        "--model", str(MODEL_DIR / "model"),
+        "--model", str(model_dir / "model"),
         "--task", "text-classification",
         "--library-name", "transformers",
         "--optimize", "O1",
-        str(MODEL_DIR)
+        str(model_dir)
     ]
     
     try:
@@ -27,8 +38,8 @@ def main():
         logger.error("Optimum export failed: %s", e)
         sys.exit(1)
         
-    onnx_path = MODEL_DIR / "model.onnx"
-    quant_path = MODEL_DIR / "model_int8.onnx"
+    onnx_path = model_dir / "model.onnx"
+    quant_path = model_dir / "model_int8.onnx"
     
     logger.info("Quantizing to int8 using ONNXRuntime...")
     try:

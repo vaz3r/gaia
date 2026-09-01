@@ -1,4 +1,4 @@
-.PHONY: build run test evaluate clean push-remote-dev rebuild train-transformer export-onnx deploy-transformer train-v2 export-v2 evaluate-v2 export-labeled
+.PHONY: build run test evaluate clean push-remote-dev rebuild train-transformer export-onnx deploy-transformer train-v2 export-v2 evaluate-v2 export-labeled train-deberta export-deberta evaluate-deberta
 
 IMAGE := torrent-classifier:latest
 
@@ -58,3 +58,19 @@ evaluate-v2:
 	python src/evaluate.py \
 		--predictions data/predictions/v2.jsonl \
 		--labels data/gemini_labeled/test.jsonl
+
+# ── DeBERTa v2 pipeline (DeepSeek-labeled, raw metadata) ──────────────────────
+
+train-deberta:
+	python src/train_transformer.py \
+		--data data/deepseek_labeled/train.jsonl \
+		--config config/deberta.yaml \
+		--out_dir data/models/deberta_v3_small
+
+export-deberta:
+	python src/export_onnx.py --model_dir data/models/deberta_v3_small
+
+evaluate-deberta:
+	python src/evaluate.py \
+		--predictions data/predictions/deberta.jsonl \
+		--labels data/deepseek_labeled/test.jsonl

@@ -25,6 +25,10 @@ COPY data/models/transformer/model_int8.onnx ./data/models/transformer/model_int
 COPY data/models/transformer/tokenizer/ ./data/models/transformer/tokenizer/
 COPY data/models/transformer/label_encoder.joblib ./data/models/transformer/label_encoder.joblib
 
+# Copy DeBERTa model (ONNX int8 + tokenizer + label encoder)
+# Requires: python src/train_transformer.py --config config/deberta.yaml && python src/export_onnx.py --model_dir data/models/deberta_v3_small
+COPY data/models/transformer_deberta/ ./data/models/transformer_deberta/
+
 RUN mkdir -p /app/data/predictions /app/data/models
 
 RUN useradd -m classifier && chown -R classifier:classifier /app
