@@ -146,7 +146,7 @@ def get_unclassified_batch() -> dict:
     Returns:
         dict with keys: torrents, hasMore, batchId, totalClassified, totalRemaining, targetCategory, instructions
     """
-    limit = 50
+    limit = 100
     conn = get_db()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
