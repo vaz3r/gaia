@@ -1,0 +1,384 @@
+#!/usr/bin/env python3
+"""
+Minimal DeepSeek-based torrent classifier.
+
+Fetches unclassified torrents from PostgreSQL, sends them to DeepSeek for
+classification, and records results in the same labeled_results table.
+
+Usage:
+    python classify.py              # classify one batch of 50
+    python classify.py --loops 5    # classify 5 batches
+    python classify.py --batch 100  # classify batches of 100
+"""
+
+import argparse
+import json
+import logging
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+import psycopg2
+import psycopg2.extras
+
+# Add parent dir so we can import the deepseek package
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from deepseek import DeepSeekClient
+
+# --- Logging ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stderr)],
+)
+logger = logging.getLogger("classify")
+
+# --- Database ---
+DB_CONFIG = {
+    "host": os.getenv("DB_HOST", "workspace-production"),
+    "port": int(os.getenv("DB_PORT", "5432")),
+    "user": os.getenv("DB_USER", "crawler"),
+    "dbname": os.getenv("DB_NAME", "craw"),
+    "password": os.getenv(
+        "DB_PASSWORD",
+        "83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b",
+    ),
+    "connect_timeout": 10,
+}
+
+CATEGORY_LABELS = [
+    "Adult", "Anime", "Applications", "Documentaries",
+    "Games", "Movies", "Music", "Television", "Other",
+]
+
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS labeled_results (
+    infohash bytea PRIMARY KEY,
+    label_category text NOT NULL,
+    confidence text,
+    reason text,
+    labeled_at timestamptz DEFAULT now(),
+    source text DEFAULT 'deepseek'
+);
+"""
+
+CLASSIFICATION_PROMPT = """\
+You are a BitTorrent metadata classifier. Label each torrent with exactly one category.
+
+## Categories
+
+- **Adult** — Pornographic or sexual content (hentai, JAV, OnlyFans, explicit material)
+- **Anime** — Japanese animation (fansub releases, anime series, OVAs)
+- **Applications** — Software, tools, installers (Adobe, JetBrains, Office, etc.)
+- **Documentaries** — Factual content (BBC, PBS, NatGeo, Discovery, etc.)
+- **Games** — Video games (scene releases, console ROMs, Steam rips)
+- **Movies** — Feature films (single file, title + year)
+- **Music** — Audio content (albums, discographies, FLAC/MP3 releases)
+- **Television** — Episodic TV series (seasons, episodes, talk shows)
+- **Other** — Everything else (books, courses, spam, ambiguous content)
+
+## Rules
+
+1. Return ONLY a valid JSON array, no markdown fences, no explanation.
+2. Each item must have exactly these keys: infohash, label_category, confidence, reason.
+3. infohash must be the exact hex string from the input.
+4. label_category must be one of: Adult, Anime, Applications, Documentaries, Games, Movies, Music, Television, Other
+5. confidence must be one of: high, medium, low
+6. reason must be 1 sentence, under 15 words.
+
+## Torrents to classify
+
+"""
+
+
+def get_db():
+    return psycopg2.connect(**DB_CONFIG)
+
+
+def ensure_schema():
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(SCHEMA_SQL)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def hex_to_bytea(infohash_hex: str) -> bytes:
+    return bytes.fromhex(infohash_hex.strip())
+
+
+def fetch_unclassified_batch(limit: int) -> list[dict]:
+    """Fetch unclassified torrents from PostgreSQL."""
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(SCHEMA_SQL)
+            sql = """
+            SELECT
+                encode(t.infohash, 'hex') AS infohash,
+                t.name,
+                t.file_count,
+                t.total_size,
+                CASE
+                    WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                        (
+                            SELECT array_agg(DISTINCT ext)
+                            FROM (
+                                SELECT
+                                    CASE
+                                        WHEN jsonb_array_length(elem->'path') > 0 THEN
+                                            lower(split_part(elem->'path'->>-1, '.', -1))
+                                        ELSE NULL
+                                    END AS ext
+                                FROM jsonb_array_elements(t.files) AS elem
+                            ) sub
+                            WHERE ext IS NOT NULL AND ext != ''
+                            LIMIT 10
+                        )
+                    ELSE NULL
+                END AS extensions,
+                CASE
+                    WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                        (
+                            SELECT array_agg(DISTINCT folder)
+                            FROM (
+                                SELECT
+                                    CASE
+                                        WHEN jsonb_array_length(elem->'path') > 1 THEN
+                                            elem->'path'->>0
+                                        ELSE NULL
+                                    END AS folder
+                                FROM jsonb_array_elements(t.files) AS elem
+                            ) sub
+                            WHERE folder IS NOT NULL
+                            LIMIT 10
+                        )
+                    ELSE NULL
+                END AS top_folders,
+                CASE
+                    WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                        (
+                            SELECT jsonb_agg(jsonb_build_object(
+                                'name', sub.elem->'path'->>-1,
+                                'size', sub.elem->'length'
+                            ))
+                            FROM (
+                                SELECT elem
+                                FROM jsonb_array_elements(t.files) AS elem
+                                ORDER BY (elem->'length')::bigint DESC
+                                LIMIT 3
+                            ) sub
+                        )
+                    ELSE NULL
+                END AS largest_files
+            FROM torrents t
+            WHERE NOT EXISTS (
+                SELECT 1 FROM labeled_results lr
+                WHERE lr.infohash = t.infohash
+            )
+            ORDER BY random()
+            LIMIT %s
+            """
+            cur.execute(sql, (limit,))
+            rows = cur.fetchall()
+
+        torrents = []
+        for row in rows:
+            largest_files_raw = row["largest_files"] or []
+            largest_files = []
+            for lf in largest_files_raw[:3]:
+                if isinstance(lf, dict):
+                    largest_files.append({
+                        "name": (lf.get("name") or "")[:80],
+                        "size": lf.get("size", 0),
+                    })
+
+            torrents.append({
+                "infohash": row["infohash"],
+                "name": (row["name"] or "")[:200],
+                "file_count": row["file_count"],
+                "total_size_bytes": row["total_size"],
+                "extensions": (row["extensions"] or [])[:5],
+                "top_folders": (row["top_folders"] or [])[:5],
+                "largest_files": largest_files,
+            })
+
+        logger.info(f"Fetched {len(torrents)} unclassified torrents")
+        return torrents
+    finally:
+        conn.close()
+
+
+def build_prompt(torrents: list[dict]) -> str:
+    """Build the classification prompt with torrent metadata."""
+    prompt = CLASSIFICATION_PROMPT
+    for i, t in enumerate(torrents, 1):
+        prompt += f"{i}. infohash: {t['infohash']}\n"
+        prompt += f"   name: {t['name']}\n"
+        prompt += f"   file_count: {t['file_count']}\n"
+        prompt += f"   total_size_bytes: {t['total_size_bytes']}\n"
+        if t["extensions"]:
+            prompt += f"   extensions: {', '.join(t['extensions'])}\n"
+        if t["top_folders"]:
+            prompt += f"   top_folders: {', '.join(t['top_folders'])}\n"
+        if t["largest_files"]:
+            lf_str = ", ".join(
+                f"{f['name']} ({f['size']} bytes)" for f in t["largest_files"]
+            )
+            prompt += f"   largest_files: {lf_str}\n"
+        prompt += "\n"
+    return prompt
+
+
+def parse_response(text: str) -> list[dict]:
+    """Parse DeepSeek's JSON response into classification records."""
+    # Strip markdown fences if present
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+
+    try:
+        results = json.loads(text)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON response: {e}")
+        logger.debug(f"Raw response: {text[:500]}")
+        return []
+
+    if not isinstance(results, list):
+        logger.error(f"Expected JSON array, got {type(results).__name__}")
+        return []
+
+    return results
+
+
+def validate_and_record(torrents: list[dict], results: list[dict]) -> dict:
+    """Validate results and record valid ones in the database."""
+    # Build a set of infohashes we sent for validation
+    sent_infohashes = {t["infohash"].lower() for t in torrents}
+
+    valid = []
+    skipped = 0
+    for r in results:
+        # Check required fields
+        ih = r.get("infohash", "").strip() if r.get("infohash") else ""
+        cat = r.get("label_category", "")
+        conf = r.get("confidence", "")
+        reason = r.get("reason", "")
+
+        if not ih or len(ih) != 40 or not all(c in "0123456789abcdefABCDEF" for c in ih):
+            logger.warning(f"Skipping bad infohash: {ih[:20]}...")
+            skipped += 1
+            continue
+
+        if cat not in CATEGORY_LABELS:
+            logger.warning(f"Skipping invalid category '{cat}' for {ih[:16]}")
+            skipped += 1
+            continue
+
+        valid.append((hex_to_bytea(ih), cat, conf, reason))
+
+    if not valid:
+        return {"recorded": 0, "skipped": skipped}
+
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO labeled_results (infohash, label_category, confidence, reason, labeled_at, source)
+                VALUES %s
+                ON CONFLICT (infohash) DO UPDATE SET
+                    label_category = EXCLUDED.label_category,
+                    confidence = EXCLUDED.confidence,
+                    reason = EXCLUDED.reason,
+                    labeled_at = now(),
+                    source = 'deepseek'
+                """,
+                valid,
+                template="(%s, %s, %s, %s, now(), 'deepseek')",
+            )
+            saved = cur.rowcount
+        conn.commit()
+        logger.info(f"Recorded {saved} classifications (skipped {skipped})")
+        return {"recorded": saved, "skipped": skipped}
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Database error: {e}")
+        return {"recorded": 0, "skipped": skipped, "error": str(e)}
+    finally:
+        conn.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Classify torrents using DeepSeek")
+    parser.add_argument("--batch", type=int, default=50, help="Batch size (default: 50)")
+    parser.add_argument("--loops", type=int, default=1, help="Number of batches to process (default: 1)")
+    args = parser.parse_args()
+
+    ensure_schema()
+
+    # Get total classified before starting
+    conn = get_db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM labeled_results")
+        total_before = cur.fetchone()[0]
+    conn.close()
+    logger.info(f"Total classified before starting: {total_before}")
+
+    # Initialize DeepSeek client
+    logger.info("Initializing DeepSeek client...")
+    client = DeepSeekClient()
+
+    for batch_num in range(1, args.loops + 1):
+        logger.info(f"--- Batch {batch_num}/{args.loops} (size={args.batch}) ---")
+
+        # Fetch unclassified torrents
+        torrents = fetch_unclassified_batch(args.batch)
+        if not torrents:
+            logger.info("No more unclassified torrents. Done.")
+            break
+
+        # Build prompt and classify
+        prompt = build_prompt(torrents)
+        logger.info(f"Sending {len(torrents)} torrents to DeepSeek...")
+
+        try:
+            reply = client.chat(prompt)
+            logger.info(f"Got response ({len(reply.text)} chars)")
+        except Exception as e:
+            logger.error(f"DeepSeek error: {e}")
+            break
+
+        # Parse and record
+        results = parse_response(reply.text)
+        logger.info(f"Parsed {len(results)} classifications from response")
+
+        record_result = validate_and_record(torrents, results)
+        logger.info(
+            f"Batch {batch_num}: recorded={record_result['recorded']}, "
+            f"skipped={record_result['skipped']}"
+        )
+
+        # Small delay between batches
+        if batch_num < args.loops:
+            time.sleep(2)
+
+    client.close()
+
+    # Final count
+    conn = get_db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM labeled_results")
+        total_after = cur.fetchone()[0]
+    conn.close()
+    logger.info(f"Done. Total classified: {total_before} -> {total_after} (+{total_after - total_before})")
+
+
+if __name__ == "__main__":
+    main()

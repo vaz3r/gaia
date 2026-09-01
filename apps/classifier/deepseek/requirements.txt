@@ -1,0 +1,4 @@
+playwright>=1.44
+httpx>=0.27
+wasmtime>=21.0
+psycopg2-binary>=2.9

@@ -146,7 +146,7 @@ def get_unclassified_batch() -> dict:
     Returns:
         dict with keys: torrents, hasMore, batchId, totalClassified, totalRemaining, targetCategory, instructions
     """
-    limit = 200
+    limit = 400
     conn = get_db()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -417,19 +417,34 @@ def record_classifications(results: list[ClassificationResult]) -> dict:
         results: list of ClassificationResult with infohash, label_category, confidence, reason
 
     Returns:
-        dict with keys: status, recorded, message
+        dict with keys: status, recorded, skipped, message
     """
     if not results:
-        return {"status": "ok", "saved": 0, "message": "No results to save"}
+        return {"status": "ok", "recorded": 0, "skipped": 0, "message": "No results to save"}
 
-    # Validate categories
+    # Filter out malformed items: invalid category or missing/bad infohash
+    valid = []
+    skipped = 0
     for r in results:
         if r.label_category not in CATEGORY_LABELS:
-            return {
-                "status": "error",
-                "saved": 0,
-                "message": f"Invalid category '{r.label_category}'. Must be one of: {', '.join(CATEGORY_LABELS)}",
-            }
+            logger.warning(f"Skipping item with invalid category '{r.label_category}'")
+            skipped += 1
+            continue
+        # Validate infohash is a hex string of correct length (40 chars = 20 bytes)
+        ih = r.infohash.strip() if r.infohash else ""
+        if len(ih) != 40 or not all(c in "0123456789abcdefABCDEF" for c in ih):
+            logger.warning(f"Skipping item with bad infohash '{ih[:20]}...'")
+            skipped += 1
+            continue
+        valid.append(r)
+
+    if not valid:
+        return {
+            "status": "ok",
+            "recorded": 0,
+            "skipped": skipped,
+            "message": f"All {skipped} items were malformed and skipped.",
+        }
 
     conn = get_db()
     try:
@@ -449,14 +464,14 @@ def record_classifications(results: list[ClassificationResult]) -> dict:
                 """,
                 [
                     (hex_to_bytea(r.infohash), r.label_category, r.confidence, r.reason)
-                    for r in results
+                    for r in valid
                 ],
                 template="(%s, %s, %s, %s, now(), 'mcp_agent')",
             )
             saved = cur.rowcount
         conn.commit()
 
-        logger.info(f"Recorded {saved} classifications")
+        logger.info(f"Recorded {saved} classifications (skipped {skipped} malformed)")
 
         # Get updated totals
         with conn.cursor() as cur:
@@ -467,17 +482,22 @@ def record_classifications(results: list[ClassificationResult]) -> dict:
             )
             by_category = {row[0]: row[1] for row in cur.fetchall()}
 
+        msg = f"Recorded {saved} observations. Total observed: {total}."
+        if skipped:
+            msg += f" Skipped {skipped} malformed items."
+
         return {
             "status": "ok",
             "recorded": saved,
+            "skipped": skipped,
             "totalObserved": total,
             "byCategory": by_category,
-            "message": f"Recorded {saved} observations. Total observed: {total}.",
+            "message": msg,
         }
     except Exception as e:
         conn.rollback()
         logger.error(f"Error saving classifications: {e}")
-        return {"status": "error", "saved": 0, "message": str(e)}
+        return {"status": "error", "recorded": 0, "skipped": skipped, "message": str(e)}
     finally:
         conn.close()
 
