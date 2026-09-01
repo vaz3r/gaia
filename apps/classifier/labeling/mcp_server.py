@@ -112,7 +112,7 @@ mcp = FastMCP(
     instructions=(
         "You are a BitTorrent metadata classifier. "
         "1. Call get_labeling_instructions() first to learn the categories and rules. "
-        "2. Call get_unclassified_batch() to get 200 torrents with full metadata "
+        "2. Call get_unclassified_batch() to get 100 torrents with full metadata "
         "(name, file_count, total_size_bytes, extensions, top_folders, largest_files). "
         "3. Classify each torrent using ALL the metadata provided. "
         "4. Call record_classifications(results) to log your observations. "
@@ -145,7 +145,7 @@ def get_unclassified_batch() -> dict:
     Returns:
         dict with keys: torrents, hasMore, batchId, totalClassified, totalRemaining, targetCategory, instructions
     """
-    limit = 200
+    limit = 100
     conn = get_db()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -322,17 +322,25 @@ def get_unclassified_batch() -> dict:
             )
             total_remaining = cur.fetchone()["cnt"]
 
-        # Format torrents
+        # Format torrents (truncate long fields to fit context window)
         torrents = []
         for row in rows:
-            extensions = row["extensions"] or []
-            top_folders = row["top_folders"] or []
-            largest_files = row["largest_files"] or []
+            extensions = (row["extensions"] or [])[:5]
+            top_folders = (row["top_folders"] or [])[:5]
+            largest_files_raw = row["largest_files"] or []
+
+            largest_files = []
+            for lf in largest_files_raw[:3]:
+                if isinstance(lf, dict):
+                    largest_files.append({
+                        "name": (lf.get("name") or "")[:80],
+                        "size": lf.get("size", 0),
+                    })
 
             torrents.append(
                 {
                     "infohash": row["infohash"],
-                    "name": row["name"],
+                    "name": (row["name"] or "")[:200],
                     "file_count": row["file_count"],
                     "total_size_bytes": row["total_size"],
                     "extensions": extensions,
