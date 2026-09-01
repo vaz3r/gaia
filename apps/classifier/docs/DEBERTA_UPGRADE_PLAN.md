@@ -2,12 +2,13 @@
 
 **Status:** Pending approval
 **Last updated:** 2026-09-01
+**Approach:** Dual model — keep current MiniLM, branch out with DeBERTa
 
 ---
 
 ## Goal
 
-Upgrade from `sentence-transformers/all-MiniLM-L12-v2` (33M params) to `microsoft/deberta-v3-small` (44M params) to push accuracy from 90.1% to 93-96%.
+Keep the current MiniLM model (90.1% accuracy) as production v1. Train DeBERTa-v3-small as a separate model in its own directory, evaluate it, and deploy as production v2 if it outperforms MiniLM.
 
 ---
 
@@ -22,8 +23,8 @@ Upgrade from `sentence-transformers/all-MiniLM-L12-v2` (33M params) to `microsof
 
 ## Expected Outcome
 
-| Metric | Current (MiniLM) | Expected (DeBERTa) |
-|--------|-------------------|---------------------|
+| Metric | MiniLM (v1) | DeBERTa (v2) |
+|--------|-------------|--------------|
 | Accuracy | 90.1% | 93-96% |
 | Macro F1 | 0.896 | 0.93-0.96 |
 | Inference speed | ~200 it/s | ~80-100 it/s |
@@ -31,38 +32,134 @@ Upgrade from `sentence-transformers/all-MiniLM-L12-v2` (33M params) to `microsof
 
 ---
 
+## Dual Model Directory Structure
+
+```
+data/models/
+├── transformer/                    # Production v1 (MiniLM) — keep as-is
+│   └── single_stage/
+│       ├── model_int8.onnx
+│       ├── tokenizer/
+│       └── label_encoder.joblib
+├── transformer_v2/                 # Training output v1 (MiniLM) — keep as-is
+│   ├── model/
+│   ├── model.onnx
+│   ├── model_int8.onnx
+│   ├── tokenizer/
+│   └── label_encoder.joblib
+├── deberta_v3_small/               # Training output v2 (DeBERTa) — NEW
+│   ├── model/
+│   ├── model.onnx
+│   ├── model_int8.onnx
+│   ├── tokenizer/
+│   └── label_encoder.joblib
+└── transformer_deberta/            # Production v2 (DeBERTa) — NEW
+    ├── model_int8.onnx
+    ├── tokenizer/
+    └── label_encoder.joblib
+```
+
+---
+
+## Config Files
+
+```
+config/
+├── transformer.yaml                # Inference v1 (MiniLM) — keep as-is
+├── transformer_v2.yaml             # Training v1 (MiniLM) — keep as-is
+├── deberta.yaml                    # Training v2 (DeBERTa) — NEW
+└── deberta_inference.yaml          # Inference v2 (DeBERTa) — NEW
+```
+
+### `config/deberta.yaml` (training)
+
+```yaml
+text_builder:
+  max_name_chars: 300
+
+transformer:
+  model_name: microsoft/deberta-v3-small
+  batch_size: 16
+  max_length: 512
+  epochs: 6
+  learning_rate: 1e-5
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  grad_clip: 1.0
+
+classifier:
+  confidence_threshold: 0.45
+```
+
+### `config/deberta_inference.yaml` (inference)
+
+```yaml
+transformer:
+  model_path: data/models/transformer_deberta/model_int8.onnx
+  tokenizer_path: data/models/transformer_deberta/tokenizer
+  encoder_path: data/models/transformer_deberta/label_encoder.joblib
+  max_length: 512
+  batch_size: 16
+
+text_builder:
+  max_name_chars: 300
+```
+
+---
+
 ## Files to Change
 
 | File | Change | Difficulty |
 |------|--------|------------|
-| `config/transformer_v2.yaml` | Update `model_name`, increase `max_length` to 512, lower LR to 1e-5 | Trivial |
-| `src/train_transformer.py` | Wire config `model_name` into tokenizer/model loading (lines 144, 162-163 are hardcoded) | Easy |
-| `src/classify_batch.py` | Update model metadata string `minilm-l12-int8` → `deberta-v3-small-int8` | Trivial |
-| `requirements.txt` | Add `optimum[exporters]`, `sentencepiece`, `torch` | Easy |
-| `docs/CLASSIFIER.md` | Update model name references | Trivial |
-| `docs/RETRAINING_PLAN.md` | Update model name reference | Trivial |
+| `config/deberta.yaml` | New training config for DeBERTa-v3-small | Trivial |
+| `config/deberta_inference.yaml` | New inference config for DeBERTa | Trivial |
+| `src/train_transformer.py` | Wire `model_name` from config (lines 144, 162-163 are hardcoded) | Easy |
+| `requirements.txt` | Add `optimum[exporters]`, `sentencepiece` | Easy |
 
 ### Files that do NOT change
 
-- `src/core/text_builder.py` — model-agnostic
+- `data/models/transformer/` — production MiniLM stays untouched
+- `config/transformer.yaml` — inference config stays as-is
+- `config/transformer_v2.yaml` — training config stays as-is
 - `src/backends/transformer_onnx_backend.py` — already handles optional `token_type_ids`
+- `src/core/text_builder.py` — model-agnostic
 - `src/export_onnx.py` — model-agnostic, optimum-cli supports DeBERTa-v3 natively
-- `Dockerfile` — paths are generic
+- `Dockerfile` — paths are generic, works with either model
 
 ---
 
-## Config Changes
+## Training Flow
 
-```yaml
-# config/transformer_v2.yaml
-transformer:
-  model_name: microsoft/deberta-v3-small
-  batch_size: 16
-  max_length: 512       # was 256 — DeBERTa handles longer sequences better
-  epochs: 6             # was 4 — give DeBERTa more time to converge
-  learning_rate: 1e-5   # was 2e-5 — DeBERTa needs gentler fine-tuning
-  weight_decay: 0.01
-  grad_clip: 1.0
+```bash
+# Train MiniLM (existing — don't touch)
+python src/train_transformer.py \
+  --data data/deepseek_labeled/train.jsonl \
+  --out_dir data/models/transformer_v2 \
+  --config config/transformer_v2.yaml
+
+# Train DeBERTa (new — separate directory)
+python src/train_transformer.py \
+  --data data/deepseek_labeled/train.jsonl \
+  --out_dir data/models/deberta_v3_small \
+  --config config/deberta.yaml
+```
+
+## Inference Flow
+
+```bash
+# Run with MiniLM (existing)
+python src/classify_batch.py \
+  --input data/test.jsonl \
+  --output data/preds_minilm.jsonl \
+  --config config/transformer.yaml \
+  --mode transformer
+
+# Run with DeBERTa (new)
+python src/classify_batch.py \
+  --input data/test.jsonl \
+  --output data/preds_deberta.jsonl \
+  --config config/deberta_inference.yaml \
+  --mode transformer
 ```
 
 ---
@@ -91,16 +188,17 @@ DELETE FROM labeled_results WHERE confidence = 'low';
 | Larger model — ~142M params (vs 33M MiniLM), ~3-4x bigger ONNX | Still fast at 80-100 it/s, acceptable for batch processing |
 | Higher memory — 512 max_length vs 256 | Batch size 16 is conservative, should be fine on MPS/CPU |
 | Learning rate — DeBERTa needs lower LR | Using 1e-5 (current 2e-5 may be too high) |
+| No risk to current model | Current MiniLM is never modified; lives in separate directories |
 
 ---
 
 ## Execution Order
 
-1. Wire `model_name` from config into `train_transformer.py`
-2. Update config with DeBERTa settings
-3. (Optional) Clean 34 low-confidence labels
-4. Train DeBERTa-v3-small
-5. Evaluate on test split
-6. Export INT8 ONNX
-7. Update production model
+1. Create `config/deberta.yaml` (training config)
+2. Create `config/deberta_inference.yaml` (inference config)
+3. Wire `model_name` from config in `train_transformer.py`
+4. (Optional) Clean 34 low-confidence labels
+5. Train DeBERTa-v3-small → `data/models/deberta_v3_small/`
+6. Evaluate both models on test split
+7. Export INT8 ONNX → `data/models/transformer_deberta/`
 8. Commit
