@@ -428,7 +428,7 @@ def validate_and_record(torrents: list[dict], results: list[dict]) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Classify torrents using DeepSeek")
-    parser.add_argument("--batch", type=int, default=50, help="Batch size (default: 50)")
+    parser.add_argument("--batch", type=int, default=75, help="Batch size (default: 75)")
     parser.add_argument("--loops", type=int, default=1, help="Number of batches to process (default: 1)")
     args = parser.parse_args()
 
