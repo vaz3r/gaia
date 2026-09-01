@@ -373,7 +373,9 @@ def validate_and_record(torrents: list[dict], results: list[dict]) -> dict:
     sent_infohashes = {t["infohash"].lower() for t in torrents}
 
     valid = []
+    seen = set()
     skipped = 0
+    duplicates = 0
     for r in results:
         # Check required fields
         ih = r.get("infohash", "").strip() if r.get("infohash") else ""
@@ -391,7 +393,15 @@ def validate_and_record(torrents: list[dict], results: list[dict]) -> dict:
             skipped += 1
             continue
 
+        ih_lower = ih.lower()
+        if ih_lower in seen:
+            duplicates += 1
+            continue
+        seen.add(ih_lower)
         valid.append((hex_to_bytea(ih), cat, conf, reason))
+
+    if duplicates:
+        logger.info(f"Deduplicated {duplicates} duplicate infohashes")
 
     if not valid:
         return {"recorded": 0, "skipped": skipped}
