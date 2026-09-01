@@ -1,13 +1,14 @@
 from dataclasses import dataclass, field
 
 ALLOWED_CATEGORIES = frozenset({
-    "Movies",
-    "Television",
-    "Games",
-    "Music",
-    "Applications",
+    "Adult",
     "Anime",
+    "Applications",
     "Documentaries",
+    "Games",
+    "Movies",
+    "Music",
+    "Television",
     "Other",
 })
 

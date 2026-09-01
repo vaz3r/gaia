@@ -88,7 +88,7 @@ def _detect_features(name: str, files: list[str]) -> str:
     is_course = bool(re.search(r"\b(Udemy|Coursera|Pluralsight|Tutorial|Training|Masterclass|LinkedIn\s*Learning|Frontend\s*Masters|Packt|O'?Reilly)\b", name, re.IGNORECASE))
 
     # JAV / Adult
-    is_adult = bool(re.search(r"\b([A-Z]{3,5}-\d{3,5}|OnlyFans|Brazzers|NaughtyAmerica|BangBros|TeamSkeet|Adult|JAV|Porn|Hentai|18\+|XXX|Uncensored|FC2-PPV-\d+)\b", name, re.IGNORECASE))
+    is_adult = bool(re.search(r"\b([A-Z]{3,5}-\d{3,5}|OnlyFans|Brazzers|NaughtyAmerica|BangBros|TeamSkeet|Adult|JAV|Porn|Hentai|18\+|XXX|Uncensored|FC2-PPV-\d+|Fansly|ManyVids)\b", name, re.IGNORECASE))
 
     if is_doc:
         parts.append("Type: Documentary")
@@ -99,7 +99,7 @@ def _detect_features(name: str, files: list[str]) -> str:
     elif is_app_vendor or (is_app_payload and installs and not video and not is_game_scene):
         parts.append("Type: Application software")
     elif is_adult:
-        parts.append("Type: Adult media")
+        parts.append("Type: Adult content")
     elif is_course:
         parts.append("Type: Course tutorial")
     elif is_ebook and not video:

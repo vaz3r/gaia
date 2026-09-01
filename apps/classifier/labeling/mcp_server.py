@@ -49,6 +49,7 @@ DB_CONFIG = {
 }
 
 CATEGORY_LABELS = [
+    "Adult",
     "Anime",
     "Applications",
     "Documentaries",
@@ -61,6 +62,7 @@ CATEGORY_LABELS = [
 
 # Regex patterns for balanced extraction — used to bias batches toward underrepresented categories
 CATEGORY_PATTERNS = {
+    "Adult": r"(porn|xxx|adult|hentai|jav|onlyfans|brazzers|bangbros|nubile|naughty|teamSkeet|realitykings|mofos|caribbeancom|heyzo|1pondo|fc2|uncensored|fc2-ppv|erotic|massage|nude|naked)",
     "Anime": r"\[(Erai-raws|SubsPlease|HorribleSubs|Judas|DKB|ASW|Commie|FFF|Coalgirls|Anime\s*Time|NeoAE|Baha|ANi|VCB-Studio|Kawaiika-Raws|Golumpa|EMBER|SweetSub|Lilith-Raws|NC-Raws|LoliHouse|Moozzi2|ReinForce|Kametsu|Yameii|ToonsHub|Nekomoe|Tenshi)\]|(AT-X|Tokyo\s*MX|BS11|MBS|TBS|TV\s*Tokyo|KBS|Animax|Crunchyroll|Funimation|HIDIVE)",
     "Applications": r"(Adobe|Autodesk|JetBrains|Microsoft\s*Office|Windows\s*(10|11|Server)|VMware|MATLAB|Ableton|FL\s*Studio|Cubase|CorelDRAW|SolidWorks|Photoshop|Illustrator|Premiere|Acrobat|Kaspersky|Bitdefender|CCleaner|Acronis|EaseUS|Tenorshare|Office\s*20\d{2})",
     "Documentaries": r"(documentary|docuseries|frontline|NOVA|National\s*Geographic|Nat\s*Geo|Discovery\s*Channel|CuriosityStream|NHK|History\s*Channel|Panorama|Horizon|David\s*Attenborough|DW\s*Documentary|Storyville|Disneynature|Louis\s*Theroux)",
@@ -389,7 +391,7 @@ def get_unclassified_batch() -> dict:
 def _pick_target_category(cat_counts: dict) -> str:
     """Pick the category with the fewest labels to bias the next batch toward."""
     # Priority order: harder/underrepresented classes first
-    priority = ["Anime", "Applications", "Games", "Documentaries", "Music", "Movies", "Television", "Other"]
+    priority = ["Adult", "Anime", "Applications", "Games", "Documentaries", "Music", "Movies", "Television", "Other"]
 
     # Find the category with the fewest labels
     min_count = float("inf")
