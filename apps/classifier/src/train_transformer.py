@@ -115,11 +115,11 @@ def main():
             config = yaml.safe_load(f)
 
     tr_cfg = config.get("transformer", {})
-    epochs = args.epochs or tr_cfg.get("epochs", 4)
-    lr = args.lr or tr_cfg.get("learning_rate", 2e-5)
-    batch_size = tr_cfg.get("batch_size", 16)
-    max_length = tr_cfg.get("max_length", 256)
-    grad_clip = tr_cfg.get("grad_clip", 1.0)
+    epochs = int(args.epochs or tr_cfg.get("epochs", 4))
+    lr = float(args.lr or tr_cfg.get("learning_rate", 2e-5))
+    batch_size = int(tr_cfg.get("batch_size", 16))
+    max_length = int(tr_cfg.get("max_length", 256))
+    grad_clip = float(tr_cfg.get("grad_clip", 1.0))
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

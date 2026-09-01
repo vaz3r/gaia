@@ -1,37 +1,35 @@
 # Classifier Retraining Plan
 
-**Status:** Waiting for labeling to complete
+**Status:** Retraining Complete
 **Last updated:** 2026-09-01
 
 ---
 
-## Current State
+## Results
 
-| Metric | Value |
-|--------|-------|
-| Total labeled | 5,422 |
-| DeepSeek (Expert) | 2,334 |
-| Gemini (MCP) | 3,088 |
-| Target | ~6,000 true labels |
-| Remaining | ~578 |
+| Metric | Before | After | Improvement |
+|--------|--------|-------|-------------|
+| Accuracy | 75.7% | 90.1% | +14.4% |
+| Macro F1 | 0.712 | 0.896 | +0.184 |
+| Training data | 4,567 | 5,765 | +1,198 |
 
-### Distribution
+### Category F1 Improvement
 
-| Category | Count | Status |
-|----------|-------|--------|
-| Adult | 1,223 | Over-indexed |
-| Television | 609 | Good |
-| Anime | 539 | Good |
-| Music | 527 | Good |
-| Games | 512 | Good |
-| Documentaries | 509 | Good |
-| Other | 505 | Good |
-| Movies | 502 | Good |
-| Applications | 496 | Good |
+| Category | Before | After |
+|----------|--------|-------|
+| Anime | 0.440 | 0.918 |
+| Applications | 0.423 | 0.904 |
+| Games | 0.638 | 0.917 |
+| Adult | 0.796 | 0.935 |
+| Music | 0.916 | 0.941 |
+| Television | 0.845 | 0.870 |
+| Movies | 0.811 | 0.892 |
+| Documentaries | 0.828 | 0.876 |
+| Other | 0.796 | 0.810 |
 
 ---
 
-## Pipeline
+## Pipeline (Completed)
 
 ### Phase 1: Labeling (IN PROGRESS)
 
