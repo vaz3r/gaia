@@ -53,6 +53,19 @@ CATEGORY_LABELS = [
     "Games", "Movies", "Music", "Television", "Other",
 ]
 
+# Regex patterns for balanced extraction — bias batches toward underrepresented categories
+CATEGORY_PATTERNS = {
+    "Adult": r"(porn|xxx|adult|hentai|jav|onlyfans|brazzers|bangbros|nubile|naughty|teamSkeet|realitykings|mofos|caribbeancom|heyzo|1pondo|fc2|uncensored|fc2-ppv|erotic|massage|nude|naked)",
+    "Anime": r"\[(Erai-raws|SubsPlease|HorribleSubs|Judas|DKB|ASW|Commie|FFF|Coalgirls|Anime\s*Time|NeoAE|Baha|ANi|VCB-Studio|Kawaiika-Raws|Golumpa|EMBER|SweetSub|Lilith-Raws|NC-Raws|LoliHouse|Moozzi2|ReinForce|Kametsu|Yameii|ToonsHub|Nekomoe|Tenshi)\]|(AT-X|Tokyo\s*MX|BS11|MBS|TBS|TV\s*Tokyo|KBS|Animax|Crunchyroll|Funimation|HIDIVE)",
+    "Applications": r"(Adobe|Autodesk|JetBrains|Microsoft\s*Office|Windows\s*(10|11|Server)|VMware|MATLAB|Ableton|FL\s*Studio|Cubase|CorelDRAW|SolidWorks|Photoshop|Illustrator|Premiere|Acrobat|Kaspersky|Bitdefender|CCleaner|Acronis|EaseUS|Tenorshare|Office\s*20\d{2})",
+    "Documentaries": r"(documentary|docuseries|frontline|NOVA|National\s*Geographic|Nat\s*Geo|Discovery\s*Channel|CuriosityStream|NHK|History\s*Channel|Panorama|Horizon|David\s*Attenborough|DW\s*Documentary|Storyville|Disneynature|Louis\s*Theroux)",
+    "Games": r"(FitGirl|CODEX|PLAZA|DODI|SKIDROW|RUNE|EMPRESS|TENOKE|Razor1911|PROPHET|GOG|ElAmigos|KaOs|TinyISO|TiNYiSO|CPY|HOODLUM|RELOADED|DARKSiDERS|Goldberg|SteamRip|Steam-Rip|NSP|XCI|NSZ|CIA|VPK|WBFS|CSO|NDS|GBA)",
+    "Movies": None,  # Fallback: random sampling
+    "Music": r"(discography|album|soundtrack|OST|FLAC|lossless|320kbps|remastered|greatest\s*hits|compilation)",
+    "Television": r"(S\d{1,2}E\d{1,3}|Season\s+\d+|Complete\s*Series|Episode\s+\d+)",
+    "Other": None,  # Fallback: random sampling
+}
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS labeled_results (
     infohash bytea PRIMARY KEY,
@@ -111,79 +124,177 @@ def hex_to_bytea(infohash_hex: str) -> bytes:
     return bytes.fromhex(infohash_hex.strip())
 
 
-def fetch_unclassified_batch(limit: int) -> list[dict]:
-    """Fetch unclassified torrents from PostgreSQL."""
+def _pick_target_category(cat_counts: dict) -> str:
+    """Pick the category with the fewest labels to bias the next batch toward."""
+    priority = ["Documentaries", "Other", "Games", "Applications", "Music",
+                "Movies", "Anime", "Television", "Adult"]
+    min_count = float("inf")
+    target = priority[0]
+    for cat in priority:
+        cnt = cat_counts.get(cat, 0)
+        if cnt < min_count:
+            min_count = cnt
+            target = cat
+    return target
+
+
+def fetch_unclassified_batch(limit: int) -> tuple[list[dict], str]:
+    """Fetch unclassified torrents from PostgreSQL, biased toward target category."""
     conn = get_db()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(SCHEMA_SQL)
-            sql = """
-            SELECT
-                encode(t.infohash, 'hex') AS infohash,
-                t.name,
-                t.file_count,
-                t.total_size,
-                CASE
-                    WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
-                        (
-                            SELECT array_agg(DISTINCT ext)
-                            FROM (
-                                SELECT
-                                    CASE
-                                        WHEN jsonb_array_length(elem->'path') > 0 THEN
-                                            lower(split_part(elem->'path'->>-1, '.', -1))
-                                        ELSE NULL
-                                    END AS ext
-                                FROM jsonb_array_elements(t.files) AS elem
-                            ) sub
-                            WHERE ext IS NOT NULL AND ext != ''
-                            LIMIT 10
-                        )
-                    ELSE NULL
-                END AS extensions,
-                CASE
-                    WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
-                        (
-                            SELECT array_agg(DISTINCT folder)
-                            FROM (
-                                SELECT
-                                    CASE
-                                        WHEN jsonb_array_length(elem->'path') > 1 THEN
-                                            elem->'path'->>0
-                                        ELSE NULL
-                                    END AS folder
-                                FROM jsonb_array_elements(t.files) AS elem
-                            ) sub
-                            WHERE folder IS NOT NULL
-                            LIMIT 10
-                        )
-                    ELSE NULL
-                END AS top_folders,
-                CASE
-                    WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
-                        (
-                            SELECT jsonb_agg(jsonb_build_object(
-                                'name', sub.elem->'path'->>-1,
-                                'size', sub.elem->'length'
-                            ))
-                            FROM (
-                                SELECT elem
-                                FROM jsonb_array_elements(t.files) AS elem
-                                ORDER BY (elem->'length')::bigint DESC
-                                LIMIT 3
-                            ) sub
-                        )
-                    ELSE NULL
-                END AS largest_files
-            FROM torrents t
-            WHERE NOT EXISTS (
-                SELECT 1 FROM labeled_results lr
-                WHERE lr.infohash = t.infohash
-            )
-            ORDER BY random()
-            LIMIT %s
-            """
-            cur.execute(sql, (limit,))
+
+            # Get current category distribution
+            cur.execute("SELECT label_category, COUNT(*) AS cnt FROM labeled_results GROUP BY label_category")
+            cat_counts = {row["label_category"]: row["cnt"] for row in cur.fetchall()}
+
+            target_category = _pick_target_category(cat_counts)
+            target_pattern = CATEGORY_PATTERNS.get(target_category)
+
+            # Build query: bias toward target category if pattern exists
+            if target_pattern:
+                sql = f"""
+                WITH unclassified AS (
+                    SELECT
+                        encode(t.infohash, 'hex') AS infohash,
+                        t.name,
+                        t.file_count,
+                        t.total_size,
+                        CASE
+                            WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                                (
+                                    SELECT array_agg(DISTINCT ext)
+                                    FROM (
+                                        SELECT
+                                            CASE
+                                                WHEN jsonb_array_length(elem->'path') > 0 THEN
+                                                    lower(split_part(elem->'path'->>-1, '.', -1))
+                                                ELSE NULL
+                                            END AS ext
+                                        FROM jsonb_array_elements(t.files) AS elem
+                                    ) sub
+                                    WHERE ext IS NOT NULL AND ext != ''
+                                    LIMIT 10
+                                )
+                            ELSE NULL
+                        END AS extensions,
+                        CASE
+                            WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                                (
+                                    SELECT array_agg(DISTINCT folder)
+                                    FROM (
+                                        SELECT
+                                            CASE
+                                                WHEN jsonb_array_length(elem->'path') > 1 THEN
+                                                    elem->'path'->>0
+                                                ELSE NULL
+                                            END AS folder
+                                        FROM jsonb_array_elements(t.files) AS elem
+                                    ) sub
+                                    WHERE folder IS NOT NULL
+                                    LIMIT 10
+                                )
+                            ELSE NULL
+                        END AS top_folders,
+                        CASE
+                            WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                                (
+                                    SELECT jsonb_agg(jsonb_build_object(
+                                        'name', sub.elem->'path'->>-1,
+                                        'size', sub.elem->'length'
+                                    ))
+                                    FROM (
+                                        SELECT elem
+                                        FROM jsonb_array_elements(t.files) AS elem
+                                        ORDER BY (elem->'length')::bigint DESC
+                                        LIMIT 3
+                                    ) sub
+                                )
+                            ELSE NULL
+                        END AS largest_files,
+                        t.name ~* %s AS matches_target
+                    FROM torrents t
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM labeled_results lr
+                        WHERE lr.infohash = t.infohash
+                    )
+                )
+                SELECT * FROM unclassified
+                WHERE matches_target OR random() < 0.3
+                ORDER BY matches_target DESC, random()
+                LIMIT %s
+                """
+                cur.execute(sql, (target_pattern, limit))
+            else:
+                sql = """
+                SELECT
+                    encode(t.infohash, 'hex') AS infohash,
+                    t.name,
+                    t.file_count,
+                    t.total_size,
+                    CASE
+                        WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                            (
+                                SELECT array_agg(DISTINCT ext)
+                                FROM (
+                                    SELECT
+                                        CASE
+                                            WHEN jsonb_array_length(elem->'path') > 0 THEN
+                                                lower(split_part(elem->'path'->>-1, '.', -1))
+                                            ELSE NULL
+                                        END AS ext
+                                    FROM jsonb_array_elements(t.files) AS elem
+                                ) sub
+                                WHERE ext IS NOT NULL AND ext != ''
+                                LIMIT 10
+                            )
+                        ELSE NULL
+                    END AS extensions,
+                    CASE
+                        WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                            (
+                                SELECT array_agg(DISTINCT folder)
+                                FROM (
+                                    SELECT
+                                        CASE
+                                            WHEN jsonb_array_length(elem->'path') > 1 THEN
+                                                elem->'path'->>0
+                                            ELSE NULL
+                                        END AS folder
+                                    FROM jsonb_array_elements(t.files) AS elem
+                                ) sub
+                                WHERE folder IS NOT NULL
+                                LIMIT 10
+                            )
+                        ELSE NULL
+                    END AS top_folders,
+                    CASE
+                        WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                            (
+                                SELECT jsonb_agg(jsonb_build_object(
+                                    'name', sub.elem->'path'->>-1,
+                                    'size', sub.elem->'length'
+                                ))
+                                FROM (
+                                    SELECT elem
+                                    FROM jsonb_array_elements(t.files) AS elem
+                                    ORDER BY (elem->'length')::bigint DESC
+                                    LIMIT 3
+                                ) sub
+                            )
+                        ELSE NULL
+                    END AS largest_files
+                FROM torrents t
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM labeled_results lr
+                    WHERE lr.infohash = t.infohash
+                )
+                ORDER BY random()
+                LIMIT %s
+                """
+                cur.execute(sql, (limit,))
+
             rows = cur.fetchall()
 
         torrents = []
@@ -207,8 +318,8 @@ def fetch_unclassified_batch(limit: int) -> list[dict]:
                 "largest_files": largest_files,
             })
 
-        logger.info(f"Fetched {len(torrents)} unclassified torrents")
-        return torrents
+        logger.info(f"Fetched {len(torrents)} unclassified torrents (target: {target_category})")
+        return torrents, target_category
     finally:
         conn.close()
 
@@ -338,18 +449,20 @@ def main():
     for batch_num in range(1, args.loops + 1):
         logger.info(f"--- Batch {batch_num}/{args.loops} (size={args.batch}) ---")
 
-        # Fetch unclassified torrents
-        torrents = fetch_unclassified_batch(args.batch)
+        # Fetch unclassified torrents (biased toward underrepresented category)
+        torrents, target_category = fetch_unclassified_batch(args.batch)
         if not torrents:
             logger.info("No more unclassified torrents. Done.")
             break
 
-        # Build prompt and classify
+        # Build prompt with target category hint
         prompt = build_prompt(torrents)
-        logger.info(f"Sending {len(torrents)} torrents to DeepSeek...")
+        prompt += f"\nNote: This batch is biased toward **{target_category}** torrents. "
+        prompt += "Pay extra attention to identifying torrents that match this category.\n"
+        logger.info(f"Sending {len(torrents)} torrents to DeepSeek (target: {target_category})...")
 
         try:
-            reply = client.chat(prompt)
+            reply = client.chat(prompt, model="expert")
             logger.info(f"Got response ({len(reply.text)} chars)")
         except Exception as e:
             logger.error(f"DeepSeek error: {e}")
