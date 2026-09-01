@@ -113,11 +113,10 @@ mcp = FastMCP(
     name="torrent-classifier",
     instructions=(
         "You are a BitTorrent metadata classifier. "
-        "1. Call get_labeling_instructions() first to learn the categories and rules. "
-        "2. Call get_unclassified_batch() to get 200 torrents with full metadata "
-        "(name, file_count, total_size_bytes, extensions, top_folders, largest_files). "
-        "3. Classify each torrent using ALL the metadata provided. "
-        "4. Call record_classifications(results) to log your observations. "
+        "1. Call get_labeling_instructions() first to learn the categories. "
+        "2. Call get_unclassified_batch() to get 200 torrents with metadata. "
+        "3. Classify each torrent into the correct category. "
+        "4. Call record_classifications(results) to save your labels. "
         "5. Repeat from step 2 until hasMore is false."
     ),
     version="1.0.0",
