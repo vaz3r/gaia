@@ -117,11 +117,16 @@ class TestParseClassificationXml:
         assert result.confidence == 0.0
 
     def test_all_categories(self):
-        for cat in ["Movies", "Television", "Games", "Music", "Applications", "Anime", "Documentaries", "Other", "Unwanted"]:
+        for cat in ["Movies", "Television", "Games", "Music", "Applications", "Anime", "Documentaries", "Other"]:
             xml = f"<classification>\n  <category>{cat}</category>\n  <confidence>0.50</confidence>\n</classification>"
             result = parse_classification_xml(xml)
             assert result is not None
             assert result.category == cat
+
+    def test_invalid_category_rejected(self):
+        xml = "<classification>\n  <category>Unwanted</category>\n  <confidence>0.50</confidence>\n</classification>"
+        result = parse_classification_xml(xml)
+        assert result is None
 
 
 class TestBuildRetrySystemPrompt:

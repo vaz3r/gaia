@@ -1,0 +1,22 @@
+# Transformer v2 config — raw metadata, Gemini-labeled training
+# Mode: "raw" skips regex feature detection in text_builder.py
+# Use with: python src/train_transformer.py --data data/gemini_labeled/train.jsonl --config config/transformer_v2.yaml
+
+text_builder:
+  mode: raw
+  max_files: 10
+  max_file_chars: 100
+  max_name_chars: 300
+
+transformer:
+  model_name: sentence-transformers/all-MiniLM-L12-v2
+  batch_size: 16
+  max_length: 256
+  epochs: 4
+  learning_rate: 2e-5
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  grad_clip: 1.0
+
+classifier:
+  confidence_threshold: 0.45

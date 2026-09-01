@@ -59,6 +59,18 @@ CATEGORY_LABELS = [
     "Other",
 ]
 
+# Regex patterns for balanced extraction — used to bias batches toward underrepresented categories
+CATEGORY_PATTERNS = {
+    "Anime": r"\[(Erai-raws|SubsPlease|HorribleSubs|Judas|DKB|ASW|Commie|FFF|Coalgirls|Anime\s*Time|NeoAE|Baha|ANi|VCB-Studio|Kawaiika-Raws|Golumpa|EMBER|SweetSub|Lilith-Raws|NC-Raws|LoliHouse|Moozzi2|ReinForce|Kametsu|Yameii|ToonsHub|Nekomoe|Tenshi)\]|(AT-X|Tokyo\s*MX|BS11|MBS|TBS|TV\s*Tokyo|KBS|Animax|Crunchyroll|Funimation|HIDIVE)",
+    "Applications": r"(Adobe|Autodesk|JetBrains|Microsoft\s*Office|Windows\s*(10|11|Server)|VMware|MATLAB|Ableton|FL\s*Studio|Cubase|CorelDRAW|SolidWorks|Photoshop|Illustrator|Premiere|Acrobat|Kaspersky|Bitdefender|CCleaner|Acronis|EaseUS|Tenorshare|Office\s*20\d{2})",
+    "Documentaries": r"(documentary|docuseries|frontline|NOVA|National\s*Geographic|Nat\s*Geo|Discovery\s*Channel|CuriosityStream|NHK|History\s*Channel|Panorama|Horizon|David\s*Attenborough|DW\s*Documentary|Storyville|Disneynature|Louis\s*Theroux)",
+    "Games": r"(FitGirl|CODEX|PLAZA|DODI|SKIDROW|RUNE|EMPRESS|TENOKE|Razor1911|PROPHET|GOG|ElAmigos|KaOs|TinyISO|TiNYiSO|CPY|HOODLUM|RELOADED|DARKSiDERS|Goldberg|SteamRip|Steam-Rip|NSP|XCI|NSZ|CIA|VPK|WBFS|CSO|NDS|GBA)",
+    "Movies": None,  # Fallback: no strong pattern, use random sampling
+    "Music": r"(discography|album|soundtrack|OST|FLAC|lossless|320kbps|remastered|greatest\s*hits|compilation)",
+    "Television": r"(S\d{1,2}E\d{1,3}|Season\s+\d+|Complete\s*Series|Episode\s+\d+)",
+    "Other": None,  # Fallback: random sampling
+}
+
 # --- Schema setup ---
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS labeled_results (
@@ -127,10 +139,11 @@ def get_unclassified_batch() -> dict:
     Fetches 200 unclassified torrents from PostgreSQL.
 
     Returns torrents that have NOT been classified yet.
+    Each batch is biased toward the underrepresented category to ensure balanced labeling.
     Each torrent includes: infohash, name, file_count, total_size_bytes, extensions, top_folders, largest_files.
 
     Returns:
-        dict with keys: torrents, hasMore, batchId, totalClassified, totalRemaining, instructions
+        dict with keys: torrents, hasMore, batchId, totalClassified, totalRemaining, targetCategory, instructions
     """
     limit = 200
     conn = get_db()
@@ -139,13 +152,95 @@ def get_unclassified_batch() -> dict:
             # Ensure schema exists
             cur.execute(SCHEMA_SQL)
 
-            # Get total classified count
+            # Get current category distribution
             cur.execute("SELECT COUNT(*) AS cnt FROM labeled_results")
             total_classified = cur.fetchone()["cnt"]
 
-            # Fetch unclassified torrents
             cur.execute(
+                "SELECT label_category, COUNT(*) AS cnt FROM labeled_results GROUP BY label_category"
+            )
+            cat_counts = {row["label_category"]: row["cnt"] for row in cur.fetchall()}
+
+            # Find target category (fewest labels, or least-likely-to-be-random)
+            target_category = _pick_target_category(cat_counts)
+            target_pattern = CATEGORY_PATTERNS.get(target_category)
+
+            # Build query: bias toward target category if pattern exists
+            if target_pattern:
+                sql = f"""
+                WITH unclassified AS (
+                    SELECT
+                        encode(t.infohash, 'hex') AS infohash,
+                        t.name,
+                        t.file_count,
+                        t.total_size,
+                        CASE
+                            WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                                (
+                                    SELECT array_agg(DISTINCT ext)
+                                    FROM (
+                                        SELECT
+                                            CASE
+                                                WHEN jsonb_array_length(elem->'path') > 0 THEN
+                                                    lower(split_part(elem->'path'->>-1, '.', -1))
+                                                ELSE NULL
+                                            END AS ext
+                                        FROM jsonb_array_elements(t.files) AS elem
+                                    ) sub
+                                    WHERE ext IS NOT NULL AND ext != ''
+                                    LIMIT 10
+                                )
+                            ELSE NULL
+                        END AS extensions,
+                        CASE
+                            WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                                (
+                                    SELECT array_agg(DISTINCT folder)
+                                    FROM (
+                                        SELECT
+                                            CASE
+                                                WHEN jsonb_array_length(elem->'path') > 1 THEN
+                                                    elem->'path'->>0
+                                                ELSE NULL
+                                            END AS folder
+                                        FROM jsonb_array_elements(t.files) AS elem
+                                    ) sub
+                                    WHERE folder IS NOT NULL
+                                    LIMIT 10
+                                )
+                            ELSE NULL
+                        END AS top_folders,
+                        CASE
+                            WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                                (
+                                    SELECT jsonb_agg(jsonb_build_object(
+                                        'name', sub.elem->'path'->>-1,
+                                        'size', sub.elem->'length'
+                                    ))
+                                    FROM (
+                                        SELECT elem
+                                        FROM jsonb_array_elements(t.files) AS elem
+                                        ORDER BY (elem->'length')::bigint DESC
+                                        LIMIT 3
+                                    ) sub
+                                )
+                            ELSE NULL
+                        END AS largest_files,
+                        t.name ~* %s AS matches_target
+                    FROM torrents t
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM labeled_results lr
+                        WHERE lr.infohash = t.infohash
+                    )
+                )
+                SELECT * FROM unclassified
+                WHERE matches_target OR random() < 0.3
+                ORDER BY matches_target DESC, random()
+                LIMIT %s
                 """
+                cur.execute(sql, (target_pattern, limit))
+            else:
+                sql = """
                 SELECT
                     encode(t.infohash, 'hex') AS infohash,
                     t.name,
@@ -208,11 +303,11 @@ def get_unclassified_batch() -> dict:
                     SELECT 1 FROM labeled_results lr
                     WHERE lr.infohash = t.infohash
                 )
-                ORDER BY t.infohash
+                ORDER BY random()
                 LIMIT %s
-                """,
-                (limit,),
-            )
+                """
+                cur.execute(sql, (limit,))
+
             rows = cur.fetchall()
 
             # Get total remaining
@@ -249,9 +344,15 @@ def get_unclassified_batch() -> dict:
         has_more = total_remaining > limit
         batch_id = total_classified // limit + 1
 
+        # Build category status summary
+        category_status = {}
+        for cat in CATEGORY_LABELS:
+            cnt = cat_counts.get(cat, 0)
+            category_status[cat] = cnt
+
         logger.info(
             f"Batch {batch_id}: returned {len(torrents)} torrents, "
-            f"{total_remaining} remaining"
+            f"target={target_category}, {total_remaining} remaining"
         )
 
         return {
@@ -260,7 +361,10 @@ def get_unclassified_batch() -> dict:
             "batchId": batch_id,
             "totalClassified": total_classified,
             "totalRemaining": total_remaining,
+            "targetCategory": target_category,
+            "categoryStatus": category_status,
             "instructions": (
+                f"This batch is biased toward **{target_category}** torrents. "
                 "Classify each torrent into one of the 8 categories. "
                 "Each torrent has: name, file_count, total_size_bytes, extensions (file types), "
                 "top_folders (directory structure), largest_files (top 3 by size with names and sizes). "
@@ -272,6 +376,23 @@ def get_unclassified_batch() -> dict:
         }
     finally:
         conn.close()
+
+
+def _pick_target_category(cat_counts: dict) -> str:
+    """Pick the category with the fewest labels to bias the next batch toward."""
+    # Priority order: harder/underrepresented classes first
+    priority = ["Anime", "Applications", "Games", "Documentaries", "Music", "Movies", "Television", "Other"]
+
+    # Find the category with the fewest labels
+    min_count = float("inf")
+    target = priority[0]
+    for cat in priority:
+        cnt = cat_counts.get(cat, 0)
+        if cnt < min_count:
+            min_count = cnt
+            target = cat
+
+    return target
 
 
 @mcp.tool

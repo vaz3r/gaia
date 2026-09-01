@@ -28,8 +28,8 @@ from release_normalizer import normalize_full_name, normalize_release_family
 
 class TestGoldPilotV1Final(unittest.TestCase):
     def setUp(self):
-        self.v1_dir = Path("apps/classifier/data/gold_pilot_v1")
-        self.v0_dir = Path("apps/classifier/data/gold_pilot")
+        self.v1_dir = Path("data/gold_pilot_v1")
+        self.v0_dir = Path("data/gold_pilot")
 
     def test_01_v0_and_pool_checksums_preserved(self):
         """Verify Gold Pilot v0 files and candidate_pool_rich.jsonl match immutable hashes."""
@@ -112,7 +112,7 @@ class TestGoldPilotV1Final(unittest.TestCase):
         self.assertEqual(len(nat_hashes & diag_hashes), 0)
 
         # Check manual_eval_set_200.jsonl overlap
-        with open("apps/classifier/data/manual_eval_set_200.jsonl") as f:
+        with open("data/manual_eval_set_200.jsonl") as f:
             eval200_hashes = {json.loads(l)["infohash"].strip().lower() for l in f if l.strip()}
         all_v1_hashes = set(r["infohash"] for r in manifest["records"])
         self.assertEqual(len(all_v1_hashes & eval200_hashes), 0)

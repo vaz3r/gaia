@@ -141,43 +141,129 @@ def _detect_features(name: str, files: list[str]) -> str:
     return "; ".join(parts)
 
 
+def _parse_files(torrent: dict | TorrentInput) -> tuple[str, int, int, list[str], list[dict]]:
+    """Parse common fields from torrent dict or TorrentInput."""
+    if isinstance(torrent, TorrentInput):
+        name = torrent.name
+        file_count = torrent.file_count
+        total_size = torrent.total_size_bytes
+        raw_files = torrent.files
+    else:
+        name = str(torrent.get("name", ""))
+        file_count = torrent.get("file_count", 0)
+        total_size = torrent.get("total_size", torrent.get("total_size_bytes", 0))
+        raw_files = torrent.get("top_dirs", torrent.get("files", [])) or []
+
+    files = _flatten_files(raw_files)
+    return name, file_count, total_size, files, raw_files
+
+
+def _flatten_files(raw_files) -> list[str]:
+    """Flatten various file list formats to simple string paths."""
+    if not raw_files or not isinstance(raw_files, list):
+        return []
+    if isinstance(raw_files[0], dict):
+        out = []
+        for f in raw_files:
+            path = f.get("path", [])
+            if isinstance(path, list):
+                out.append("/".join(str(p) for p in path))
+            else:
+                out.append(str(path))
+        return out
+    if isinstance(raw_files[0], list):
+        return ["/".join(str(p) for p in f) for f in raw_files]
+    return [str(f) for f in raw_files if isinstance(f, str)]
+
+
+def _extract_raw_metadata(files: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """Extract extensions, top folders, and file names from flat file paths."""
+    extensions = []
+    top_folders = set()
+    file_names = []
+    for f in files:
+        if not isinstance(f, str):
+            continue
+        # Extension
+        dot = f.rfind(".")
+        if dot >= 0:
+            ext = f[dot:].lower()
+            if ext not in extensions:
+                extensions.append(ext)
+        # Top folder (first path component)
+        slash = f.find("/")
+        if slash > 0:
+            top_folders.add(f[:slash])
+        # File name (last component)
+        fname = f.rsplit("/", 1)[-1] if "/" in f else f
+        file_names.append(fname)
+    return extensions[:10], sorted(top_folders)[:10], file_names
+
+
+def _build_raw_text(
+    name: str, file_count: int, total_size: int,
+    extensions: list[str], top_folders: list[str], file_names: list[str],
+    max_name_chars: int,
+) -> str:
+    """Build raw metadata text representation (no regex features)."""
+    name = name[:max_name_chars]
+    lines = [f"Name: {name}", f"Files: {file_count}  Size: {total_size}"]
+    if extensions:
+        lines.append(f"Extensions: {', '.join(extensions)}")
+    if top_folders:
+        lines.append(f"Top folders: {', '.join(top_folders)}")
+    if file_names:
+        lines.append(f"File names: {', '.join(file_names[:10])}")
+    return "\n".join(lines)
+
+
 def build_input_text(torrent: dict | TorrentInput, config: dict | None = None) -> str:
     """Build plain-text representation for embedding.
 
     This function MUST be used by both training and inference
     to ensure identical text format. Do not duplicate this logic.
+
+    Config options:
+        text_builder.mode: "full" (default) or "raw"
+            - "full": includes regex-based feature detection (fansub tags, scene groups, etc.)
+            - "raw":  raw metadata only (name, file_count, size, extensions, folders, file names)
+        text_builder.max_files: max files to include (default 10)
+        text_builder.max_file_chars: max chars per file path (default 100)
+        text_builder.max_name_chars: max chars for name (default 300)
     """
     cfg = (config or {}).get("text_builder", {})
+    mode = cfg.get("mode", "full")
     max_files = cfg.get("max_files", 10)
     max_file_chars = cfg.get("max_file_chars", 100)
     max_name_chars = cfg.get("max_name_chars", 300)
 
-    if isinstance(torrent, TorrentInput):
-        name = torrent.name
-        file_count = torrent.file_count
-        total_size = torrent.total_size_bytes
-        files = torrent.files
-    else:
-        name = str(torrent.get("name", ""))
-        file_count = torrent.get("file_count", 0)
-        total_size = torrent.get("total_size", torrent.get("total_size_bytes", 0))
-        files = torrent.get("top_dirs", torrent.get("files", [])) or []
+    name, file_count, total_size, files, _ = _parse_files(torrent)
 
-    if isinstance(files, list) and len(files) > 0:
-        if isinstance(files[0], dict):
-            # Flatten dict structure to paths
-            str_files = []
-            for f in files:
-                path = f.get('path', [])
-                if isinstance(path, list):
-                    str_files.append("/".join(str(p) for p in path))
-                else:
-                    str_files.append(str(path))
-            files = str_files
-        elif isinstance(files[0], list):
-            # Flatten list of lists (PostgreSQL jsonb array format)
-            files = ["/".join(str(p) for p in f) for f in files]
+    if mode == "raw":
+        # Handle pre-extracted metadata (from MCP server) or extract from file paths
+        if isinstance(torrent, dict):
+            extensions = torrent.get("extensions", [])
+            top_folders = torrent.get("top_folders", [])
+            largest_files = torrent.get("largest_files", [])
+        else:
+            extensions, top_folders, _ = _extract_raw_metadata(files)
+            largest_files = []
 
+        name = name[:max_name_chars]
+        lines = [f"Name: {name}", f"Files: {file_count}  Size: {total_size}"]
+        if extensions:
+            lines.append(f"Extensions: {', '.join(str(e) for e in extensions)}")
+        if top_folders:
+            lines.append(f"Top folders: {', '.join(str(f) for f in top_folders)}")
+        if largest_files:
+            if isinstance(largest_files[0], dict):
+                file_strs = [f"{f.get('name', '?')} ({f.get('size', 0)})" for f in largest_files]
+            else:
+                file_strs = [str(f) for f in largest_files]
+            lines.append(f"Largest files: {', '.join(file_strs)}")
+        return "\n".join(lines)
+
+    # Full mode: includes regex feature detection
     name = name[:max_name_chars]
     top_dirs = files[:max_files]
     dirs_str = ", ".join(d[:max_file_chars] for d in top_dirs)
