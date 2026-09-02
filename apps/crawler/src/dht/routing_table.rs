@@ -187,6 +187,7 @@ impl SingleRoutingTable {
         let bucket = &mut self.buckets[idx];
         if let Some(existing) = bucket.iter_mut().find(|n| n.id == node.id) {
             existing.addr = node.addr;
+            existing.fail_count = 0;
             return true;
         }
         if bucket.len() < K {

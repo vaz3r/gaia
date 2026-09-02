@@ -306,7 +306,8 @@ mod tests {
         assert!(!peer_is_bad(&addr_ok, &cache, &metrics));
         assert!(!peer_is_bad(&addr_bad, &cache, &metrics));
 
-        // Mark bad -> filtered
+        // Mark bad -> filtered (requires 2 failures based on threshold)
+        cache.mark_bad(addr_bad);
         cache.mark_bad(addr_bad);
         assert!(!peer_is_bad(&addr_ok, &cache, &metrics));
         assert!(peer_is_bad(&addr_bad, &cache, &metrics));
