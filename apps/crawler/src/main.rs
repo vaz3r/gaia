@@ -368,16 +368,16 @@ async fn main() {
 
     eprintln!("[DBG] 11: entering select!");
     tokio::select! {
-        _ = sightings_run => {}
-        _ = sightings_flush => {}
-        _ = retry_run => {}
-        _ = batch_run => {}
-        _ = metrics_run => {}
-        _ = peer_outcomes_run => {}
-        _ = pipeline => {}
-        _ = report => {}
-        _ = cache_cleanup => {}
-        _ = shutdown_signal => {}
+        _ = sightings_run => { eprintln!("[DBG] select: sightings_run resolved"); }
+        _ = sightings_flush => { eprintln!("[DBG] select: sightings_flush resolved"); }
+        _ = retry_run => { eprintln!("[DBG] select: retry_run resolved"); }
+        _ = batch_run => { eprintln!("[DBG] select: batch_run resolved"); }
+        _ = metrics_run => { eprintln!("[DBG] select: metrics_run resolved"); }
+        _ = peer_outcomes_run => { eprintln!("[DBG] select: peer_outcomes_run resolved"); }
+        _ = pipeline => { eprintln!("[DBG] select: pipeline resolved"); }
+        _ = report => { eprintln!("[DBG] select: report resolved"); }
+        _ = cache_cleanup => { eprintln!("[DBG] select: cache_cleanup resolved"); }
+        _ = shutdown_signal => { eprintln!("[DBG] select: shutdown_signal resolved"); }
     }
 
     tracing::info!("shutdown: draining pending writes");
