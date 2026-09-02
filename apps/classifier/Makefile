@@ -1,4 +1,4 @@
-.PHONY: build run test evaluate clean push-remote-dev rebuild train-transformer export-onnx deploy-transformer train-v2 export-v2 evaluate-v2 export-labeled train-deberta export-deberta evaluate-deberta
+.PHONY: build run test evaluate clean push-remote-dev rebuild train-transformer export-onnx deploy-transformer train-v2 export-v2 evaluate-v2 export-labeled train-deberta export-deberta evaluate-deberta train-modernbert export-modernbert evaluate-modernbert
 
 IMAGE := torrent-classifier:latest
 
@@ -74,3 +74,19 @@ evaluate-deberta:
 	python src/evaluate.py \
 		--predictions data/predictions/deberta.jsonl \
 		--labels data/deepseek_labeled/test.jsonl
+
+# ── ModernBERT pipeline (PostgreSQL-labeled, raw metadata) ────────────────────
+
+train-modernbert:
+	python src/train_transformer.py \
+		--data data/labeled_data/train.jsonl \
+		--config config/modernbert.yaml \
+		--out_dir data/models/modernbert_base
+
+export-modernbert:
+	python src/export_onnx.py --model_dir data/models/modernbert_base
+
+evaluate-modernbert:
+	python src/evaluate.py \
+		--predictions data/predictions/modernbert.jsonl \
+		--labels data/labeled_data/test.jsonl

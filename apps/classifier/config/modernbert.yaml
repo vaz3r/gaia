@@ -1,0 +1,18 @@
+# ModernBERT-base training config
+# Raw metadata mode, PostgreSQL-labeled training data
+
+text_builder:
+  max_name_chars: 300
+
+transformer:
+  model_name: answerdotai/ModernBERT-base
+  batch_size: 8                    # MPS needs smaller batches for 149M params; use empty_cache() between steps
+  max_length: 256
+  epochs: 4
+  learning_rate: 2e-5
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  grad_clip: 1.0
+
+classifier:
+  confidence_threshold: 0.45

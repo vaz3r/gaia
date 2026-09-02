@@ -171,9 +171,13 @@ def main():
 
     # Optimizer + scheduler
     optimizer = AdamW(model.parameters(), lr=lr, weight_decay=tr_cfg.get("weight_decay", 0.01))
-    warmup_steps = len(train_dl) // 10
+    warmup_ratio = float(tr_cfg.get("warmup_ratio", 0.1))
+    warmup_steps = int(len(train_dl) * warmup_ratio)
     total_steps = len(train_dl) * epochs
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps)
+
+    # Loss function (created once)
+    loss_fct = torch.nn.CrossEntropyLoss(weight=class_weights_tensor)
 
     # Training loop
     logger.info("=== Training (%d epochs, lr=%.1e) ===", epochs, lr)
@@ -188,8 +192,7 @@ def main():
             labels_tensor = batch["labels"].to(device)
 
             outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-            loss_fct = torch.nn.CrossEntropyLoss(weight=class_weights_tensor)
-            loss = loss_fct(outputs.logits, labels_tensor)
+            loss = loss_fct(outputs.logits.float(), labels_tensor)
 
             loss.backward()
             if grad_clip > 0:
@@ -197,6 +200,8 @@ def main():
             optimizer.step()
             scheduler.step()
             total_loss += loss.item()
+            if device.type == "mps":
+                torch.mps.empty_cache()
 
         avg_loss = total_loss / len(train_dl)
         acc, f1 = evaluate(model, val_dl, device, n_classes)
