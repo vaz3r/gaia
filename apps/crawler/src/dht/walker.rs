@@ -226,7 +226,7 @@ fn ingest(
                 addr,
                 query_count: 0,
                 fail_count: 0,
-                last_useful: false,
+                last_useful: true,
             }]);
         }
         if let Some(nodes) = r.get_bytes(b"nodes") {

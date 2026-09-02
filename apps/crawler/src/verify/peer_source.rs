@@ -57,7 +57,6 @@ pub async fn source_peers(
     let mut inflight: usize = 0;
     let mut new_nodes: Vec<NodeInfo> = Vec::new();
     let mut total_queries: usize = 0;
-    let mut unproductive: std::collections::HashSet<SocketAddr> = std::collections::HashSet::new();
 
     let lookup = async {
         // Prime the pipeline with up to ALPHA initial queries.
@@ -65,11 +64,9 @@ pub async fn source_peers(
             if total_queries >= max_queries {
                 break;
             }
-            let idx = candidates.iter().position(|n| {
-                n.addr != router.self_addr
-                    && !queried.contains(&n.addr)
-                    && !unproductive.contains(&n.addr)
-            });
+            let idx = candidates
+                .iter()
+                .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr));
             let Some(node) = idx.map(|i| candidates.remove(i)) else {
                 break;
             };
@@ -118,9 +115,7 @@ pub async fn source_peers(
                                 }
                             }
                         }
-                        if returned_here == 0 {
-                            unproductive.insert(node_addr);
-                        }
+
                         crate::trace_lifecycle!(
                             &info_hash,
                             "source_response",
@@ -164,11 +159,9 @@ pub async fn source_peers(
                 if total_queries >= max_queries {
                     break;
                 }
-                let idx = candidates.iter().position(|n| {
-                    n.addr != router.self_addr
-                        && !queried.contains(&n.addr)
-                        && !unproductive.contains(&n.addr)
-                });
+                let idx = candidates
+                    .iter()
+                    .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr));
                 let Some(node) = idx.map(|i| candidates.remove(i)) else {
                     break;
                 };

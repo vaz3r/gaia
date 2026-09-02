@@ -360,7 +360,7 @@ pub fn decode_compact(bytes: &[u8]) -> Vec<NodeInfo> {
             addr: SocketAddr::new(std::net::IpAddr::V4(ip), port),
             query_count: 0,
             fail_count: 0,
-            last_useful: false,
+            last_useful: true,
         });
         i += 26;
     }
@@ -381,7 +381,7 @@ pub fn decode_compact6(bytes: &[u8]) -> Vec<NodeInfo> {
             addr: SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::from(v6)), port),
             query_count: 0,
             fail_count: 0,
-            last_useful: false,
+            last_useful: true,
         });
         i += 38;
     }
@@ -405,7 +405,7 @@ mod tests {
                 addr,
                 query_count: 0,
                 fail_count: 0,
-                last_useful: false,
+                last_useful: true,
             };
             rt.insert(ni.clone());
             nodes.push(ni);
@@ -433,7 +433,7 @@ mod tests {
                 addr,
                 query_count: 0,
                 fail_count: 0,
-                last_useful: false,
+                last_useful: true,
             });
         }
         assert!(!rt.is_empty());
@@ -465,7 +465,7 @@ mod tests {
                     .unwrap(),
                 query_count: 0,
                 fail_count: 0,
-                last_useful: false,
+                last_useful: true,
             });
         }
         assert_eq!(new_at_insert, 500_000);

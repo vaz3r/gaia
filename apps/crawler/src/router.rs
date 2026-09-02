@@ -223,7 +223,7 @@ impl Router {
                 addr: public_addr,
                 query_count: 0,
                 fail_count: 0,
-                last_useful: false,
+                last_useful: true,
             })
             .collect();
         sybils.sort_unstable_by(|a, b| cmp_xor(target, &a.id, &b.id));
@@ -593,7 +593,7 @@ impl Router {
                             addr,
                             query_count: 0,
                             fail_count: 0,
-                            last_useful: false,
+                            last_useful: true,
                         });
                     }
                 }
