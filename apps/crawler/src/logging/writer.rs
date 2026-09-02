@@ -40,7 +40,10 @@ impl AsyncWriter {
     }
 
     pub async fn run(mut self) {
-        let _ = fs::create_dir_all(&self.dir);
+        if let Err(e) = fs::create_dir_all(&self.dir) {
+            eprintln!("[writer] FATAL: failed to create log directory: {e}");
+            return;
+        }
 
         let mut buffer: Vec<String> = Vec::with_capacity(self.batch_size.min(8192));
         let mut bytes_written: u64 = 0;
@@ -60,8 +63,6 @@ impl AsyncWriter {
 
         loop {
             tokio::select! {
-                biased;
-
                 _ = &mut self.shutdown_rx => {
                     drain_and_flush(&mut self.rx, &mut writer, &mut buffer);
                     let _ = writer.flush();
@@ -81,30 +82,12 @@ impl AsyncWriter {
                             break;
                         }
                     }
-                    if !std::path::Path::new(&current_path).exists() {
-                        if !buffer.is_empty() {
-                            let _ = writer.flush();
-                        }
-                        match create_new_file(&self.dir) {
-                            Ok((new_path, new_file)) => {
-                                let new_writer = BufWriter::new(new_file);
-                                let old = std::mem::replace(&mut writer, new_writer);
-                                drop(old);
-                                current_path = new_path;
-                                bytes_written = 0;
-                                file_start = Instant::now();
-                            }
-                            Err(e) => {
-                                eprintln!("[writer] failed to recreate log file after deletion: {e}");
-                            }
-                        }
-                    }
                 }
                 _ = flush_interval.tick() => {
                     if !buffer.is_empty() {
                         flush_and_maybe_rotate(&mut writer, &mut buffer, &mut bytes_written, &mut file_start, &mut current_path, &self);
                     }
-                    if !std::path::Path::new(&current_path).exists() {
+                    if !tokio::fs::try_exists(&current_path).await.unwrap_or(true) {
                         match create_new_file(&self.dir) {
                             Ok((new_path, new_file)) => {
                                 let new_writer = BufWriter::new(new_file);
@@ -235,9 +218,6 @@ fn create_new_file(dir: &PathBuf) -> Result<(String, File), std::io::Error> {
     let now = chrono::Utc::now();
     let filename = format!("crawler-{}.jsonl", now.format("%Y-%m-%dT%H-%M-%SZ"));
     let path = dir.join(&filename);
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let file = OpenOptions::new().create(true).append(true).open(&path)?;
     Ok((path.to_string_lossy().to_string(), file))
 }

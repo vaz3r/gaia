@@ -20,10 +20,12 @@ impl PeerCache {
     }
 
     pub fn mark_bad(&self, addr: SocketAddr) {
-        let mut entry = self.bad.entry(addr).or_insert_with(|| (Instant::now(), 0));
-        entry.1 += 1;
-        if entry.1 >= self.failure_threshold {
-            entry.0 = Instant::now();
+        {
+            let mut entry = self.bad.entry(addr).or_insert_with(|| (Instant::now(), 0));
+            entry.1 += 1;
+            if entry.1 >= self.failure_threshold {
+                entry.0 = Instant::now();
+            }
         }
         self.enforce_bound();
     }

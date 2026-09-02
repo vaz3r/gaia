@@ -102,14 +102,16 @@ impl ConnLimiter {
     }
 
     pub async fn acquire(&self, ip: std::net::IpAddr) -> tokio::sync::OwnedSemaphorePermit {
-        let mut entry = self.inner.entry(ip).or_insert_with(|| {
-            (
-                Arc::new(tokio::sync::Semaphore::new(self.permits)),
-                std::time::Instant::now(),
-            )
-        });
-        entry.1 = std::time::Instant::now();
-        let sem = entry.0.clone();
+        let sem = {
+            let mut entry = self.inner.entry(ip).or_insert_with(|| {
+                (
+                    Arc::new(tokio::sync::Semaphore::new(self.permits)),
+                    std::time::Instant::now(),
+                )
+            });
+            entry.1 = std::time::Instant::now();
+            entry.0.clone()
+        };
         self.enforce_bound();
         sem.acquire_owned().await.expect("conn limiter closed")
     }
