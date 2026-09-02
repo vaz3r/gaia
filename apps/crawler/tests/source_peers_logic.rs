@@ -11,15 +11,24 @@ fn candidate_dedup_by_node_id() {
     let other_id = [0x22; 20];
 
     let mut candidates = vec![
-        NodeInfo { query_count: 0, fail_count: 0, last_useful: false,
+        NodeInfo {
+            query_count: 0,
+            fail_count: 0,
+            last_useful: false,
             id: same_id,
             addr: addr1,
         },
-        NodeInfo { query_count: 0, fail_count: 0, last_useful: false,
+        NodeInfo {
+            query_count: 0,
+            fail_count: 0,
+            last_useful: false,
             id: other_id,
             addr: addr2,
         },
-        NodeInfo { query_count: 0, fail_count: 0, last_useful: false,
+        NodeInfo {
+            query_count: 0,
+            fail_count: 0,
+            last_useful: false,
             id: same_id,
             addr: "9.10.11.12:6881".parse().unwrap(),
         },
@@ -52,18 +61,29 @@ fn decode_compact_parses_all_nodes() {
 #[test]
 fn closest_returns_sorted_by_xor_distance() {
     let ih = Infohash::from([0xFF; 20]);
-    let mut nodes = [NodeInfo { query_count: 0, fail_count: 0, last_useful: false,
+    let mut nodes = [
+        NodeInfo {
+            query_count: 0,
+            fail_count: 0,
+            last_useful: false,
             id: [0x01; 20],
             addr: "1.1.1.1:6881".parse().unwrap(),
         },
-        NodeInfo { query_count: 0, fail_count: 0, last_useful: false,
+        NodeInfo {
+            query_count: 0,
+            fail_count: 0,
+            last_useful: false,
             id: [0xFE; 20],
             addr: "2.2.2.2:6881".parse().unwrap(),
         },
-        NodeInfo { query_count: 0, fail_count: 0, last_useful: false,
+        NodeInfo {
+            query_count: 0,
+            fail_count: 0,
+            last_useful: false,
             id: [0x80; 20],
             addr: "3.3.3.3:6881".parse().unwrap(),
-        }];
+        },
+    ];
     nodes.sort_by_key(|n| xor(&ih, &n.id));
     assert_eq!(nodes[0].id, [0xFE; 20], "0xFE should be closest to 0xFF");
     assert_eq!(nodes[1].id, [0x80; 20]);

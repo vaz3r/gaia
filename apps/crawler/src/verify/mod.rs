@@ -58,6 +58,10 @@ impl AnnouncePeerCache {
         self.inner.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
     fn enforce_bound(&self) {
         if self.inner.len() <= self.max_entries {
             return;
@@ -77,26 +81,81 @@ pub struct VerifyConfig {
 /// Bounds concurrent TCP+uTP connects per peer IP so a small set of high-value
 /// multi-port seedboxes is not hammered (prevents librqbit_utp "too many
 /// concurrent connections" floods and wasted connect attempts).
+///
+/// Entries are evicted after `ttl` of inactivity and the map is capped at
+/// `max_entries` to prevent unbounded memory growth.
 pub struct ConnLimiter {
-    inner: dashmap::DashMap<std::net::IpAddr, Arc<tokio::sync::Semaphore>>,
+    inner: dashmap::DashMap<std::net::IpAddr, (Arc<tokio::sync::Semaphore>, std::time::Instant)>,
     permits: usize,
+    ttl: std::time::Duration,
+    max_entries: usize,
 }
 
 impl ConnLimiter {
-    pub fn new(permits: usize) -> Self {
+    pub fn new(permits: usize, ttl: std::time::Duration, max_entries: usize) -> Self {
         ConnLimiter {
-            inner: dashmap::DashMap::new(),
+            inner: dashmap::DashMap::with_capacity_and_shard_amount(1024, 64),
             permits: permits.max(1),
+            ttl,
+            max_entries,
         }
     }
 
     pub async fn acquire(&self, ip: std::net::IpAddr) -> tokio::sync::OwnedSemaphorePermit {
-        let sem = self
-            .inner
-            .entry(ip)
-            .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(self.permits)))
-            .clone();
+        let mut entry = self.inner.entry(ip).or_insert_with(|| {
+            (
+                Arc::new(tokio::sync::Semaphore::new(self.permits)),
+                std::time::Instant::now(),
+            )
+        });
+        entry.1 = std::time::Instant::now();
+        let sem = entry.0.clone();
+        self.enforce_bound();
         sem.acquire_owned().await.expect("conn limiter closed")
+    }
+
+    pub fn evict_expired(&self) -> usize {
+        let now = std::time::Instant::now();
+        let mut evicted = 0;
+        self.inner.retain(|_, (_, last_seen)| {
+            if now.duration_since(*last_seen) >= self.ttl {
+                evicted += 1;
+                false
+            } else {
+                true
+            }
+        });
+        evicted
+    }
+
+    fn enforce_bound(&self) {
+        if self.inner.len() <= self.max_entries {
+            return;
+        }
+        let _ = self.evict_expired();
+        if self.inner.len() <= self.max_entries {
+            return;
+        }
+        let excess = self.inner.len() - self.max_entries;
+        let target_remove = (excess / 8).max(1);
+        let mut to_remove = Vec::with_capacity(target_remove);
+        for entry in self.inner.iter() {
+            if to_remove.len() >= target_remove {
+                break;
+            }
+            to_remove.push(*entry.key());
+        }
+        for key in to_remove {
+            self.inner.remove(&key);
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
     }
 }
 
@@ -206,7 +265,9 @@ pub async fn run_pipeline(
 
         let (ih, direct, came_from_scheduler) = loop {
             // 1) Announce (direct peer) has top priority.
-            if let Ok((ih, addr)) = announce_rx.try_recv() { break (ih, Some(addr), false) }
+            if let Ok((ih, addr)) = announce_rx.try_recv() {
+                break (ih, Some(addr), false);
+            }
             // 2) Fresh discoveries, batched so they cannot monopolize the queue.
             if fresh_streak < fresh_batch {
                 if let Ok(ih) = fresh_rx.try_recv() {

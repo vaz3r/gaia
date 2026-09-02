@@ -161,10 +161,11 @@ impl BatchWriter {
                 .collect();
         }
         if !torrent_batch.is_empty()
-            && flush_torrents(&self.pool, &torrent_batch, self.torrent_flush_chunk).await {
-                self.torrents_written
-                    .fetch_add(torrent_batch.len() as u64, Ordering::Relaxed);
-            }
+            && flush_torrents(&self.pool, &torrent_batch, self.torrent_flush_chunk).await
+        {
+            self.torrents_written
+                .fetch_add(torrent_batch.len() as u64, Ordering::Relaxed);
+        }
         if !stable_peers_batch.is_empty() {
             flush_stable_peers(&self.pool, &stable_peers_batch, self.flush_chunk).await;
         }

@@ -52,10 +52,12 @@ pub async fn source_peers(
     // soon as any query completes, instead of blocking a whole round on the
     // slowest peer. The global deadline wraps the entire loop, bounding the
     // worst case; on expiry we abort and return whatever peers we found.
-    let mut set: JoinSet<(crate::krpc::NodeId, SocketAddr, Result<Message, QueryError>)> = JoinSet::new();
+    let mut set: JoinSet<(crate::krpc::NodeId, SocketAddr, Result<Message, QueryError>)> =
+        JoinSet::new();
     let mut inflight: usize = 0;
     let mut new_nodes: Vec<NodeInfo> = Vec::new();
     let mut total_queries: usize = 0;
+    let mut unproductive: std::collections::HashSet<SocketAddr> = std::collections::HashSet::new();
 
     let lookup = async {
         // Prime the pipeline with up to ALPHA initial queries.
@@ -63,9 +65,11 @@ pub async fn source_peers(
             if total_queries >= max_queries {
                 break;
             }
-            let idx = candidates
-                .iter()
-                .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr));
+            let idx = candidates.iter().position(|n| {
+                n.addr != router.self_addr
+                    && !queried.contains(&n.addr)
+                    && !unproductive.contains(&n.addr)
+            });
             let Some(node) = idx.map(|i| candidates.remove(i)) else {
                 break;
             };
@@ -114,6 +118,9 @@ pub async fn source_peers(
                                 }
                             }
                         }
+                        if returned_here == 0 {
+                            unproductive.insert(node_addr);
+                        }
                         crate::trace_lifecycle!(
                             &info_hash,
                             "source_response",
@@ -124,7 +131,9 @@ pub async fn source_peers(
                         let has_nodes = if let Some(nodes) = r.get_bytes(b"nodes") {
                             new_nodes.extend(decode_compact(nodes));
                             true
-                        } else { false };
+                        } else {
+                            false
+                        };
                         router.record_query(&node_id, returned_here > 0 || has_nodes, false);
                     }
                 }
@@ -155,9 +164,11 @@ pub async fn source_peers(
                 if total_queries >= max_queries {
                     break;
                 }
-                let idx = candidates
-                    .iter()
-                    .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr));
+                let idx = candidates.iter().position(|n| {
+                    n.addr != router.self_addr
+                        && !queried.contains(&n.addr)
+                        && !unproductive.contains(&n.addr)
+                });
                 let Some(node) = idx.map(|i| candidates.remove(i)) else {
                     break;
                 };
@@ -294,7 +305,7 @@ mod tests {
 
         let log_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let metrics = Arc::new(Metrics::new(log_dropped));
-        let cache = PeerCache::new(Duration::from_secs(600), 100_000);
+        let cache = PeerCache::new(Duration::from_secs(300), 100_000, 2);
         let addr_ok: SocketAddr = "8.8.8.8:6881".parse().unwrap();
         let addr_bad: SocketAddr = "1.2.3.4:6881".parse().unwrap();
 

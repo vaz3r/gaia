@@ -159,9 +159,10 @@ impl Router {
             } else if y == b"r" || y == b"e" {
                 if let Some(t) = header.t
                     && let Some(entry) = self.tx.take(t)
-                        && let Some(reply) = entry.reply {
-                            let _ = reply.send(Bytes::copy_from_slice(buf));
-                        }
+                    && let Some(reply) = entry.reply
+                {
+                    let _ = reply.send(Bytes::copy_from_slice(buf));
+                }
                 return;
             }
         }
@@ -217,7 +218,13 @@ impl Router {
         let mut sybils: Vec<NodeInfo> = self
             .sybils
             .iter()
-            .map(|(id, _)| NodeInfo { id: *id, addr: public_addr, query_count: 0, fail_count: 0, last_useful: false })
+            .map(|(id, _)| NodeInfo {
+                id: *id,
+                addr: public_addr,
+                query_count: 0,
+                fail_count: 0,
+                last_useful: false,
+            })
             .collect();
         sybils.sort_unstable_by(|a, b| cmp_xor(target, &a.id, &b.id));
         sybils.truncate(count);
@@ -581,7 +588,13 @@ impl Router {
                     if start + 20 <= bytes.len() {
                         let mut id = [0u8; 20];
                         id.copy_from_slice(&bytes[start..start + 20]);
-                        nodes.push(NodeInfo { id, addr, query_count: 0, fail_count: 0, last_useful: false });
+                        nodes.push(NodeInfo {
+                            id,
+                            addr,
+                            query_count: 0,
+                            fail_count: 0,
+                            last_useful: false,
+                        });
                     }
                 }
 
@@ -597,12 +610,13 @@ impl Router {
                     }
                     if colon_pos > 0
                         && let Ok(len_str) = std::str::from_utf8(&bytes[start..colon_pos])
-                            && let Ok(len) = len_str.parse::<usize>()
-                                && colon_pos + 1 + len <= bytes.len() {
-                                    nodes.extend(crate::dht::routing_table::decode_compact(
-                                        &bytes[colon_pos + 1..colon_pos + 1 + len],
-                                    ));
-                                }
+                        && let Ok(len) = len_str.parse::<usize>()
+                        && colon_pos + 1 + len <= bytes.len()
+                    {
+                        nodes.extend(crate::dht::routing_table::decode_compact(
+                            &bytes[colon_pos + 1..colon_pos + 1 + len],
+                        ));
+                    }
                 }
 
                 let pat_nodes6 = b"6:nodes6";
@@ -620,12 +634,13 @@ impl Router {
                     }
                     if colon_pos > 0
                         && let Ok(len_str) = std::str::from_utf8(&bytes[start..colon_pos])
-                            && let Ok(len) = len_str.parse::<usize>()
-                                && colon_pos + 1 + len <= bytes.len() {
-                                    nodes6.extend(crate::dht::routing_table::decode_compact6(
-                                        &bytes[colon_pos + 1..colon_pos + 1 + len],
-                                    ));
-                                }
+                        && let Ok(len) = len_str.parse::<usize>()
+                        && colon_pos + 1 + len <= bytes.len()
+                    {
+                        nodes6.extend(crate::dht::routing_table::decode_compact6(
+                            &bytes[colon_pos + 1..colon_pos + 1 + len],
+                        ));
+                    }
                 }
 
                 Ok((nodes, nodes6))

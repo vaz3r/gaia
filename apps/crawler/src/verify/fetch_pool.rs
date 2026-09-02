@@ -656,27 +656,30 @@ pub async fn verify_infohash(
     //    Priority 1: Direct peer supplied by announce_peer
     //    Priority 2: AnnouncePeerCache peer
     if let Some(d) = direct
-        && peers_seen.insert(d) && candidate_queue.len() < race_peers {
-            metrics
-                .source_direct_accepted_total
-                .fetch_add(1, Ordering::Relaxed);
-            candidate_queue.push_back((d, CandidateSource::Direct));
-        }
+        && peers_seen.insert(d)
+        && candidate_queue.len() < race_peers
+    {
+        metrics
+            .source_direct_accepted_total
+            .fetch_add(1, Ordering::Relaxed);
+        candidate_queue.push_back((d, CandidateSource::Direct));
+    }
     if let Some(announcer) = announce_peer_cache.get(&info_hash)
-        && peers_seen.insert(announcer) {
-            crate::trace_lifecycle!(
-                &info_hash,
-                "announce_peer_injected",
-                stream = "fetch",
-                peer = announcer.to_string()
-            );
-            if candidate_queue.len() < race_peers {
-                metrics
-                    .source_announce_cache_accepted_total
-                    .fetch_add(1, Ordering::Relaxed);
-                candidate_queue.push_back((announcer, CandidateSource::AnnounceCache));
-            }
+        && peers_seen.insert(announcer)
+    {
+        crate::trace_lifecycle!(
+            &info_hash,
+            "announce_peer_injected",
+            stream = "fetch",
+            peer = announcer.to_string()
+        );
+        if candidate_queue.len() < race_peers {
+            metrics
+                .source_announce_cache_accepted_total
+                .fetch_add(1, Ordering::Relaxed);
+            candidate_queue.push_back((announcer, CandidateSource::AnnounceCache));
         }
+    }
 
     let is_lead_task = !candidate_queue.is_empty();
     if is_lead_task {
@@ -1901,7 +1904,11 @@ mod tests {
 
     #[tokio::test]
     async fn per_ip_limit_remains_enforced() {
-        let limiter = Arc::new(crate::verify::ConnLimiter::new(1));
+        let limiter = Arc::new(crate::verify::ConnLimiter::new(
+            1,
+            std::time::Duration::from_secs(60),
+            1_000_000,
+        ));
         let ip = "1.2.3.4".parse().unwrap();
 
         let p1 = limiter.acquire(ip).await;
@@ -2552,7 +2559,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_13_grace_holds_no_per_ip_permit() {
-        let limiter = Arc::new(crate::verify::ConnLimiter::new(1));
+        let limiter = Arc::new(crate::verify::ConnLimiter::new(
+            1,
+            std::time::Duration::from_secs(60),
+            1_000_000,
+        ));
         let ip: std::net::IpAddr = "1.2.3.4".parse().unwrap();
 
         // While in grace state, per-IP permit for any DHT peer is unacquired and can be acquired

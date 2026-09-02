@@ -79,6 +79,8 @@ pub struct FetchConfig {
     pub connect_deadline_ms: u64,
     pub pipeline_limit: usize,
     pub lead_source_grace_ms: u64,
+    pub conn_limiter_ttl_secs: u64,
+    pub conn_limiter_max_entries: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -119,6 +121,7 @@ pub struct CacheConfig {
     pub peer_cache_ttl_secs: u64,
     pub peer_cache_max_entries: usize,
     pub peer_cache_cleanup_interval_secs: u64,
+    pub peer_cache_failure_threshold: u8,
     pub announce_cache_ttl_secs: u64,
     pub announce_cache_max_entries: usize,
     pub announce_cache_initial_capacity: usize,
@@ -190,7 +193,7 @@ impl Default for DhtConfig {
             walker_alpha: 3,
             walker_interval_ms: 250,
             walker_query_timeout_secs: 5,
-            walker_self_explore_prob: 0.1,
+            walker_self_explore_prob: 0.25,
             sybil_count: 128,
             sybil_bep42_ratio: 0.125,
             find_node_response_percent: 100,
@@ -231,6 +234,8 @@ impl Default for FetchConfig {
             connect_deadline_ms: 10000,
             pipeline_limit: 4000,
             lead_source_grace_ms: 1000,
+            conn_limiter_ttl_secs: 60,
+            conn_limiter_max_entries: 1_000_000,
         }
     }
 }
@@ -277,9 +282,10 @@ impl Default for StorageConfig {
 impl Default for CacheConfig {
     fn default() -> Self {
         CacheConfig {
-            peer_cache_ttl_secs: 600,
+            peer_cache_ttl_secs: 300,
             peer_cache_max_entries: 100_000,
             peer_cache_cleanup_interval_secs: 60,
+            peer_cache_failure_threshold: 2,
             announce_cache_ttl_secs: 600,
             announce_cache_max_entries: 50_000,
             announce_cache_initial_capacity: 1024,
@@ -372,16 +378,18 @@ impl Config {
 
         let default_path = config_dir.join("default.toml");
         if let Ok(contents) = std::fs::read_to_string(&default_path)
-            && let Ok(toml_cfg) = toml::from_str::<PartialConfig>(&contents) {
-                toml_cfg.merge_into(&mut cfg);
-            }
+            && let Ok(toml_cfg) = toml::from_str::<PartialConfig>(&contents)
+        {
+            toml_cfg.merge_into(&mut cfg);
+        }
 
         // 2. Load profile TOML (if present).
         let profile_path = config_dir.join(format!("{profile}.toml"));
         if let Ok(contents) = std::fs::read_to_string(&profile_path)
-            && let Ok(toml_cfg) = toml::from_str::<PartialConfig>(&contents) {
-                toml_cfg.merge_into(&mut cfg);
-            }
+            && let Ok(toml_cfg) = toml::from_str::<PartialConfig>(&contents)
+        {
+            toml_cfg.merge_into(&mut cfg);
+        }
 
         // 3. Apply env overrides (highest precedence).
         cfg.apply_env();
@@ -430,6 +438,10 @@ impl Config {
         self.dht.walker_alpha = env_usize("CRAW_WALKER_ALPHA", self.dht.walker_alpha);
         self.dht.walker_interval_ms =
             env_u64("CRAW_WALKER_INTERVAL_MS", self.dht.walker_interval_ms);
+        self.dht.walker_self_explore_prob = env_f64(
+            "CRAW_WALKER_SELF_EXPLORE_PROB",
+            self.dht.walker_self_explore_prob,
+        );
         self.dht.sybil_count = env_usize("CRAW_SYBILS", self.dht.sybil_count);
         self.dht.sybil_bep42_ratio = env_f64("CRAW_SYBIL_BEP42_RATIO", self.dht.sybil_bep42_ratio);
         self.dht.source_deadline_ms =
@@ -469,18 +481,38 @@ impl Config {
         // storage / janitor
         self.storage.janitor_interval_secs =
             env_u64("CRAW_JANITOR_INTERVAL", self.storage.janitor_interval_secs);
-        self.storage.janitor_batch_size =
-            env_u64("CRAW_JANITOR_BATCH_SIZE", self.storage.janitor_batch_size as u64) as i64;
-        self.storage.janitor_batch_sleep_ms =
-            env_u64("CRAW_JANITOR_BATCH_SLEEP_MS", self.storage.janitor_batch_sleep_ms);
-        self.storage.janitor_dead_retention_secs =
-            env_u64("CRAW_JANITOR_DEAD_RETENTION_SECS", self.storage.janitor_dead_retention_secs);
+        self.storage.janitor_batch_size = env_u64(
+            "CRAW_JANITOR_BATCH_SIZE",
+            self.storage.janitor_batch_size as u64,
+        ) as i64;
+        self.storage.janitor_batch_sleep_ms = env_u64(
+            "CRAW_JANITOR_BATCH_SLEEP_MS",
+            self.storage.janitor_batch_sleep_ms,
+        );
+        self.storage.janitor_dead_retention_secs = env_u64(
+            "CRAW_JANITOR_DEAD_RETENTION_SECS",
+            self.storage.janitor_dead_retention_secs,
+        );
 
         // fetch (tcp/utp timeout)
-        self.fetch.tcp_timeout_secs =
-            env_u64("CRAW_TCP_TIMEOUT_SECS", self.fetch.tcp_timeout_secs);
-        self.fetch.utp_timeout_secs =
-            env_u64("CRAW_UTP_TIMEOUT_SECS", self.fetch.utp_timeout_secs);
+        self.fetch.tcp_timeout_secs = env_u64("CRAW_TCP_TIMEOUT_SECS", self.fetch.tcp_timeout_secs);
+        self.fetch.utp_timeout_secs = env_u64("CRAW_UTP_TIMEOUT_SECS", self.fetch.utp_timeout_secs);
+        self.fetch.conn_limiter_ttl_secs = env_u64(
+            "CRAW_CONN_LIMITER_TTL_SECS",
+            self.fetch.conn_limiter_ttl_secs,
+        );
+        self.fetch.conn_limiter_max_entries = env_usize(
+            "CRAW_CONN_LIMITER_MAX_ENTRIES",
+            self.fetch.conn_limiter_max_entries,
+        );
+
+        // cache
+        self.cache.peer_cache_ttl_secs =
+            env_u64("CRAW_PEER_CACHE_TTL_SECS", self.cache.peer_cache_ttl_secs);
+        self.cache.peer_cache_failure_threshold = env_u64(
+            "CRAW_PEER_CACHE_FAILURE_THRESHOLD",
+            self.cache.peer_cache_failure_threshold as u64,
+        ) as u8;
 
         // harvest
         self.harvest.harvest_channel_capacity = env_usize(
@@ -768,6 +800,8 @@ struct PartialCache {
     peer_cache_max_entries: Option<usize>,
     #[serde(default)]
     peer_cache_cleanup_interval_secs: Option<u64>,
+    #[serde(default)]
+    peer_cache_failure_threshold: Option<u8>,
     #[serde(default)]
     announce_cache_ttl_secs: Option<u64>,
     #[serde(default)]
@@ -1096,6 +1130,9 @@ impl PartialCache {
         }
         if let Some(v) = self.peer_cache_cleanup_interval_secs {
             cfg.peer_cache_cleanup_interval_secs = v;
+        }
+        if let Some(v) = self.peer_cache_failure_threshold {
+            cfg.peer_cache_failure_threshold = v;
         }
         if let Some(v) = self.announce_cache_ttl_secs {
             cfg.announce_cache_ttl_secs = v;

@@ -70,17 +70,18 @@ async fn send_sample_infohashes(router: &Arc<Router>, node: NodeInfo) -> Result<
         Ok(Ok(bytes)) => {
             if let Ok(msg) = Message::parse(&bytes)
                 && let crate::krpc::message::Kind::Response { r } = msg.kind
-                    && let Some(samples) = r.get_bytes(b"samples") {
-                        let mut infohashes = Vec::new();
-                        let mut i = 0;
-                        while i + 20 <= samples.len() {
-                            let mut ih = [0u8; 20];
-                            ih.copy_from_slice(&samples[i..i + 20]);
-                            infohashes.push(ih);
-                            i += 20;
-                        }
-                        return Ok(infohashes);
-                    }
+                && let Some(samples) = r.get_bytes(b"samples")
+            {
+                let mut infohashes = Vec::new();
+                let mut i = 0;
+                while i + 20 <= samples.len() {
+                    let mut ih = [0u8; 20];
+                    ih.copy_from_slice(&samples[i..i + 20]);
+                    infohashes.push(ih);
+                    i += 20;
+                }
+                return Ok(infohashes);
+            }
             Err(())
         }
         _ => Err(()),

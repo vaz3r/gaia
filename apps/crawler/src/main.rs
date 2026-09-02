@@ -128,6 +128,7 @@ async fn main() {
     let peer_cache = Arc::new(PeerCache::new(
         Duration::from_secs(config.cache.peer_cache_ttl_secs),
         config.cache.peer_cache_max_entries,
+        config.cache.peer_cache_failure_threshold,
     ));
     let peer_cache_cleanup = peer_cache.clone();
 
@@ -276,6 +277,8 @@ async fn main() {
         peer_outcomes,
         Arc::new(verify::ConnLimiter::new(
             config.fetch.max_connections_per_ip,
+            std::time::Duration::from_secs(config.fetch.conn_limiter_ttl_secs),
+            config.fetch.conn_limiter_max_entries,
         )),
         verify::VerifyConfig {
             pipeline_limit: config.fetch.pipeline_limit,

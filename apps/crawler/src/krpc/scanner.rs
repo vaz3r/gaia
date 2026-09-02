@@ -1,4 +1,3 @@
-
 #[derive(Debug, Default)]
 pub struct KrpcHeader<'a> {
     pub t: Option<&'a [u8]>,

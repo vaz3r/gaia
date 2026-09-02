@@ -400,9 +400,7 @@ impl WireSession {
             let data = payload.slice(consumed..);
             metadata.extend_from_slice(&data);
 
-            let total_pieces = known_size
-                .map(|ts| ts.div_ceil(PIECE_SIZE))
-                .unwrap_or(0);
+            let total_pieces = known_size.map(|ts| ts.div_ceil(PIECE_SIZE)).unwrap_or(0);
             let piece_status = format!("{}/{}", piece, total_pieces);
             crate::trace_lifecycle!(
                 &self.info_hash,

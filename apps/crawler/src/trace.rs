@@ -38,9 +38,10 @@ pub fn should_trace(ih: &NodeId) -> bool {
         return false;
     };
     if let Some(debug) = &config.debug_ih
-        && debug == ih {
-            return true;
-        }
+        && debug == ih
+    {
+        return true;
+    }
     if config.sample_rate <= 0.0 {
         return false;
     }
