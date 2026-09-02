@@ -269,6 +269,9 @@ async fn main() {
         config.storage.peer_outcomes_flush_interval_secs,
     ));
 
+    let stable_peers = Arc::new(crate::storage::jobs::get_stable_peers(&pool).await.unwrap_or_default());
+    tracing::info!("Loaded {} stable peers for fast-lane", stable_peers.len());
+
     let pipeline = verify::run_pipeline(
         verify_rx,
         fresh_verify_rx,
@@ -308,6 +311,7 @@ async fn main() {
                 lead_source_grace: Duration::from_millis(config.fetch.lead_source_grace_ms),
             },
         },
+        stable_peers,
     );
 
     let report = report_loop(

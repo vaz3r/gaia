@@ -6,6 +6,7 @@ use crate::verify::peer_cache::PeerCache;
 use crate::verify::peer_source::{SourceResult, source_peers};
 use crate::verify::wire::{WireError, WireSession, gen_peer_id};
 use librqbit_utp::UtpSocketUdp;
+use rand::seq::IndexedRandom;
 use std::collections::{HashSet, VecDeque};
 use std::future::Future;
 use std::net::SocketAddr;
@@ -638,6 +639,7 @@ pub async fn verify_infohash(
     conn_limiter: Arc<crate::verify::ConnLimiter>,
     fetch_limit: Arc<tokio::sync::Semaphore>,
     negative_cache: Arc<dashmap::DashMap<std::net::IpAddr, tokio::time::Instant>>,
+    stable_peers: Arc<Vec<SocketAddr>>,
 ) -> VerifyResult {
     let race_peers = params.race_peers.max(1);
     let peer_id = gen_peer_id();
@@ -664,6 +666,17 @@ pub async fn verify_infohash(
             .fetch_add(1, Ordering::Relaxed);
         candidate_queue.push_back((d, CandidateSource::Direct));
     }
+
+    if !stable_peers.is_empty() {
+        let mut rng = rand::rng();
+        for &peer in stable_peers.choose_multiple(&mut rng, 2) {
+            if candidate_queue.len() < race_peers && peers_seen.insert(peer) {
+                metrics.source_direct_accepted_total.fetch_add(1, Ordering::Relaxed);
+                candidate_queue.push_back((peer, CandidateSource::Direct));
+            }
+        }
+    }
+
     if let Some(announcer) = announce_peer_cache.get(&info_hash)
         && peers_seen.insert(announcer)
     {

@@ -2,9 +2,28 @@ use crate::krpc::Infohash;
 use crate::metrics::{Add1, Metrics};
 use sqlx::PgPool;
 use sqlx::Row;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
+
+pub async fn get_stable_peers(pool: &PgPool) -> Result<Vec<SocketAddr>, sqlx::Error> {
+    let records = sqlx::query(
+        "SELECT ip, port FROM stable_peers WHERE metadata_provided_count > 100 ORDER BY metadata_provided_count DESC LIMIT 50"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut peers = Vec::with_capacity(records.len());
+    for r in records {
+        let ip_str: String = r.get("ip");
+        let port: i32 = r.get("port");
+        if let Ok(ip) = ip_str.parse::<std::net::IpAddr>() {
+            peers.push(SocketAddr::new(ip, port as u16));
+        }
+    }
+    Ok(peers)
+}
 
 pub struct RetryConfig {
     pub max_retries: i32,

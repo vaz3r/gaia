@@ -236,6 +236,7 @@ pub async fn run_pipeline(
     peer_outcomes: Arc<crate::storage::peer_outcomes::PeerOutcomeWriter>,
     conn_limiter: Arc<ConnLimiter>,
     config: VerifyConfig,
+    stable_peers: Arc<Vec<SocketAddr>>,
 ) {
     let pipeline_limit = Arc::new(Semaphore::new(config.pipeline_limit.max(1)));
     let fetch_limit = Arc::new(Semaphore::new(config.fetch_limit.max(1)));
@@ -370,6 +371,7 @@ pub async fn run_pipeline(
         let params = config.params.clone();
         let fetch_limit = fetch_limit.clone();
         let negative_cache = negative_cache.clone();
+        let stable_peers = stable_peers.clone();
         tokio::spawn(async move {
             let _pipeline_permit = _pipeline_permit;
             metrics.pipeline_spawned_total.add(1);
@@ -392,6 +394,7 @@ pub async fn run_pipeline(
                 conn_limiter,
                 fetch_limit,
                 negative_cache,
+                stable_peers.clone(),
             )
             .await;
             let handling_start = Instant::now();
