@@ -345,6 +345,7 @@ pub async fn run_mmsg_worker(
     worker_idx: usize,
     local_addr: SocketAddr,
 ) -> Result<(), io::Error> {
+    eprintln!("[DBG] mmsg_worker[{node_idx}:{worker_idx}]: started on {local_addr}");
     let mut receiver = RecvmmsgReceiver::new();
     loop {
         // 1. Await readiness

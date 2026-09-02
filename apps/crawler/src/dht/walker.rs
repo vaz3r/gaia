@@ -45,6 +45,7 @@ impl Walker {
     }
 
     pub async fn bootstrap(&self, nodes: &[SocketAddr]) {
+        eprintln!("[DBG] bootstrap: starting with {} nodes", nodes.len());
         let mut set = tokio::task::JoinSet::new();
         let query_timeout = self.query_timeout;
         for &addr in nodes {
@@ -74,9 +75,11 @@ impl Walker {
                 }
             }
         }
+        eprintln!("[DBG] bootstrap: done");
     }
 
     pub async fn run(&self) {
+        eprintln!("[DBG] walker.run: starting");
         let mut interval = tokio::time::interval(self.interval);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut set = tokio::task::JoinSet::new();

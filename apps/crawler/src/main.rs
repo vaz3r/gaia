@@ -42,7 +42,9 @@ use tokio::sync::{broadcast, mpsc};
 
 #[tokio::main]
 async fn main() {
+    eprintln!("[DBG] 1: before Config::load");
     let config = Config::load();
+    eprintln!("[DBG] 2: config loaded");
 
     if let Err(e) = config.validate() {
         eprintln!("invalid configuration: {e}");
@@ -51,8 +53,10 @@ async fn main() {
 
     let log_dropped = Arc::new(AtomicU64::new(0));
     let _logging_guard = logging::init(&config, log_dropped.clone());
+    eprintln!("[DBG] 3: logging initialized");
 
     log_effective_config(&config);
+    eprintln!("[DBG] 4: config logged");
 
     tracing::info!(
         git_hash = env!("CRAW_GIT_HASH"),
@@ -65,6 +69,7 @@ async fn main() {
 
     let database_url =
         std::env::var("DATABASE_URL").expect("DATABASE_URL environment variable is required");
+    eprintln!("[DBG] 5: connecting to database");
     let pool = storage::pg::connect(
         &database_url,
         &PoolConfig {
@@ -75,10 +80,12 @@ async fn main() {
     )
     .await
     .expect("connect to postgres");
+    eprintln!("[DBG] 6: database connected");
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
         .expect("run migrations");
+    eprintln!("[DBG] 7: migrations done");
 
     sqlx::query(
         "INSERT INTO metrics (ts, metric_name, metric_value) VALUES (now(), '_session_start', 0)",
@@ -146,8 +153,10 @@ async fn main() {
     );
 
     let bootstrap = resolve_bootstrap(&config.bootstrap).await;
+    eprintln!("[DBG] 8: bootstrap resolved");
     let mut node_routers = Vec::with_capacity(config.nodes);
     for i in 0..config.nodes {
+        eprintln!("[DBG] 9: spawning node {i}");
         spawn_node(
             &config,
             i,
@@ -158,7 +167,7 @@ async fn main() {
             &mut node_routers,
         )
         .await;
-        tracing::info!(node = i, "dht node started");
+        eprintln!("[DBG] 10: node {i} started");
     }
     let node_routers: Arc<Vec<Arc<Router>>> = Arc::new(node_routers);
 
@@ -357,6 +366,7 @@ async fn main() {
         let _ = shutdown_tx.send(());
     };
 
+    eprintln!("[DBG] 11: entering select!");
     tokio::select! {
         _ = sightings_run => {}
         _ = sightings_flush => {}
