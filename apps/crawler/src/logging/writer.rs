@@ -75,6 +75,18 @@ impl AsyncWriter {
                             break;
                         }
                     }
+                    if !std::path::Path::new(&current_path).exists() {
+                        if !buffer.is_empty() {
+                            let _ = writer.flush();
+                        }
+                        let (new_path, new_file) = create_new_file(&self.dir);
+                        let new_writer = BufWriter::new(new_file);
+                        let old = std::mem::replace(&mut writer, new_writer);
+                        drop(old);
+                        current_path = new_path;
+                        bytes_written = 0;
+                        file_start = Instant::now();
+                    }
                 }
                 _ = flush_interval.tick() => {
                     if !buffer.is_empty() {
