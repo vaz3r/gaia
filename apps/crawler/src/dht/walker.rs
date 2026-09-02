@@ -181,7 +181,7 @@ impl Walker {
         let explore = rand::random::<f64>() < self.self_explore_prob;
         if explore {
             self.router.metrics().walker_self_target.add(1);
-            if let Some(n) = self.router.routing_nodes().first() {
+            if let Some(n) = self.router.random_routing_nodes(1).first() {
                 return (self.router.random_sybil_id(), n.id);
             }
         }
