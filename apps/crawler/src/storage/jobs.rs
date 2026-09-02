@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 pub async fn get_stable_peers(pool: &PgPool) -> Result<Vec<SocketAddr>, sqlx::Error> {
     let records = sqlx::query(
-        "SELECT ip, port FROM stable_peers WHERE metadata_provided_count > 100 ORDER BY metadata_provided_count DESC LIMIT 50"
+        "SELECT ip::text AS ip, port FROM stable_peers WHERE metadata_provided_count > 100 ORDER BY metadata_provided_count DESC LIMIT 50"
     )
     .fetch_all(pool)
     .await?;

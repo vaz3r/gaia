@@ -215,19 +215,27 @@ impl Router {
             self.external_ip.unwrap_or(self.self_addr.ip()),
             self.self_addr.port(),
         );
-        let mut sybils: Vec<NodeInfo> = self
-            .sybils
-            .iter()
-            .map(|(id, _)| NodeInfo {
-                id: *id,
+        let mut indices: Vec<usize> = (0..self.sybils.len()).collect();
+        
+        let k = count.min(indices.len());
+        if k > 0 && k < indices.len() {
+            indices.select_nth_unstable_by(k - 1, |&a, &b| {
+                cmp_xor(target, &self.sybils[a].0, &self.sybils[b].0)
+            });
+            indices.truncate(k);
+        }
+
+        let mut sybils: Vec<NodeInfo> = indices.into_iter().map(|idx| {
+            NodeInfo {
+                id: self.sybils[idx].0,
                 addr: public_addr,
                 query_count: 0,
                 fail_count: 0,
                 last_useful: true,
-            })
-            .collect();
+            }
+        }).collect();
+
         sybils.sort_unstable_by(|a, b| cmp_xor(target, &a.id, &b.id));
-        sybils.truncate(count);
         if sybils.len() < count {
             let known = self
                 .table

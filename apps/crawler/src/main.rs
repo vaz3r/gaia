@@ -690,8 +690,8 @@ async fn routing_snapshot_loop(
         let nodes = table.read().expect("routing table poisoned").all();
         if let Ok(data) = bincode::serialize(&nodes) {
             let tmp = path.with_extension("bin.tmp");
-            if std::fs::write(&tmp, data).is_ok() {
-                let _ = std::fs::rename(&tmp, &path);
+            if tokio::fs::write(&tmp, data).await.is_ok() {
+                let _ = tokio::fs::rename(&tmp, &path).await;
             }
         }
     }
