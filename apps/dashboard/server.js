@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'node:path';
+import fs from 'node:fs';
+import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
@@ -282,6 +284,80 @@ app.get('/api/stats', async (req, res) => {
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true, now: new Date().toISOString() }));
+
+// GET /api/logs?limit=50&level=ALL|INFO|WARN|DEBUG
+app.get('/api/logs', async (req, res) => {
+  const limit = Math.min(200, Math.max(10, parseInt(req.query.limit, 10) || 50));
+  const levelFilter = (req.query.level || 'ALL').toUpperCase();
+  const logsDir = process.env.LOGS_DIR || '/mnt/gaia/logs/crawler';
+
+  try {
+    let targetDir = logsDir;
+    if (fs.existsSync(path.join(logsDir, 'gaia-node'))) {
+      targetDir = path.join(logsDir, 'gaia-node');
+    }
+
+    if (!fs.existsSync(targetDir)) {
+      return res.json({ logs: [] });
+    }
+
+    const files = fs.readdirSync(targetDir)
+      .filter((f) => f.endsWith('.jsonl'))
+      .map((f) => ({ name: f, time: fs.statSync(path.join(targetDir, f)).mtimeMs }))
+      .sort((a, b) => b.time - a.time);
+
+    if (files.length === 0) {
+      return res.json({ logs: [] });
+    }
+
+    const latestFile = path.join(targetDir, files[0].name);
+    const fileStream = fs.createReadStream(latestFile);
+    const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+    const lines = [];
+    for await (const line of rl) {
+      if (line.trim().length > 0) {
+        lines.push(line);
+        if (lines.length > 3000) lines.shift();
+      }
+    }
+
+    const parsedLogs = [];
+    for (let i = lines.length - 1; i >= 0 && parsedLogs.length < limit; i--) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        const lvl = (entry.level || 'INFO').toUpperCase();
+        if (levelFilter !== 'ALL' && lvl !== levelFilter) continue;
+
+        const timeStr = entry.ts
+          ? new Date(entry.ts).toTimeString().split(' ')[0] + '.' + String(new Date(entry.ts).getMilliseconds()).padStart(3, '0')
+          : '—';
+
+        let msg = entry.message;
+        if (!msg) {
+          const service = entry.service || 'crawler';
+          const stage = entry.stage ? `${entry.stage}: ` : '';
+          const ih = entry.ih ? `infohash ${entry.ih.slice(0, 10)}... ` : '';
+          const stream = entry.stream ? `[${entry.stream}] ` : '';
+          const detail = entry.node || entry.peer || entry.target || '';
+          msg = `${service}::${stream}${stage}${ih}${detail}`.trim();
+        }
+
+        parsedLogs.push({
+          time: timeStr,
+          level: lvl,
+          msg,
+          raw: entry
+        });
+      } catch {}
+    }
+
+    res.json({ logs: parsedLogs });
+  } catch (err) {
+    console.error('Failed to read logs:', err);
+    res.json({ logs: [], error: err.message });
+  }
+});
 
 const dist = path.join(__dirname, 'client', 'dist');
 app.use(express.static(dist));

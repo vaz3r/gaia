@@ -13,6 +13,9 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@${DB_HOST}:${PG_PORT:-5432}/${POSTGRES_DB:-craw}?sslmode=disable
       PORT: ${DASH_PORT:-3000}
+      LOGS_DIR: /mnt/gaia/logs/crawler
+    volumes:
+      - /mnt/gaia/logs/crawler:/mnt/gaia/logs/crawler:ro
 
   log-receiver:
     build:
