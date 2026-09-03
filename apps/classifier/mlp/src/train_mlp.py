@@ -25,9 +25,17 @@ from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import classification_report, accuracy_score, precision_recall_fscore_support
 from sklearn.model_selection import train_test_split
-from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.pipeline import Pipeline
+from sklearn.utils.class_weight import compute_class_weight
+from sklearn.utils import resample
+
+try:
+    from xgboost import XGBClassifier
+    HAS_XGB = True
+except ImportError:
+    HAS_XGB = False
+    from sklearn.neural_network import MLPClassifier
 
 sys.path.insert(0, str(Path(__file__).parent))
 from core.text_builder import build_input_text
@@ -93,6 +101,44 @@ def main():
     )
     logger.info("Train: %d | Test: %d", len(X_train), len(X_test))
 
+    # Determine classifier type early (needed for oversampling decision)
+    classifier_cfg = config.get("classifier", {})
+    if isinstance(classifier_cfg, str):
+        classifier_type = classifier_cfg
+    else:
+        classifier_type = classifier_cfg.get("type", "mlp")
+
+    # Oversample minority classes to balance (skip for XGBoost — handles imbalance natively)
+    if classifier_type == "xgboost":
+        logger.info("Skipping oversampling for XGBoost (handles imbalance natively)")
+    else:
+        class_counts = np.bincount(y_train)
+        max_count = class_counts.max()
+        logger.info("Class distribution before oversampling: %s", dict(zip(le.classes_, class_counts)))
+
+        X_train_resampled = []
+        y_train_resampled = []
+        for cls_idx in range(len(le.classes_)):
+            cls_mask = y_train == cls_idx
+            cls_X = X_train[cls_mask]
+            cls_y = y_train[cls_mask]
+            if len(cls_X) < max_count:
+                cls_X_up, cls_y_up = resample(
+                    cls_X, cls_y,
+                    replace=True,
+                    n_samples=max_count,
+                    random_state=SEED,
+                )
+                X_train_resampled.append(cls_X_up)
+                y_train_resampled.append(cls_y_up)
+            else:
+                X_train_resampled.append(cls_X)
+                y_train_resampled.append(cls_y)
+
+        X_train = pd.concat(X_train_resampled, ignore_index=True)
+        y_train = np.concatenate(y_train_resampled)
+        logger.info("Class distribution after oversampling: %s", dict(zip(le.classes_, np.bincount(y_train))))
+
     # Build preprocessing pipeline
     tfidf_cfg = config.get("tfidf", {})
     mlp_cfg = config.get("mlp", {})
@@ -127,22 +173,57 @@ def main():
         ]
     )
 
+    # Select classifier based on config
+    if classifier_type == "xgboost" and HAS_XGB:
+        xgb_cfg = config.get("xgboost", {})
+        classifier = XGBClassifier(
+            n_estimators=xgb_cfg.get("n_estimators", 300),
+            max_depth=xgb_cfg.get("max_depth", 8),
+            learning_rate=xgb_cfg.get("learning_rate", 0.1),
+            subsample=xgb_cfg.get("subsample", 0.8),
+            colsample_bytree=xgb_cfg.get("colsample_bytree", 0.8),
+            min_child_weight=xgb_cfg.get("min_child_weight", 3),
+            gamma=xgb_cfg.get("gamma", 0.1),
+            reg_alpha=xgb_cfg.get("reg_alpha", 0.1),
+            reg_lambda=xgb_cfg.get("reg_lambda", 1.0),
+            objective="multi:softprob",
+            eval_metric="mlogloss",
+            use_label_encoder=False,
+            random_state=SEED,
+            n_jobs=-1,
+            tree_method="hist",
+        )
+        logger.info("Using XGBoost classifier")
+    elif classifier_type == "xgboost" and not HAS_XGB:
+        logger.warning("XGBoost not installed, falling back to MLP")
+        classifier = MLPClassifier(
+            hidden_layer_sizes=tuple(mlp_cfg.get("hidden_layer_sizes", [128, 32])),
+            activation=mlp_cfg.get("activation", "relu"),
+            solver=mlp_cfg.get("solver", "adam"),
+            alpha=mlp_cfg.get("alpha", 0.001),
+            batch_size=mlp_cfg.get("batch_size", 128),
+            max_iter=mlp_cfg.get("max_iter", 300),
+            early_stopping=mlp_cfg.get("early_stopping", True),
+            random_state=SEED,
+        )
+        logger.info("Using MLP classifier (fallback)")
+    else:
+        classifier = MLPClassifier(
+            hidden_layer_sizes=tuple(mlp_cfg.get("hidden_layer_sizes", [128, 32])),
+            activation=mlp_cfg.get("activation", "relu"),
+            solver=mlp_cfg.get("solver", "adam"),
+            alpha=mlp_cfg.get("alpha", 0.001),
+            batch_size=mlp_cfg.get("batch_size", 128),
+            max_iter=mlp_cfg.get("max_iter", 300),
+            early_stopping=mlp_cfg.get("early_stopping", True),
+            random_state=SEED,
+        )
+        logger.info("Using MLP classifier")
+
     clf = Pipeline(
         steps=[
             ("preprocessor", preprocessor),
-            (
-                "classifier",
-                MLPClassifier(
-                    hidden_layer_sizes=tuple(mlp_cfg.get("hidden_layer_sizes", [128, 32])),
-                    activation=mlp_cfg.get("activation", "relu"),
-                    solver=mlp_cfg.get("solver", "adam"),
-                    alpha=mlp_cfg.get("alpha", 0.001),
-                    batch_size=mlp_cfg.get("batch_size", 128),
-                    max_iter=mlp_cfg.get("max_iter", 300),
-                    early_stopping=mlp_cfg.get("early_stopping", True),
-                    random_state=SEED,
-                ),
-            ),
+            ("classifier", classifier),
         ]
     )
 

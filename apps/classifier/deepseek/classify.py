@@ -440,6 +440,8 @@ def main():
     parser = argparse.ArgumentParser(description="Classify torrents using DeepSeek")
     parser.add_argument("--batch", type=int, default=50, help="Batch size (default: 50)")
     parser.add_argument("--loops", type=int, default=1, help="Number of batches to process (default: 1)")
+    parser.add_argument("--delay", type=float, default=10.0, help="Seconds between batches (default: 10)")
+    parser.add_argument("--max-retries", type=int, default=3, help="Max retries on rate limit (default: 3)")
     args = parser.parse_args()
 
     ensure_schema()
@@ -456,8 +458,20 @@ def main():
     logger.info("Initializing DeepSeek client...")
     client = DeepSeekClient()
 
+    # Rate tracking
+    request_times = []
+    MAX_RPM = 10  # Max requests per minute
+
     for batch_num in range(1, args.loops + 1):
         logger.info(f"--- Batch {batch_num}/{args.loops} (size={args.batch}) ---")
+
+        # Rate limiting: ensure we don't exceed MAX_RPM
+        now = time.time()
+        request_times = [t for t in request_times if now - t < 60]
+        if len(request_times) >= MAX_RPM:
+            wait_time = 60 - (now - request_times[0]) + 1
+            logger.info(f"Rate limit: waiting {wait_time:.1f}s (reached {MAX_RPM} RPM)")
+            time.sleep(wait_time)
 
         # Fetch unclassified torrents (biased toward underrepresented category)
         torrents, target_category = fetch_unclassified_batch(args.batch)
@@ -471,11 +485,28 @@ def main():
         prompt += "Pay extra attention to identifying torrents that match this category.\n"
         logger.info(f"Sending {len(torrents)} torrents to DeepSeek (target: {target_category})...")
 
-        try:
-            reply = client.chat(prompt, model="expert")
-            logger.info(f"Got response ({len(reply.text)} chars)")
-        except Exception as e:
-            logger.error(f"DeepSeek error: {e}")
+        # Exponential backoff retry loop
+        success = False
+        for attempt in range(args.max_retries):
+            try:
+                reply = client.chat(prompt, model="expert")
+                request_times.append(time.time())
+                logger.info(f"Got response ({len(reply.text)} chars)")
+                success = True
+                break
+            except Exception as e:
+                error_str = str(e)
+                is_rate_limit = "429" in error_str or "rate" in error_str.lower() or "too many" in error_str.lower()
+                if is_rate_limit and attempt < args.max_retries - 1:
+                    wait_time = (2 ** attempt) * 10  # 10s, 20s, 40s
+                    logger.warning(f"Rate limited. Retrying in {wait_time}s (attempt {attempt + 1}/{args.max_retries})")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"DeepSeek error: {e}")
+                    break
+
+        if not success:
+            logger.error(f"Failed after {args.max_retries} attempts. Stopping.")
             break
 
         # Parse and record
@@ -488,9 +519,10 @@ def main():
             f"skipped={record_result['skipped']}"
         )
 
-        # Small delay between batches
+        # Delay between batches
         if batch_num < args.loops:
-            time.sleep(2)
+            logger.info(f"Waiting {args.delay}s before next batch...")
+            time.sleep(args.delay)
 
     client.close()
 

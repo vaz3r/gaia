@@ -11,7 +11,7 @@ def _parse_files(torrent: dict | TorrentInput) -> tuple[str, int, int, list]:
         str(torrent.get("name", "")),
         torrent.get("file_count", 0),
         torrent.get("total_size", torrent.get("total_size_bytes", 0)),
-        torrent.get("top_dirs", torrent.get("files", [])) or [],
+        torrent.get("top_dirs", torrent.get("files", torrent.get("files_raw", []))) or [],
     )
 
 
@@ -35,9 +35,14 @@ def build_input_text(torrent: dict | TorrentInput, config: dict | None = None) -
         extensions = torrent.get("extensions", [])
         top_folders = torrent.get("top_folders", [])
         largest_files = torrent.get("largest_files", [])
-        # If no pre-extracted metadata, extract from files
+        # If no pre-extracted metadata, extract from files or files_raw
         if not extensions and raw_files:
             extensions, top_folders, largest_files = _extract_metadata(raw_files)
+        # Also try files_raw if still empty
+        if not extensions:
+            files_raw = torrent.get("files_raw", [])
+            if files_raw:
+                extensions, top_folders, largest_files = _extract_metadata(files_raw)
 
     name = name[:max_name_chars]
     lines = [f"Name: {name}", f"Files: {file_count}  Size: {total_size}"]
@@ -51,6 +56,21 @@ def build_input_text(torrent: dict | TorrentInput, config: dict | None = None) -
         else:
             file_strs = [str(f) for f in largest_files[:3]]
         lines.append(f"Largest files: {', '.join(file_strs)}")
+
+    # If we have files_raw, also include ALL file names for richer TF-IDF
+    if isinstance(torrent, dict):
+        files_raw = torrent.get("files_raw", [])
+        if files_raw and isinstance(files_raw, list) and isinstance(files_raw[0], dict):
+            all_names = []
+            for f in files_raw[:50]:  # Limit to 50 files to avoid huge text
+                path = f.get("path", [])
+                if isinstance(path, list) and path:
+                    all_names.append(path[-1])
+                elif isinstance(path, str):
+                    all_names.append(path)
+            if all_names:
+                lines.append(f"All files: {', '.join(all_names)}")
+
     return "\n".join(lines)
 
 
