@@ -130,6 +130,71 @@ app.get('/api/torrents/:infohash/magnet', async (req, res) => {
   }
 });
 
+// GET /api/peers?search=&sort=&order=&page=&limit=
+const PEER_SORTS = {
+  metadata_provided_count: 'metadata_provided_count',
+  last_seen: 'last_seen',
+  first_seen: 'first_seen',
+  ip: 'ip',
+  port: 'port',
+};
+
+app.get('/api/peers', async (req, res) => {
+  try {
+    const search = (req.query.search || '').trim();
+    const sortField = PEER_SORTS[req.query.sort] || 'metadata_provided_count';
+    const orderDir = req.query.order === 'asc' ? 'ASC' : 'DESC';
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(10, parseInt(req.query.limit, 10) || 25));
+    const offset = (page - 1) * limit;
+
+    let whereClause = '';
+    const params = [];
+    if (search.length > 0) {
+      if (/^\d+$/.test(search) && parseInt(search, 10) <= 65535) {
+        params.push(parseInt(search, 10), `%${escapeLike(search)}%`);
+        whereClause = `WHERE port = $1 OR host(ip) LIKE $2`;
+      } else {
+        params.push(`%${escapeLike(search)}%`);
+        whereClause = `WHERE host(ip) LIKE $1`;
+      }
+    }
+
+    const countQuery = `SELECT count(*) AS total, max(metadata_provided_count) AS max_metadata FROM stable_peers ${whereClause}`;
+    const dataQuery = `
+      SELECT host(ip) AS ip, port, metadata_provided_count, first_seen, last_seen
+      FROM stable_peers
+      ${whereClause}
+      ORDER BY ${sortField} ${orderDir}
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+
+    const [countRes, rowsRes] = await Promise.all([
+      query(countQuery, params),
+      query(dataQuery, params),
+    ]);
+
+    const total = parseInt(countRes.rows[0]?.total || 0, 10);
+    const maxMeta = parseInt(countRes.rows[0]?.max_metadata || 0, 10);
+    const pages = Math.max(1, Math.ceil(total / limit));
+
+    res.json({
+      data: rowsRes.rows,
+      total,
+      page,
+      pages,
+      limit,
+      summary: {
+        total_peers: total,
+        max_metadata_provided: maxMeta,
+      },
+    });
+  } catch (err) {
+    console.error('Failed to fetch stable peers:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/metrics/current
 app.get('/api/metrics/current', async (req, res) => {
   const now = Date.now();
