@@ -51,8 +51,6 @@ import { formatBytes, formatNum, formatTime, formatUptime } from './utils.js';
 export default function App() {
   // Navigation & Primary Views: 'overview' | 'browser' | 'routing' | 'diagnostics'
   const [activeTab, setActiveTab] = useState('overview');
-  const [timeRange, setTimeRange] = useState('1h');
-  const [isLive, setIsLive] = useState(true);
   const [scaleMode, setScaleMode] = useState('log'); // 'linear' | 'log'
   const [hoveredIdx, setHoveredIdx] = useState(null);
 
@@ -85,10 +83,9 @@ export default function App() {
   // Realtime tick pulse
   const [tick, setTick] = useState(0);
   useEffect(() => {
-    if (!isLive) return;
     const timer = setInterval(() => setTick((t) => t + 1), 2200);
     return () => clearInterval(timer);
-  }, [isLive]);
+  }, []);
 
   // Search input debouncer
   const searchDebounceRef = useRef(null);
@@ -263,7 +260,8 @@ export default function App() {
       uptime: uptimeStr,
       latency: 18 + (tick % 5),
       lastPing: ((tick * 2) % 3) + 1,
-      routingNodes: snap.routing_table_len ?? 10227,
+      routingNodes: snap.routing_table_len ?? 10368,
+      routingBucketsUsed: 1572,
       tcpOk: rates.tcp_metadata_ok ?? 17920,
       utpOk: rates.utp_metadata_ok ?? 15410,
       timeoutFailures: rates.fetch_connect_timeout ?? 430100,
@@ -399,13 +397,15 @@ export default function App() {
     setTorrentsPage(1);
   };
 
-  // Kademlia routing table buckets
+  // Kademlia routing table buckets (keyspace fill based on 82.4% table density)
   const kademliaBuckets = useMemo(() => {
+    // 10,368 nodes in 1,572 buckets across 128 sybil tables = ~6.6 nodes/bucket avg
     return Array.from({ length: 32 }, (_, i) => {
       const bucketIdx = i * 5;
-      const count = bucketIdx < 90 ? 8 : Math.floor(Math.random() * 3 + 5);
+      // Core buckets near the prefix are full (8/8), tail buckets taper off
+      const count = bucketIdx < 110 ? 8 : (bucketIdx < 140 ? 6 : 4);
       const isFull = count >= 8;
-      const stale = bucketIdx > 120 && Math.random() > 0.8 ? 1 : 0;
+      const stale = bucketIdx >= 145 ? 1 : 0;
       return {
         range: `[${bucketIdx}..${bucketIdx + 4}]`,
         count,
@@ -413,9 +413,9 @@ export default function App() {
         stale,
       };
     });
-  }, [tick]);
+  }, []);
 
-  const totalCatalogedStr = `${metrics.totalVerified} infohashes cataloged in PostgreSQL cluster`;
+  const totalCatalogedStr = `${metrics.totalVerifiedRaw.toLocaleString()} infohashes cataloged in PostgreSQL cluster`;
 
   return (
     <div className="min-h-screen bg-[#000000] text-[#ededed] font-sans antialiased selection:bg-[#333] selection:text-white">
@@ -429,10 +429,10 @@ export default function App() {
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2.5">
               <div className="w-5 h-5 rounded-md bg-[#ededed] flex items-center justify-center text-black font-mono font-bold text-xs">
-                C
+                G
               </div>
               <div className="flex items-baseline gap-1.5">
-                <span className="text-sm font-semibold tracking-tight text-white">craw</span>
+                <span className="text-sm font-semibold tracking-tight text-white">GAIA</span>
                 <span className="text-xs text-[#666] font-mono">/ cluster-eu-01</span>
               </div>
             </div>
@@ -482,32 +482,6 @@ export default function App() {
               <span className="text-[#444]">·</span>
               <span className="font-mono text-[#666]">{metrics.latency}ms</span>
             </div>
-
-            {/* Range Selector */}
-            <div className="flex items-center bg-[#0d0d0d] border border-[#222] rounded-md p-0.5 text-xs font-mono">
-              {['1h', '6h', '24h', '7d'].map((r) => (
-                <button
-                  key={r}
-                  onClick={() => setTimeRange(r)}
-                  className={`px-2 py-0.5 rounded text-[11px] transition-all ${
-                    timeRange === r
-                      ? 'bg-[#222] text-white font-semibold shadow-xs'
-                      : 'text-[#777] hover:text-[#ccc]'
-                  }`}
-                >
-                  {r}
-                </button>
-              ))}
-            </div>
-
-            {/* Play/Pause */}
-            <button
-              onClick={() => setIsLive(!isLive)}
-              className="p-1.5 rounded-md border border-[#222] bg-[#0c0c0c] text-[#888] hover:text-white hover:bg-[#161616] transition-colors"
-              title={isLive ? 'Pause feed' : 'Resume updates'}
-            >
-              {isLive ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 text-emerald-400" />}
-            </button>
           </div>
         </div>
       </header>
@@ -551,8 +525,8 @@ export default function App() {
                 </div>
                 <div className="w-[1px] h-6 bg-[#1a1a1a]" />
                 <div>
-                  <div className="text-[10px] uppercase text-[#555] tracking-wider font-sans">Index</div>
-                  <div className="text-white font-bold mt-0.5">{metrics.totalVerified}</div>
+                  <div className="text-[10px] uppercase text-[#555] tracking-wider font-sans">Total Torrents</div>
+                  <div className="text-white font-bold mt-0.5">{metrics.totalVerifiedRaw.toLocaleString()}</div>
                 </div>
               </div>
             </section>
@@ -1322,18 +1296,18 @@ export default function App() {
                   160-bit XOR keyspace topology. Bucket capacity k=8. Token refresh interval: 10m.
                 </p>
               </div>
-              <div className="flex items-center gap-4 text-xs font-mono">
+              <div className="flex items-center gap-5 text-xs font-mono">
                 <div>
                   <span className="text-[#555]">Active Buckets:</span>{' '}
-                  <span className="text-white font-bold">160 / 160</span>
+                  <span className="text-white font-bold">{metrics.routingBucketsUsed.toLocaleString()} in-use</span>
                 </div>
                 <div>
                   <span className="text-[#555]">Good Nodes:</span>{' '}
                   <span className="text-emerald-400 font-bold">{metrics.routingNodes.toLocaleString()}</span>
                 </div>
                 <div>
-                  <span className="text-[#555]">Questionable:</span>{' '}
-                  <span className="text-amber-400 font-bold">42</span>
+                  <span className="text-[#555]">Table Density:</span>{' '}
+                  <span className="text-white font-bold">82.4% full</span>
                 </div>
               </div>
             </div>
@@ -1485,19 +1459,19 @@ export default function App() {
             <div className="rounded-xl border border-[#262626] bg-[#0a0a0a] p-5 space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-[#1a1a1a]">
                 <div>
-                  <h3 className="text-sm font-semibold text-white">Peer Cache Memory Allocation</h3>
+                  <h3 className="text-sm font-semibold text-white">Dead Peer Suppression Cache</h3>
                   <p className="text-xs text-[#888] mt-0.5">
-                    Live LRU peer cache capacity. Active entries: <strong className="text-white">{metrics.peerCacheSize.toLocaleString()}</strong>.
+                    In-memory quarantine cache for offline/unreachable peers. Suppresses futile TCP/uTP connection attempts, protecting socket descriptors.
                   </p>
                 </div>
                 <div className="text-xs font-mono text-emerald-400">
-                  Status: Optimal (73k active)
+                  Status: Active ({metrics.peerCacheSize.toLocaleString()} peers quarantined)
                 </div>
               </div>
 
               <div className="space-y-2">
                 <div className="flex justify-between text-xs font-mono">
-                  <span className="text-[#888]">Allocated Capacity:</span>
+                  <span className="text-[#888]">Configured Capacity:</span>
                   <span className="text-white font-bold">{cacheAllocSize},000 keys (~{(cacheAllocSize * 0.16).toFixed(1)} MB RAM)</span>
                 </div>
                 <input
@@ -1510,9 +1484,9 @@ export default function App() {
                   className="w-full accent-white bg-[#222] h-1.5 rounded-lg cursor-pointer"
                 />
                 <div className="flex justify-between text-[10px] font-mono text-[#555]">
-                  <span>100k (Current Active)</span>
-                  <span>500k (Optimal Target)</span>
-                  <span>1,000k (High Memory)</span>
+                  <span>100k (Default Profile · 11.3M saved)</span>
+                  <span>500k (High Memory Node)</span>
+                  <span>1,000k (Enterprise Node)</span>
                 </div>
               </div>
             </div>
@@ -1522,7 +1496,7 @@ export default function App() {
               <div className="px-4 py-3 border-b border-[#181818] flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Terminal className="w-3.5 h-3.5 text-[#666]" />
-                  <span className="text-xs font-semibold text-white">craw-daemon Log Output</span>
+                  <span className="text-xs font-semibold text-white">gaia-daemon Log Output</span>
                 </div>
                 <div className="flex items-center gap-1 text-[11px] font-mono text-[#666]">
                   {['ALL', 'INFO', 'WARN', 'DEBUG'].map((lvl) => (
@@ -1569,8 +1543,8 @@ export default function App() {
       {/* Global Footer */}
       <footer className="border-t border-[#181818] py-4 px-5 text-xs text-[#555] font-mono mt-8">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>craw-core · cluster-eu-01 · postgresql storage engine</span>
-          <span>{metrics.totalVerified} verified infohashes active in cluster</span>
+          <span>gaia-core · cluster-eu-01 · postgresql storage engine</span>
+          <span>{metrics.totalVerifiedRaw.toLocaleString()} verified infohashes active in cluster</span>
         </div>
       </footer>
     </div>
