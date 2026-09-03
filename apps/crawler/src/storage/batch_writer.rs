@@ -26,6 +26,7 @@ pub struct BatchWriter {
     jobs: Mutex<Vec<JobUpdate>>,
     torrents: Mutex<Vec<TorrentEntry>>,
     stable_peers: Mutex<Vec<std::net::SocketAddr>>,
+    peer_torrents: Mutex<Vec<(std::net::SocketAddr, Infohash)>>,
     backoffs: Vec<Duration>,
     max_retries: i32,
     no_peers_terminal_on_first: bool,
@@ -52,6 +53,7 @@ impl BatchWriter {
             jobs: Mutex::new(Vec::with_capacity(4096)),
             torrents: Mutex::new(Vec::with_capacity(4096)),
             stable_peers: Mutex::new(Vec::with_capacity(4096)),
+            peer_torrents: Mutex::new(Vec::with_capacity(4096)),
             backoffs,
             max_retries,
             no_peers_terminal_on_first,
@@ -80,6 +82,11 @@ impl BatchWriter {
             .lock()
             .expect("batch writer stable_peers poisoned");
         stable.push(peer_addr);
+        let mut pt = self
+            .peer_torrents
+            .lock()
+            .expect("batch writer peer_torrents poisoned");
+        pt.push((peer_addr, ih));
         let p = parse_info_dict(metadata);
         let mut buf = self
             .torrents
@@ -121,6 +128,13 @@ impl BatchWriter {
                 .stable_peers
                 .lock()
                 .expect("batch writer stable_peers poisoned");
+            buf.drain(..).collect()
+        };
+        let peer_torrents_batch: Vec<(std::net::SocketAddr, Infohash)> = {
+            let mut buf = self
+                .peer_torrents
+                .lock()
+                .expect("batch writer peer_torrents poisoned");
             buf.drain(..).collect()
         };
         let torrent_batch: Vec<TorrentEntry> = {
@@ -168,6 +182,9 @@ impl BatchWriter {
         }
         if !stable_peers_batch.is_empty() {
             flush_stable_peers(&self.pool, &stable_peers_batch, self.flush_chunk).await;
+        }
+        if !peer_torrents_batch.is_empty() {
+            flush_peer_torrents(&self.pool, &peer_torrents_batch, self.flush_chunk).await;
         }
         if !verified_ihs.is_empty() {
             delete_verified(&self.pool, &verified_ihs, self.flush_chunk).await;
@@ -436,3 +453,43 @@ async fn flush_stable_peers(pool: &PgPool, peers: &[std::net::SocketAddr], chunk
         }
     }
 }
+
+async fn flush_peer_torrents(
+    pool: &PgPool,
+    records: &[(std::net::SocketAddr, Infohash)],
+    chunk_size: usize,
+) {
+    let mut seen: std::collections::HashSet<(std::net::SocketAddr, Infohash)> =
+        std::collections::HashSet::new();
+    let deduped: Vec<&(std::net::SocketAddr, Infohash)> =
+        records.iter().filter(|r| seen.insert(**r)).collect();
+
+    for chunk in deduped.chunks(chunk_size) {
+        let mut ips = Vec::with_capacity(chunk.len());
+        let mut ports = Vec::with_capacity(chunk.len());
+        let mut ihs = Vec::with_capacity(chunk.len());
+
+        for (addr, ih) in chunk {
+            ips.push(addr.ip().to_string());
+            ports.push(addr.port() as i32);
+            ihs.push(ih.as_slice());
+        }
+
+        let query = r#"
+            INSERT INTO peer_torrents (peer_ip, peer_port, infohash, verified_at)
+            SELECT u.ip::inet, u.port, u.ih, now()
+            FROM UNNEST($1::text[], $2::int[], $3::bytea[]) AS u(ip, port, ih)
+            ON CONFLICT (peer_ip, peer_port, infohash) DO NOTHING
+        "#;
+        if let Err(e) = sqlx::query(query)
+            .bind(&ips)
+            .bind(&ports)
+            .bind(&ihs)
+            .execute(pool)
+            .await
+        {
+            tracing::error!(error = %e, "failed to batch insert peer_torrents");
+        }
+    }
+}
+

@@ -15,6 +15,7 @@ const PROTOCOL: &[u8] = b"BitTorrent protocol";
 const EXTENDED_MSG_ID: u8 = 20;
 const EXTENDED_HANDSHAKE_ID: u8 = 0;
 const OUR_UT_METADATA_ID: u8 = 1;
+const OUR_UT_PEX_ID: u8 = 2;
 const MAX_MESSAGE_LEN: usize = 16 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -119,9 +120,11 @@ impl AsyncWrite for Transport {
 pub struct WireSession {
     stream: Transport,
     ut_metadata: u8,
+    ut_pex: Option<u8>,
     metadata_size: Option<usize>,
     info_hash: [u8; 20],
     client: Option<String>,
+    discovered_pex_peers: Vec<SocketAddr>,
 }
 
 impl WireSession {
@@ -131,6 +134,10 @@ impl WireSession {
 
     pub fn client(&self) -> Option<&str> {
         self.client.as_deref()
+    }
+
+    pub fn take_pex_peers(&mut self) -> Vec<SocketAddr> {
+        std::mem::take(&mut self.discovered_pex_peers)
     }
 
     pub async fn connect_tcp(
@@ -175,9 +182,11 @@ impl WireSession {
         let mut session = WireSession {
             stream,
             ut_metadata: 0,
+            ut_pex: None,
             metadata_size: None,
             info_hash: *info_hash,
             client: None,
+            discovered_pex_peers: Vec::new(),
         };
         session.bep3(info_hash, peer_id, timeout).await?;
         session.extension_handshake(timeout).await?;
@@ -213,10 +222,16 @@ impl WireSession {
         let ours = BValue::dict(vec![
             (
                 Bytes::from_static(b"m"),
-                BValue::dict(vec![(
-                    Bytes::from_static(b"ut_metadata"),
-                    BValue::Int(OUR_UT_METADATA_ID as i64),
-                )]),
+                BValue::dict(vec![
+                    (
+                        Bytes::from_static(b"ut_metadata"),
+                        BValue::Int(OUR_UT_METADATA_ID as i64),
+                    ),
+                    (
+                        Bytes::from_static(b"ut_pex"),
+                        BValue::Int(OUR_UT_PEX_ID as i64),
+                    ),
+                ]),
             ),
             (
                 Bytes::from_static(b"v"),
@@ -244,6 +259,7 @@ impl WireSession {
             .and_then(BValue::as_int)
             .ok_or(WireError::NoExtension)?;
         self.ut_metadata = ut as u8;
+        self.ut_pex = m.get(b"ut_pex".as_slice()).and_then(BValue::as_int).map(|v| v as u8);
         self.metadata_size = dict.get_int(b"metadata_size").map(|v| v as usize);
 
         let reqq = dict.get_int(b"reqq").unwrap_or(0);
@@ -377,6 +393,20 @@ impl WireSession {
                 Err(e) => return Err(e),
             };
             if ext_id != OUR_UT_METADATA_ID {
+                // If this is a BEP 11 ut_pex message from the peer, extract compact IPv4 peer endpoints
+                if let Some(pex_id) = self.ut_pex && ext_id == pex_id {
+                    if let Ok((pex_dict, _)) = decode_prefix(&payload) {
+                        if let Some(BValue::Bytes(added)) = pex_dict.get(b"added") {
+                            for chunk in added.chunks_exact(6) {
+                                let ip = std::net::Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]);
+                                let port = u16::from_be_bytes([chunk[4], chunk[5]]);
+                                if port > 0 {
+                                    self.discovered_pex_peers.push(SocketAddr::new(ip.into(), port));
+                                }
+                            }
+                        }
+                    }
+                }
                 skipped_non_ext += 1;
                 continue;
             }

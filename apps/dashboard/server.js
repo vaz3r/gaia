@@ -195,6 +195,35 @@ app.get('/api/peers', async (req, res) => {
   }
 });
 
+// GET /api/peers/:ip/:port/torrents - Seeded torrents discovered from this peer
+app.get('/api/peers/:ip/:port/torrents', async (req, res) => {
+  try {
+    const ip = req.params.ip;
+    const port = parseInt(req.params.port, 10);
+    if (!ip || isNaN(port)) {
+      return res.status(400).json({ error: 'invalid ip or port' });
+    }
+
+    const r = await query(
+      `SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.total_size, t.file_count, pt.verified_at
+       FROM peer_torrents pt
+       JOIN torrents t ON t.infohash = pt.infohash
+       WHERE pt.peer_ip = $1 AND pt.peer_port = $2
+       ORDER BY pt.verified_at DESC
+       LIMIT 50`,
+      [ip, port]
+    );
+
+    res.json({
+      peer: `${ip}:${port}`,
+      torrents: r.rows,
+    });
+  } catch (err) {
+    console.error('Failed to fetch peer torrents:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/metrics/current
 app.get('/api/metrics/current', async (req, res) => {
   const now = Date.now();

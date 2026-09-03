@@ -81,6 +81,9 @@ export default function App() {
   const [peersData, setPeersData] = useState({ data: [], total: 0, pages: 1, page: 1, summary: {} });
   const [peersLoading, setPeersLoading] = useState(false);
   const [copiedPeer, setCopiedPeer] = useState(null);
+  const [selectedPeer, setSelectedPeer] = useState(null);
+  const [peerTorrentsLoading, setPeerTorrentsLoading] = useState(false);
+  const [peerTorrentsList, setPeerTorrentsList] = useState([]);
 
   // Inspector & modal state
   const [selectedTorrent, setSelectedTorrent] = useState(null);
@@ -480,6 +483,24 @@ export default function App() {
     navigator.clipboard.writeText(text);
     setCopiedPeer(text);
     setTimeout(() => setCopiedPeer(null), 2000);
+  };
+
+  const handleInspectPeer = (peer) => {
+    setSelectedPeer(peer);
+    setPeerTorrentsLoading(true);
+    setPeerTorrentsList([]);
+    api(`/api/peers/${peer.ip}/${peer.port}/torrents`)
+      .then((res) => {
+        if (res?.torrents) {
+          setPeerTorrentsList(res.torrents);
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load peer torrents:', err);
+      })
+      .finally(() => {
+        setPeerTorrentsLoading(false);
+      });
   };
 
   // Kademlia routing table buckets (keyspace fill based on 82.4% table density)
@@ -1656,13 +1677,20 @@ export default function App() {
                         const spanStr = diffDays > 0 ? `${diffDays}d ${diffHours % 24}h` : `${diffHours}h`;
 
                         return (
-                          <tr key={idx} className="hover:bg-[#121212] transition-colors group">
+                          <tr
+                            key={idx}
+                            onClick={() => handleInspectPeer(peer)}
+                            className="hover:bg-[#151515] cursor-pointer transition-colors group"
+                          >
                             <td className="py-3 px-4">
                               <div className="flex items-center gap-2">
-                                <span className="text-white font-semibold">{peer.ip}</span>
+                                <span className="text-white font-semibold group-hover:text-emerald-400 transition-colors">{peer.ip}</span>
                                 <span className="text-[#666]">:{peer.port}</span>
                                 <button
-                                  onClick={() => copyPeerToClipboard(endpoint)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    copyPeerToClipboard(endpoint);
+                                  }}
                                   title="Copy endpoint"
                                   className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-[#222] text-[#888] hover:text-white transition-opacity"
                                 >
@@ -1784,6 +1812,99 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* Peer Seeded Torrents Modal (Technique D) */}
+            {selectedPeer && (
+              <div
+                className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+                onClick={() => setSelectedPeer(null)}
+              >
+                <div
+                  className="bg-[#0e0e0e] border border-[#222] rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Modal Header */}
+                  <div className="px-5 py-4 border-b border-[#1c1c1c] flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-950/50 border border-emerald-800/40 flex items-center justify-center text-emerald-400">
+                        <Radio className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-semibold text-white font-mono">{selectedPeer.ip}:{selectedPeer.port}</h3>
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#181818] text-emerald-400 border border-emerald-800/30">
+                            {selectedPeer.metadata_provided_count} Verified Payloads
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-[#777] mt-0.5">
+                          Catalog of torrents verified and seeded by this peer (Technique D Sighting Correlation)
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setSelectedPeer(null)}
+                      className="p-1 rounded-md text-[#666] hover:text-white hover:bg-[#1a1a1a] transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Torrents List */}
+                  <div className="p-5 overflow-y-auto space-y-3 flex-1 font-mono text-xs">
+                    {peerTorrentsLoading ? (
+                      <div className="py-12 text-center text-[#666] flex items-center justify-center gap-2">
+                        <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" />
+                        <span>Querying peer's seeded torrents from PostgreSQL...</span>
+                      </div>
+                    ) : peerTorrentsList && peerTorrentsList.length > 0 ? (
+                      peerTorrentsList.map((t, idx) => (
+                        <div
+                          key={idx}
+                          className="p-3 rounded-lg border border-[#1a1a1a] bg-[#080808] hover:border-[#333] transition-colors flex items-center justify-between gap-4"
+                        >
+                          <div className="truncate flex-1">
+                            <div className="text-white font-medium truncate">{t.name || 'Unnamed Torrent'}</div>
+                            <div className="text-[11px] text-[#666] flex items-center gap-3 mt-1">
+                              <span>{t.total_size ? formatBytes(t.total_size) : '—'}</span>
+                              <span>·</span>
+                              <span>{t.file_count || 1} files</span>
+                              <span>·</span>
+                              <span>{t.verified_at ? new Date(t.verified_at).toLocaleDateString() : '—'}</span>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => copyToClipboard(`magnet:?xt=urn:btih:${t.infohash}&dn=${encodeURIComponent(t.name || '')}`, 'magnet')}
+                            className="px-2.5 py-1.5 rounded bg-[#181818] border border-[#2a2a2a] text-white hover:bg-[#252525] text-xs shrink-0 flex items-center gap-1.5"
+                          >
+                            <DownloadCloud className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Magnet</span>
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="py-10 text-center text-[#666] space-y-2">
+                        <p>No verified torrent links logged for this peer yet.</p>
+                        <p className="text-[11px] text-[#555]">
+                          New metadata transfers from this peer will automatically link into <code className="text-[#888]">peer_torrents</code>.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Modal Footer */}
+                  <div className="px-5 py-3 border-t border-[#1c1c1c] bg-[#0a0a0a] flex items-center justify-between text-xs font-mono text-[#666]">
+                    <span>Peer ID: {selectedPeer.ip}</span>
+                    <button
+                      onClick={() => copyPeerToClipboard(`${selectedPeer.ip}:${selectedPeer.port}`)}
+                      className="text-white hover:text-emerald-400 flex items-center gap-1"
+                    >
+                      <Copy className="w-3 h-3" />
+                      <span>Copy Endpoint</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
