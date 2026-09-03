@@ -9,10 +9,16 @@ KEEP_COUNT=${BACKUP_KEEP_COUNT:-2}
 TIMESTAMP=$(date +"%Y-%m-%dT%H-%M-%S")
 FILENAME="craw-backup-${TIMESTAMP}.dump"
 
-echo "[$(date -Iseconds)] Streaming pg_dump to rclone destination: ${REMOTE}/${FILENAME}"
+# Dump to a local file first to allow rclone to retry on API rate limits
+LOCAL_FILE="/tmp/${FILENAME}"
+echo "[$(date -Iseconds)] Dumping database to local file: ${LOCAL_FILE}"
+PGPASSWORD="${PG_PASSWORD}" pg_dump -h "${DB_HOST}" -p "${DB_PORT}" -U "${POSTGRES_USER}" -Fc -Z zstd "${POSTGRES_DB}" > "${LOCAL_FILE}"
 
-# pg_dump to rclone rcat with zstd compression
-PGPASSWORD="${PG_PASSWORD}" pg_dump -h "${DB_HOST}" -p "${DB_PORT}" -U "${POSTGRES_USER}" -Fc -Z zstd "${POSTGRES_DB}" | rclone rcat --drive-chunk-size 128M --tpslimit 2 "${REMOTE}/${FILENAME}"
+echo "[$(date -Iseconds)] Uploading to Google Drive..."
+rclone copy "${LOCAL_FILE}" "${REMOTE}/" --drive-chunk-size 128M --tpslimit 2 --retries 5
+
+echo "[$(date -Iseconds)] Cleaning up local file..."
+rm "${LOCAL_FILE}"
 
 echo "[$(date -Iseconds)] Upload complete. Pruning old backups (keeping ${KEEP_COUNT})..."
 

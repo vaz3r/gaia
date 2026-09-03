@@ -42,7 +42,9 @@ use tokio::sync::{broadcast, mpsc};
 
 #[tokio::main]
 async fn main() {
+    eprintln!("[DBG] 1: before Config::load");
     let config = Config::load();
+    eprintln!("[DBG] 2: config loaded");
 
     if let Err(e) = config.validate() {
         eprintln!("invalid configuration: {e}");
@@ -51,8 +53,10 @@ async fn main() {
 
     let log_dropped = Arc::new(AtomicU64::new(0));
     let _logging_guard = logging::init(&config, log_dropped.clone());
+    eprintln!("[DBG] 3: logging initialized");
 
     log_effective_config(&config);
+    eprintln!("[DBG] 4: config logged");
 
     tracing::info!(
         git_hash = env!("CRAW_GIT_HASH"),
@@ -65,6 +69,7 @@ async fn main() {
 
     let database_url =
         std::env::var("DATABASE_URL").expect("DATABASE_URL environment variable is required");
+    eprintln!("[DBG] 5: connecting to database");
     let pool = storage::pg::connect(
         &database_url,
         &PoolConfig {
@@ -75,10 +80,12 @@ async fn main() {
     )
     .await
     .expect("connect to postgres");
+    eprintln!("[DBG] 6: database connected");
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
         .expect("run migrations");
+    eprintln!("[DBG] 7: migrations done");
 
     sqlx::query(
         "INSERT INTO metrics (ts, metric_name, metric_value) VALUES (now(), '_session_start', 0)",
@@ -128,6 +135,7 @@ async fn main() {
     let peer_cache = Arc::new(PeerCache::new(
         Duration::from_secs(config.cache.peer_cache_ttl_secs),
         config.cache.peer_cache_max_entries,
+        config.cache.peer_cache_failure_threshold,
     ));
     let peer_cache_cleanup = peer_cache.clone();
 
@@ -145,8 +153,10 @@ async fn main() {
     );
 
     let bootstrap = resolve_bootstrap(&config.bootstrap).await;
+    eprintln!("[DBG] 8: bootstrap resolved");
     let mut node_routers = Vec::with_capacity(config.nodes);
     for i in 0..config.nodes {
+        eprintln!("[DBG] 9: spawning node {i}");
         spawn_node(
             &config,
             i,
@@ -157,7 +167,7 @@ async fn main() {
             &mut node_routers,
         )
         .await;
-        tracing::info!(node = i, "dht node started");
+        eprintln!("[DBG] 10: node {i} started");
     }
     let node_routers: Arc<Vec<Arc<Router>>> = Arc::new(node_routers);
 
@@ -259,6 +269,9 @@ async fn main() {
         config.storage.peer_outcomes_flush_interval_secs,
     ));
 
+    let stable_peers = Arc::new(crate::storage::jobs::get_stable_peers(&pool).await.unwrap_or_default());
+    tracing::info!("Loaded {} stable peers for fast-lane", stable_peers.len());
+
     let pipeline = verify::run_pipeline(
         verify_rx,
         fresh_verify_rx,
@@ -276,6 +289,8 @@ async fn main() {
         peer_outcomes,
         Arc::new(verify::ConnLimiter::new(
             config.fetch.max_connections_per_ip,
+            std::time::Duration::from_secs(config.fetch.conn_limiter_ttl_secs),
+            config.fetch.conn_limiter_max_entries,
         )),
         verify::VerifyConfig {
             pipeline_limit: config.fetch.pipeline_limit,
@@ -296,6 +311,7 @@ async fn main() {
                 lead_source_grace: Duration::from_millis(config.fetch.lead_source_grace_ms),
             },
         },
+        stable_peers,
     );
 
     let report = report_loop(
@@ -354,17 +370,18 @@ async fn main() {
         let _ = shutdown_tx.send(());
     };
 
+    eprintln!("[DBG] 11: entering select!");
     tokio::select! {
-        _ = sightings_run => {}
-        _ = sightings_flush => {}
-        _ = retry_run => {}
-        _ = batch_run => {}
-        _ = metrics_run => {}
-        _ = peer_outcomes_run => {}
-        _ = pipeline => {}
-        _ = report => {}
-        _ = cache_cleanup => {}
-        _ = shutdown_signal => {}
+        _ = sightings_run => { eprintln!("[DBG] select: sightings_run resolved"); }
+        _ = sightings_flush => { eprintln!("[DBG] select: sightings_flush resolved"); }
+        _ = retry_run => { eprintln!("[DBG] select: retry_run resolved"); }
+        _ = batch_run => { eprintln!("[DBG] select: batch_run resolved"); }
+        _ = metrics_run => { eprintln!("[DBG] select: metrics_run resolved"); }
+        _ = peer_outcomes_run => { eprintln!("[DBG] select: peer_outcomes_run resolved"); }
+        _ = pipeline => { eprintln!("[DBG] select: pipeline resolved"); }
+        _ = report => { eprintln!("[DBG] select: report resolved"); }
+        _ = cache_cleanup => { eprintln!("[DBG] select: cache_cleanup resolved"); }
+        _ = shutdown_signal => { eprintln!("[DBG] select: shutdown_signal resolved"); }
     }
 
     tracing::info!("shutdown: draining pending writes");
@@ -673,8 +690,8 @@ async fn routing_snapshot_loop(
         let nodes = table.read().expect("routing table poisoned").all();
         if let Ok(data) = bincode::serialize(&nodes) {
             let tmp = path.with_extension("bin.tmp");
-            if std::fs::write(&tmp, data).is_ok() {
-                let _ = std::fs::rename(&tmp, &path);
+            if tokio::fs::write(&tmp, data).await.is_ok() {
+                let _ = tokio::fs::rename(&tmp, &path).await;
             }
         }
     }

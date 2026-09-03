@@ -40,12 +40,21 @@ impl AsyncWriter {
     }
 
     pub async fn run(mut self) {
-        let _ = fs::create_dir_all(&self.dir);
+        if let Err(e) = fs::create_dir_all(&self.dir) {
+            eprintln!("[writer] FATAL: failed to create log directory: {e}");
+            return;
+        }
 
         let mut buffer: Vec<String> = Vec::with_capacity(self.batch_size.min(8192));
         let mut bytes_written: u64 = 0;
         let mut file_start = Instant::now();
-        let (path, file) = create_new_file(&self.dir);
+        let (path, file) = match create_new_file(&self.dir) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[writer] FATAL: failed to create initial log file: {e}");
+                return;
+            }
+        };
         let mut current_path = path;
         let mut writer = BufWriter::new(file);
         let mut flush_interval =
@@ -54,8 +63,6 @@ impl AsyncWriter {
 
         loop {
             tokio::select! {
-                biased;
-
                 _ = &mut self.shutdown_rx => {
                     drain_and_flush(&mut self.rx, &mut writer, &mut buffer);
                     let _ = writer.flush();
@@ -79,6 +86,21 @@ impl AsyncWriter {
                 _ = flush_interval.tick() => {
                     if !buffer.is_empty() {
                         flush_and_maybe_rotate(&mut writer, &mut buffer, &mut bytes_written, &mut file_start, &mut current_path, &self);
+                    }
+                    if !tokio::fs::try_exists(&current_path).await.unwrap_or(true) {
+                        match create_new_file(&self.dir) {
+                            Ok((new_path, new_file)) => {
+                                let new_writer = BufWriter::new(new_file);
+                                let old = std::mem::replace(&mut writer, new_writer);
+                                drop(old);
+                                current_path = new_path;
+                                bytes_written = 0;
+                                file_start = Instant::now();
+                            }
+                            Err(e) => {
+                                eprintln!("[writer] failed to recreate log file after deletion: {e}");
+                            }
+                        }
                     }
                 }
             }
@@ -131,7 +153,13 @@ fn rotate(
 ) {
     let old_path = current_path.clone();
 
-    let (new_path, new_file) = create_new_file(&ctx.dir);
+    let (new_path, new_file) = match create_new_file(&ctx.dir) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[writer] failed to create rotated log file: {e}");
+            return;
+        }
+    };
     let new_writer = BufWriter::new(new_file);
 
     let old = std::mem::replace(writer, new_writer);
@@ -186,14 +214,10 @@ fn cleanup_old_files(dir: &PathBuf, total_max_bytes: u64) {
     }
 }
 
-fn create_new_file(dir: &PathBuf) -> (String, File) {
+fn create_new_file(dir: &PathBuf) -> Result<(String, File), std::io::Error> {
     let now = chrono::Utc::now();
     let filename = format!("crawler-{}.jsonl", now.format("%Y-%m-%dT%H-%M-%SZ"));
     let path = dir.join(&filename);
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .unwrap_or_else(|e| panic!("failed to create log file {}: {}", path.display(), e));
-    (path.to_string_lossy().to_string(), file)
+    let file = OpenOptions::new().create(true).append(true).open(&path)?;
+    Ok((path.to_string_lossy().to_string(), file))
 }

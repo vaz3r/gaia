@@ -45,6 +45,7 @@ impl Walker {
     }
 
     pub async fn bootstrap(&self, nodes: &[SocketAddr]) {
+        eprintln!("[DBG] bootstrap: starting with {} nodes", nodes.len());
         let mut set = tokio::task::JoinSet::new();
         let query_timeout = self.query_timeout;
         for &addr in nodes {
@@ -74,9 +75,11 @@ impl Walker {
                 }
             }
         }
+        eprintln!("[DBG] bootstrap: done");
     }
 
     pub async fn run(&self) {
+        eprintln!("[DBG] walker.run: starting");
         let mut interval = tokio::time::interval(self.interval);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut set = tokio::task::JoinSet::new();
@@ -94,7 +97,10 @@ impl Walker {
     fn handle(
         &self,
         res: Result<
-            (crate::krpc::NodeId, Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>),
+            (
+                crate::krpc::NodeId,
+                Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>,
+            ),
             tokio::task::JoinError,
         >,
     ) {
@@ -102,12 +108,18 @@ impl Walker {
             match q_res {
                 Ok((nodes, nodes6)) => {
                     self.router.metrics().walker_ok.add(1);
-                    self.router.metrics().walker_nodes_returned.add(nodes.len() as u64);
+                    self.router
+                        .metrics()
+                        .walker_nodes_returned
+                        .add(nodes.len() as u64);
                     let useful = !nodes.is_empty() || !nodes6.is_empty();
                     self.router.record_query(&node_id, useful, false);
                     self.router.insert_nodes(nodes);
                     if self.parse_nodes6 {
-                        self.router.metrics().walker_nodes_returned.add(nodes6.len() as u64);
+                        self.router
+                            .metrics()
+                            .walker_nodes_returned
+                            .add(nodes6.len() as u64);
                         self.router.insert_nodes(nodes6);
                     }
                 }
@@ -120,9 +132,10 @@ impl Walker {
 
     async fn reap(
         &self,
-        set: &mut tokio::task::JoinSet<
-            (crate::krpc::NodeId, Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>),
-        >,
+        set: &mut tokio::task::JoinSet<(
+            crate::krpc::NodeId,
+            Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>,
+        )>,
     ) {
         loop {
             match set.try_join_next() {
@@ -134,9 +147,10 @@ impl Walker {
 
     fn spawn_step(
         &self,
-        set: &mut tokio::task::JoinSet<
-            (crate::krpc::NodeId, Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>),
-        >,
+        set: &mut tokio::task::JoinSet<(
+            crate::krpc::NodeId,
+            Result<(Vec<NodeInfo>, Vec<NodeInfo>), crate::router::QueryError>,
+        )>,
     ) -> bool {
         self.router.metrics().walker_steps.add(1);
         let nodes = self.router.random_routing_nodes(self.alpha);
@@ -167,7 +181,7 @@ impl Walker {
         let explore = rand::random::<f64>() < self.self_explore_prob;
         if explore {
             self.router.metrics().walker_self_target.add(1);
-            if let Some(n) = self.router.routing_nodes().first() {
+            if let Some(n) = self.router.random_routing_nodes(1).first() {
                 return (self.router.random_sybil_id(), n.id);
             }
         }
@@ -207,7 +221,13 @@ fn ingest(
     if let Kind::Response { r } = &msg.kind {
         router.metrics().walker_ok.add(1);
         if let Some(id) = extract_id20(r, b"id") {
-            router.insert_nodes(vec![NodeInfo { id, addr, query_count: 0, fail_count: 0, last_useful: false }]);
+            router.insert_nodes(vec![NodeInfo {
+                id,
+                addr,
+                query_count: 0,
+                fail_count: 0,
+                last_useful: true,
+            }]);
         }
         if let Some(nodes) = r.get_bytes(b"nodes") {
             let decoded = decode_compact(nodes);

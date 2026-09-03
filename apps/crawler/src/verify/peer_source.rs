@@ -52,7 +52,8 @@ pub async fn source_peers(
     // soon as any query completes, instead of blocking a whole round on the
     // slowest peer. The global deadline wraps the entire loop, bounding the
     // worst case; on expiry we abort and return whatever peers we found.
-    let mut set: JoinSet<(crate::krpc::NodeId, SocketAddr, Result<Message, QueryError>)> = JoinSet::new();
+    let mut set: JoinSet<(crate::krpc::NodeId, SocketAddr, Result<Message, QueryError>)> =
+        JoinSet::new();
     let mut inflight: usize = 0;
     let mut new_nodes: Vec<NodeInfo> = Vec::new();
     let mut total_queries: usize = 0;
@@ -114,6 +115,7 @@ pub async fn source_peers(
                                 }
                             }
                         }
+
                         crate::trace_lifecycle!(
                             &info_hash,
                             "source_response",
@@ -124,7 +126,9 @@ pub async fn source_peers(
                         let has_nodes = if let Some(nodes) = r.get_bytes(b"nodes") {
                             new_nodes.extend(decode_compact(nodes));
                             true
-                        } else { false };
+                        } else {
+                            false
+                        };
                         router.record_query(&node_id, returned_here > 0 || has_nodes, false);
                     }
                 }
@@ -294,7 +298,7 @@ mod tests {
 
         let log_dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let metrics = Arc::new(Metrics::new(log_dropped));
-        let cache = PeerCache::new(Duration::from_secs(600), 100_000);
+        let cache = PeerCache::new(Duration::from_secs(300), 100_000, 2);
         let addr_ok: SocketAddr = "8.8.8.8:6881".parse().unwrap();
         let addr_bad: SocketAddr = "1.2.3.4:6881".parse().unwrap();
 
@@ -302,7 +306,8 @@ mod tests {
         assert!(!peer_is_bad(&addr_ok, &cache, &metrics));
         assert!(!peer_is_bad(&addr_bad, &cache, &metrics));
 
-        // Mark bad -> filtered
+        // Mark bad -> filtered (requires 2 failures based on threshold)
+        cache.mark_bad(addr_bad);
         cache.mark_bad(addr_bad);
         assert!(!peer_is_bad(&addr_ok, &cache, &metrics));
         assert!(peer_is_bad(&addr_bad, &cache, &metrics));

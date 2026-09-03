@@ -6,6 +6,7 @@ use crate::verify::peer_cache::PeerCache;
 use crate::verify::peer_source::{SourceResult, source_peers};
 use crate::verify::wire::{WireError, WireSession, gen_peer_id};
 use librqbit_utp::UtpSocketUdp;
+use rand::seq::IndexedRandom;
 use std::collections::{HashSet, VecDeque};
 use std::future::Future;
 use std::net::SocketAddr;
@@ -638,6 +639,7 @@ pub async fn verify_infohash(
     conn_limiter: Arc<crate::verify::ConnLimiter>,
     fetch_limit: Arc<tokio::sync::Semaphore>,
     negative_cache: Arc<dashmap::DashMap<std::net::IpAddr, tokio::time::Instant>>,
+    stable_peers: Arc<Vec<SocketAddr>>,
 ) -> VerifyResult {
     let race_peers = params.race_peers.max(1);
     let peer_id = gen_peer_id();
@@ -656,27 +658,41 @@ pub async fn verify_infohash(
     //    Priority 1: Direct peer supplied by announce_peer
     //    Priority 2: AnnouncePeerCache peer
     if let Some(d) = direct
-        && peers_seen.insert(d) && candidate_queue.len() < race_peers {
-            metrics
-                .source_direct_accepted_total
-                .fetch_add(1, Ordering::Relaxed);
-            candidate_queue.push_back((d, CandidateSource::Direct));
-        }
-    if let Some(announcer) = announce_peer_cache.get(&info_hash)
-        && peers_seen.insert(announcer) {
-            crate::trace_lifecycle!(
-                &info_hash,
-                "announce_peer_injected",
-                stream = "fetch",
-                peer = announcer.to_string()
-            );
-            if candidate_queue.len() < race_peers {
-                metrics
-                    .source_announce_cache_accepted_total
-                    .fetch_add(1, Ordering::Relaxed);
-                candidate_queue.push_back((announcer, CandidateSource::AnnounceCache));
+        && peers_seen.insert(d)
+        && candidate_queue.len() < race_peers
+    {
+        metrics
+            .source_direct_accepted_total
+            .fetch_add(1, Ordering::Relaxed);
+        candidate_queue.push_back((d, CandidateSource::Direct));
+    }
+
+    if !stable_peers.is_empty() {
+        let mut rng = rand::rng();
+        for &peer in stable_peers.choose_multiple(&mut rng, 2) {
+            if candidate_queue.len() < race_peers && peers_seen.insert(peer) {
+                metrics.source_direct_accepted_total.fetch_add(1, Ordering::Relaxed);
+                candidate_queue.push_back((peer, CandidateSource::Direct));
             }
         }
+    }
+
+    if let Some(announcer) = announce_peer_cache.get(&info_hash)
+        && peers_seen.insert(announcer)
+    {
+        crate::trace_lifecycle!(
+            &info_hash,
+            "announce_peer_injected",
+            stream = "fetch",
+            peer = announcer.to_string()
+        );
+        if candidate_queue.len() < race_peers {
+            metrics
+                .source_announce_cache_accepted_total
+                .fetch_add(1, Ordering::Relaxed);
+            candidate_queue.push_back((announcer, CandidateSource::AnnounceCache));
+        }
+    }
 
     let is_lead_task = !candidate_queue.is_empty();
     if is_lead_task {
@@ -766,6 +782,7 @@ pub async fn verify_infohash(
     }
 
     let mut source_state = SourceState::Timeout;
+    let mut dht_meta_failures = 0;
     let mut result: Option<(Vec<u8>, std::net::SocketAddr, CandidateSource, Duration)> = None;
 
     // Persistent permit acquisition future across select! ticks.
@@ -852,6 +869,7 @@ pub async fn verify_infohash(
                                 sample_failed_peer(&info_hash, &_addr, &metrics, params.failed_peer_sample_rate.max(1));
                             }
                             FetchOutcome::MetadataFailed(WireError::Timeout, src, dur) => {
+                                if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_io.add(1);
                                 metrics.verify_timeouts.add(1);
                                 if src != CandidateSource::Dht {
@@ -859,48 +877,56 @@ pub async fn verify_infohash(
                                 }
                             }
                             FetchOutcome::MetadataFailed(WireError::Handshake, src, dur) => {
+                                if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_handshake.add(1);
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
                             FetchOutcome::MetadataFailed(WireError::NoExtension, src, dur) => {
+                                if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_no_extension.add(1);
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
                             FetchOutcome::MetadataFailed(WireError::Reject, src, dur) => {
+                                if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_reject.add(1);
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
                             FetchOutcome::MetadataFailed(WireError::BadPiece, src, dur) => {
+                                if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_bad_piece.add(1);
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
                             FetchOutcome::MetadataFailed(WireError::Io(_), src, dur) => {
+                                if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_io.add(1);
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
                             FetchOutcome::MetadataFailed(WireError::Eof, src, dur) => {
+                                if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_io.add(1);
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
                             FetchOutcome::MetadataFailed(WireError::Cancelled, src, dur) => {
+                                if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_io.add(1);
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
                             FetchOutcome::MetadataFailed(WireError::NoMetadataSize, src, dur) => {
+                                if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
@@ -1088,7 +1114,7 @@ pub async fn verify_infohash(
     match result {
         Some((meta, peer, src, dur)) => VerifyResult::Success(meta, peer, src, dur),
         None => {
-            if peers_seen.is_empty() {
+            if dht_meta_failures == 0 {
                 match source_state {
                     SourceState::NoPeers => VerifyResult::NoPeers,
                     _ => VerifyResult::SourceTimeout,
@@ -1814,7 +1840,8 @@ mod tests {
             SourceResult::NoPeers
         });
 
-        let mut result = None;
+        let mut dht_meta_failures = 0;
+    let mut result = None;
         tokio::select! {
             biased;
             res = set.join_next(), if !set.is_empty() => {
@@ -1901,7 +1928,11 @@ mod tests {
 
     #[tokio::test]
     async fn per_ip_limit_remains_enforced() {
-        let limiter = Arc::new(crate::verify::ConnLimiter::new(1));
+        let limiter = Arc::new(crate::verify::ConnLimiter::new(
+            1,
+            std::time::Duration::from_secs(60),
+            1_000_000,
+        ));
         let ip = "1.2.3.4".parse().unwrap();
 
         let p1 = limiter.acquire(ip).await;
@@ -2552,7 +2583,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_13_grace_holds_no_per_ip_permit() {
-        let limiter = Arc::new(crate::verify::ConnLimiter::new(1));
+        let limiter = Arc::new(crate::verify::ConnLimiter::new(
+            1,
+            std::time::Duration::from_secs(60),
+            1_000_000,
+        ));
         let ip: std::net::IpAddr = "1.2.3.4".parse().unwrap();
 
         // While in grace state, per-IP permit for any DHT peer is unacquired and can be acquired
@@ -2623,7 +2658,8 @@ mod tests {
             )
         });
 
-        let mut result = None;
+        let mut dht_meta_failures = 0;
+    let mut result = None;
         if let Some(Ok(FetchOutcome::Success(meta, addr, src, dur))) = set.join_next().await {
             result = Some((meta, addr, src, dur));
             set.abort_all();

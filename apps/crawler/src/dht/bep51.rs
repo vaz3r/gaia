@@ -16,19 +16,23 @@ pub async fn run_bep51_worker(
     let mut set = tokio::task::JoinSet::new();
 
     loop {
-        ticker.tick().await;
-
-        let nodes = router.random_routing_nodes(10);
-        for node in nodes {
-            let r = router.clone();
-            set.spawn(async move { send_sample_infohashes(&r, node).await });
-        }
-
-        while let Some(res) = set.join_next().await {
-            if let Ok(Ok(infohashes)) = res {
-                for ih in infohashes {
-                    let _ = fresh_verify_tx.try_send(ih);
+        tokio::select! {
+            _ = ticker.tick() => {
+                let nodes = router.random_routing_nodes(10);
+                for node in nodes {
+                    let r = router.clone();
+                    let tx = fresh_verify_tx.clone();
+                    set.spawn(async move {
+                        if let Ok(infohashes) = send_sample_infohashes(&r, node).await {
+                            for ih in infohashes {
+                                let _ = tx.try_send(ih);
+                            }
+                        }
+                    });
                 }
+            }
+            Some(_) = set.join_next() => {
+                // Reap completed tasks
             }
         }
     }
@@ -70,17 +74,18 @@ async fn send_sample_infohashes(router: &Arc<Router>, node: NodeInfo) -> Result<
         Ok(Ok(bytes)) => {
             if let Ok(msg) = Message::parse(&bytes)
                 && let crate::krpc::message::Kind::Response { r } = msg.kind
-                    && let Some(samples) = r.get_bytes(b"samples") {
-                        let mut infohashes = Vec::new();
-                        let mut i = 0;
-                        while i + 20 <= samples.len() {
-                            let mut ih = [0u8; 20];
-                            ih.copy_from_slice(&samples[i..i + 20]);
-                            infohashes.push(ih);
-                            i += 20;
-                        }
-                        return Ok(infohashes);
-                    }
+                && let Some(samples) = r.get_bytes(b"samples")
+            {
+                let mut infohashes = Vec::new();
+                let mut i = 0;
+                while i + 20 <= samples.len() {
+                    let mut ih = [0u8; 20];
+                    ih.copy_from_slice(&samples[i..i + 20]);
+                    infohashes.push(ih);
+                    i += 20;
+                }
+                return Ok(infohashes);
+            }
             Err(())
         }
         _ => Err(()),

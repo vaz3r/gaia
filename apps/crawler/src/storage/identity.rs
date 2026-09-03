@@ -65,7 +65,9 @@ impl IdentityStore {
                 })
                 .collect(),
         };
-        let _ = std::fs::write(path, serde_json::to_vec(&f).unwrap_or_default());
+        if let Ok(json_data) = serde_json::to_vec(&f) {
+            let _ = std::fs::write(path, json_data);
+        }
         IdentityStore { self_id, sybils }
     }
 }

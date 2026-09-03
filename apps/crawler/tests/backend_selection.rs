@@ -1,4 +1,3 @@
-
 #[test]
 #[cfg(target_os = "linux")]
 fn test_linux_flag_true_selects_recvmmsg() {
