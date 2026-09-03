@@ -117,6 +117,7 @@ const TORRENT_COLUMNS = `
   t.name,
   t.file_count,
   t.total_size,
+  t.files AS files_raw,
   CASE
     WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN (
       SELECT array_agg(DISTINCT ext) FROM (

@@ -12,8 +12,8 @@ def extract_numeric_features(torrent: dict) -> dict:
     """
     files_raw = torrent.get("files_raw", []) or []
     largest_files = torrent.get("largest_files", []) or []
-    file_count = torrent.get("file_count", 0) or 0
-    total_size = torrent.get("total_size_bytes", 0) or 0
+    file_count = int(torrent.get("file_count", 0) or 0)
+    total_size = int(torrent.get("total_size_bytes", torrent.get("total_size", 0)) or 0)
 
     # Parse all file sizes from files_raw if available
     all_sizes = []
@@ -22,7 +22,7 @@ def extract_numeric_features(torrent: dict) -> dict:
 
     if files_raw and isinstance(files_raw, list) and len(files_raw) > 0 and isinstance(files_raw[0], dict):
         for f in files_raw:
-            length = f.get("length", 0)
+            length = int(f.get("length", 0) or 0)
             if length > 0:
                 all_sizes.append(length)
             # Extract extension from path
