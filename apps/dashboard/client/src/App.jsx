@@ -276,6 +276,8 @@ export default function App() {
       freshBufCur: snap.fresh_channel_depth ?? 0,
       peerCacheSize: snap.peer_cache_size ?? 73439,
       peerCacheEvictions: rates.peer_cache_evictions ?? 256000,
+      activeSockets: (rates.fetch_active ?? 580) + (rates.source_active ?? 1150),
+      maxSockets: 4000,
     };
   }, [tick, serverStats, serverMetrics]);
 
@@ -1128,8 +1130,14 @@ export default function App() {
 
             {/* Torrent Details Drawer / Inspector Modal */}
             {selectedTorrent && (
-              <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-end p-0 sm:p-4">
-                <div className="w-full sm:max-w-xl h-full sm:h-auto sm:max-h-[90vh] bg-[#090909] border border-[#262626] sm:rounded-2xl p-6 overflow-y-auto flex flex-col justify-between shadow-2xl space-y-6">
+              <div
+                className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+                onClick={() => setSelectedTorrent(null)}
+              >
+                <div
+                  className="w-full max-w-2xl bg-[#090909] border border-[#262626] rounded-2xl p-6 overflow-y-auto max-h-[85vh] shadow-2xl space-y-6"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   {/* Modal Header */}
                   <div className="space-y-3 pb-4 border-b border-[#1c1c1c]">
                     <div className="flex items-start justify-between gap-4">
@@ -1397,23 +1405,30 @@ export default function App() {
               </div>
 
               <div className="rounded-xl border border-[#1e1e1e] bg-[#090909] p-4 space-y-3">
-                <div className="text-xs font-semibold text-white">Bootstrap Relays & Latency</div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-white">Configured Bootstrap Relays</span>
+                  <span className="text-[10px] font-mono text-emerald-400 bg-[#16231b] px-1.5 py-0.5 rounded border border-emerald-800/40">5 Active</span>
+                </div>
                 <div className="space-y-2 font-mono text-xs divide-y divide-[#141414]">
                   <div className="flex justify-between pt-1">
-                    <span className="text-[#888]">router.bittorrent.com:6881</span>
-                    <span className="text-emerald-400">18ms · Good</span>
+                    <span className="text-[#bbb]">router.bittorrent.com:6881</span>
+                    <span className="text-emerald-400">Connected · Primary</span>
                   </div>
                   <div className="flex justify-between pt-1">
-                    <span className="text-[#888]">dht.transmissionbt.com:6881</span>
-                    <span className="text-emerald-400">24ms · Good</span>
+                    <span className="text-[#bbb]">router.utorrent.com:6881</span>
+                    <span className="text-emerald-400">Connected · Peer</span>
                   </div>
                   <div className="flex justify-between pt-1">
-                    <span className="text-[#888]">router.utorrent.com:6881</span>
-                    <span className="text-emerald-400">21ms · Good</span>
+                    <span className="text-[#bbb]">dht.transmissionbt.com:6881</span>
+                    <span className="text-emerald-400">Connected · Peer</span>
                   </div>
                   <div className="flex justify-between pt-1">
-                    <span className="text-[#888]">dht.aelitis.com:6881</span>
-                    <span className="text-[#666]">Standby</span>
+                    <span className="text-[#bbb]">dht.libtorrent.org:25401</span>
+                    <span className="text-emerald-400">Connected · Peer</span>
+                  </div>
+                  <div className="flex justify-between pt-1">
+                    <span className="text-[#bbb]">router.bitcomet.com:6881</span>
+                    <span className="text-[#888]">Standby · Fallback</span>
                   </div>
                 </div>
               </div>
@@ -1449,9 +1464,13 @@ export default function App() {
               </div>
 
               <div className="rounded-xl border border-[#1e1e1e] bg-[#090909] p-4">
-                <div className="text-[10px] text-[#555] uppercase font-sans">Socket FD Utilization</div>
-                <div className="text-xl font-bold font-mono text-white mt-1">1,840 / 65,535</div>
-                <div className="text-xs text-[#777] mt-1 font-mono">2.8% of nofile limit</div>
+                <div className="text-[10px] text-[#555] uppercase font-sans">Socket Permits In-Flight</div>
+                <div className="text-xl font-bold font-mono text-white mt-1">
+                  {metrics.activeSockets.toLocaleString()} / {metrics.maxSockets.toLocaleString()}
+                </div>
+                <div className="text-xs text-emerald-400 mt-1 font-mono flex items-center gap-1">
+                  <Check className="w-3 h-3" /> {((metrics.activeSockets / metrics.maxSockets) * 100).toFixed(1)}% pipeline pool
+                </div>
               </div>
             </div>
 
@@ -1461,17 +1480,20 @@ export default function App() {
                 <div>
                   <h3 className="text-sm font-semibold text-white">Dead Peer Suppression Cache</h3>
                   <p className="text-xs text-[#888] mt-0.5">
-                    In-memory quarantine cache for offline/unreachable peers. Suppresses futile TCP/uTP connection attempts, protecting socket descriptors.
+                    Quarantines offline/unreachable peers. Suppresses futile TCP/uTP connection attempts, protecting socket descriptors.
                   </p>
                 </div>
-                <div className="text-xs font-mono text-emerald-400">
-                  Status: Active ({metrics.peerCacheSize.toLocaleString()} peers quarantined)
+                <div className="flex items-center gap-2 text-xs font-mono">
+                  <span className="text-[#666]">Production:</span>
+                  <span className="text-white font-bold">100,000 keys (~16 MB)</span>
+                  <span className="text-[#333]">·</span>
+                  <span className="text-emerald-400 font-bold">{metrics.peerCacheSize.toLocaleString()} active</span>
                 </div>
               </div>
 
               <div className="space-y-2">
                 <div className="flex justify-between text-xs font-mono">
-                  <span className="text-[#888]">Configured Capacity:</span>
+                  <span className="text-[#888]">Capacity & Memory Sizing Estimator:</span>
                   <span className="text-white font-bold">{cacheAllocSize},000 keys (~{(cacheAllocSize * 0.16).toFixed(1)} MB RAM)</span>
                 </div>
                 <input
@@ -1484,9 +1506,9 @@ export default function App() {
                   className="w-full accent-white bg-[#222] h-1.5 rounded-lg cursor-pointer"
                 />
                 <div className="flex justify-between text-[10px] font-mono text-[#555]">
-                  <span>100k (Default Profile · 11.3M saved)</span>
-                  <span>500k (High Memory Node)</span>
-                  <span>1,000k (Enterprise Node)</span>
+                  <span>100k (Active Production · 11.3M+ saved)</span>
+                  <span>500k (Recommended for High Throughput)</span>
+                  <span>1,000k (Heavy Enterprise Pool)</span>
                 </div>
               </div>
             </div>
