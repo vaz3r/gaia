@@ -368,7 +368,10 @@ app.get('/api/analytics', async (req, res) => {
   }
 
   try {
-    const crawlerLogDir = path.join(LOGS_DIR, 'gaia-node');
+    const logsDir = process.env.LOGS_DIR || '/mnt/gaia/logs/crawler';
+    const crawlerLogDir = fs.existsSync(path.join(logsDir, 'gaia-node'))
+      ? path.join(logsDir, 'gaia-node')
+      : logsDir;
     if (!fs.existsSync(crawlerLogDir)) {
       return res.json({
         clients: [
