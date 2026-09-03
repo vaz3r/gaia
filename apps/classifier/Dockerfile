@@ -15,19 +15,16 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir -r requirements.txt
 
-COPY src/ ./src/
+# Copy transformers approach
+COPY transformers/src/ ./transformers/src/
+COPY transformers/config/ ./transformers/config/
+COPY transformers/data/models/transformer/model_int8.onnx ./transformers/data/models/transformer/model_int8.onnx
+COPY transformers/data/models/transformer/tokenizer/ ./transformers/data/models/transformer/tokenizer/
+COPY transformers/data/models/transformer/label_encoder.joblib ./transformers/data/models/transformer/label_encoder.joblib
+
+# Copy shared files
 COPY prompts/ ./prompts/
-COPY config/ ./config/
 COPY data/anchors.json ./data/anchors.json
-
-# Copy trained transformer model (ONNX int8 + tokenizer + label encoder only)
-COPY data/models/transformer/model_int8.onnx ./data/models/transformer/model_int8.onnx
-COPY data/models/transformer/tokenizer/ ./data/models/transformer/tokenizer/
-COPY data/models/transformer/label_encoder.joblib ./data/models/transformer/label_encoder.joblib
-
-# Copy DeBERTa model (ONNX int8 + tokenizer + label encoder)
-# Requires: python src/train_transformer.py --config config/deberta.yaml && python src/export_onnx.py --model_dir data/models/deberta_v3_small
-COPY data/models/transformer_deberta/ ./data/models/transformer_deberta/
 
 RUN mkdir -p /app/data/predictions /app/data/models
 
@@ -38,4 +35,4 @@ ENV FASTEMBED_CACHE_DIR=/app/data/fastembed_cache
 ENV HF_HOME=/app/data/hf_cache
 ENV PYTHONPATH=/app
 
-ENTRYPOINT ["python", "src/classify_batch.py"]
+ENTRYPOINT ["python", "transformers/src/classify_batch.py"]

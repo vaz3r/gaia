@@ -1,92 +1,46 @@
-.PHONY: build run test evaluate clean push-remote-dev rebuild train-transformer export-onnx deploy-transformer train-v2 export-v2 evaluate-v2 export-labeled train-deberta export-deberta evaluate-deberta train-modernbert export-modernbert evaluate-modernbert
+.PHONY: train-mlp train-transformers evaluate-mlp evaluate-transformers export-mlp export-transformers pseudo-label-mlp pseudo-label-transformers export-labeled-mlp export-labeled-transformers test clean
 
-IMAGE := torrent-classifier:latest
-
-build:
-	DOCKER_BUILDKIT=1 docker build -t $(IMAGE) .
-
-rebuild:
-	DOCKER_BUILDKIT=1 docker build --no-cache -t $(IMAGE) .
-
-run:
-	docker compose run --rm classifier
+# ── Infrastructure ───────────────────────────────────────────────────────────
 
 test:
-	python -m pytest tests/ -v
-
-evaluate:
-	python src/evaluate.py \
-		--predictions data/predictions/classified_sample.jsonl \
-		--labels data/labeled_validation.jsonl
-
-train-transformer:
-	python src/train_transformer.py
-
-export-onnx:
-	python src/export_onnx.py
-
-deploy-transformer: build
-	docker save $(IMAGE) | docker --context remote-dev load
+	python -m pytest transformers/tests/ mlp/tests/ -v
 
 clean:
-	docker rmi $(IMAGE) 2>/dev/null || true
-	rm -rf data/predictions/*
+	rm -rf transformers/data/models/mlp_* mlp/data/models/*
 
-push-remote-dev: build
-	docker save $(IMAGE) | docker --context remote-dev load
+# ── MLP ──────────────────────────────────────────────────────────────────────
 
-build-remote-dev:
-	rsync -az --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
-		. core@100.99.147.104:~/classifier/
-	ssh core@100.99.147.104 "cd ~/classifier && DOCKER_BUILDKIT=1 docker build -t $(IMAGE) ."
+train-mlp:
+	cd mlp && $(MAKE) train
 
-# ── v2 pipeline (Gemini-labeled, raw metadata) ────────────────────────────────
+evaluate-mlp:
+	cd mlp && $(MAKE) evaluate
 
-train-v2:
-	python src/train_transformer.py \
-		--data data/gemini_labeled/train.jsonl \
-		--config config/transformer_v2.yaml \
-		--out_dir data/models/transformer_v2
+export-mlp:
+	cd mlp && $(MAKE) export
 
-export-v2:
-	python src/export_onnx.py
+pseudo-label-mlp:
+	cd mlp && $(MAKE) pseudo-label
 
-export-labeled:
-	python src/export_labeled.py --split
+export-labeled-mlp:
+	cd mlp && $(MAKE) export-labeled
 
-evaluate-v2:
-	python src/evaluate.py \
-		--predictions data/predictions/v2.jsonl \
-		--labels data/gemini_labeled/test.jsonl
+# ── Transformers ─────────────────────────────────────────────────────────────
 
-# ── DeBERTa v2 pipeline (DeepSeek-labeled, raw metadata) ──────────────────────
+train-transformers:
+	cd transformers && $(MAKE) train
 
-train-deberta:
-	python src/train_transformer.py \
-		--data data/deepseek_labeled/train.jsonl \
-		--config config/deberta.yaml \
-		--out_dir data/models/deberta_v3_small
+evaluate-transformers:
+	cd transformers && $(MAKE) evaluate
 
-export-deberta:
-	python src/export_onnx.py --model_dir data/models/deberta_v3_small
+export-transformers:
+	cd transformers && $(MAKE) export
 
-evaluate-deberta:
-	python src/evaluate.py \
-		--predictions data/predictions/deberta.jsonl \
-		--labels data/deepseek_labeled/test.jsonl
+pseudo-label-transformers:
+	cd transformers && $(MAKE) pseudo-label
 
-# ── ModernBERT pipeline (PostgreSQL-labeled, raw metadata) ────────────────────
+export-labeled-transformers:
+	cd transformers && $(MAKE) export-labeled
 
-train-modernbert:
-	python src/train_transformer.py \
-		--data data/labeled_data/train.jsonl \
-		--config config/modernbert.yaml \
-		--out_dir data/models/modernbert_base
-
-export-modernbert:
-	python src/export_onnx.py --model_dir data/models/modernbert_base
-
-evaluate-modernbert:
-	python src/evaluate.py \
-		--predictions data/predictions/modernbert.jsonl \
-		--labels data/labeled_data/test.jsonl
+train-transformers-pseudo:
+	cd transformers && $(MAKE) train-pseudo

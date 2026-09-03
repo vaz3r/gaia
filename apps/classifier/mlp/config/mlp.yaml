@@ -1,0 +1,39 @@
+# MLP + TF-IDF classifier config
+# No regex — learns patterns from raw data via TF-IDF
+
+text_builder:
+  max_name_chars: 300
+
+feature_extractor:
+  numeric_features:
+    - file_count
+    - total_size_bytes
+    - avg_file_size
+    - max_file_size
+    - min_file_size
+    - num_extensions
+    - num_folders
+    - largest_file_ratio
+
+mlp:
+  hidden_layer_sizes: [128, 32]
+  activation: relu
+  solver: adam
+  alpha: 0.001
+  batch_size: 128
+  max_iter: 300
+  early_stopping: true
+  random_state: 42
+
+tfidf:
+  word_analyzer: word
+  word_ngram_range: [1, 2]
+  word_min_df: 2
+  word_max_features: 12000
+  char_analyzer: char_wb
+  char_ngram_range: [3, 5]
+  char_min_df: 3
+  char_max_features: 15000
+
+classifier:
+  confidence_threshold: 0.45
