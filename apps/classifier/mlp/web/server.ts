@@ -46,6 +46,7 @@ function startPython(): void {
   pythonProcess = spawn(pythonBin, [pyPath], {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: path.join(__dirname, ".."),
+    detached: false,
   });
 
   let buffer = "";
@@ -281,6 +282,24 @@ const PORT = parseInt(process.env.PORT || "3002", 10);
 
 startPython();
 
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`Classifier web app running at http://${HOST}:${PORT}`);
 });
+
+// --- Cleanup on exit ---
+function cleanup() {
+  console.log("\nShutting down...");
+  if (pythonProcess) {
+    pythonProcess.kill("SIGTERM");
+    // Force kill after 2s if still alive
+    setTimeout(() => {
+      if (pythonProcess) pythonProcess.kill("SIGKILL");
+      process.exit(0);
+    }, 2000);
+  } else {
+    process.exit(0);
+  }
+}
+
+process.on("SIGINT", () => { cleanup(); });
+process.on("SIGTERM", () => { cleanup(); });

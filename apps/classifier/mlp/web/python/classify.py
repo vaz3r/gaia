@@ -77,6 +77,9 @@ def main():
 
         print(json.dumps(result), flush=True)
 
+    # stdin closed (pipe broken), exit cleanly
+    sys.exit(0)
+
 
 if __name__ == "__main__":
     main()
