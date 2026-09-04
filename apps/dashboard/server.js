@@ -353,6 +353,7 @@ app.get('/api/stats', async (req, res) => {
   if (statsCache.ts && now - statsCache.ts < STATS_CACHE_MS) {
     return res.json(statsCache.data);
   }
+  try {
     const [total, v1h, v24h, seen1h, new1h, jobs, heart, sessionUp, hourly24h] = await Promise.all([
       query(`SELECT count(*) AS n FROM torrents`),
       query(`SELECT count(*) AS n FROM torrents WHERE verified_at > now() - interval '1 hour'`),
