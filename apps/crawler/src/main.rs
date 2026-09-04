@@ -224,12 +224,13 @@ async fn main() {
     let janitor_config = JanitorConfig {
         dead_retention_secs: config.storage.janitor_dead_retention_secs,
         verified_retention_secs: config.storage.janitor_verified_retention_secs,
+        peer_outcomes_retention_secs: config.storage.janitor_peer_outcomes_retention_secs,
         batch_size: config.storage.janitor_batch_size,
         batch_sleep_ms: config.storage.janitor_batch_sleep_ms,
     };
     tokio::spawn(async move {
         let report = storage::janitor::run(&janitor_pool, &janitor_config).await;
-        if report.dead_deleted == 0 && report.verified_deleted == 0 {
+        if report.dead_deleted == 0 && report.verified_deleted == 0 && report.peer_outcomes_deleted == 0 {
             tracing::info!("janitor: nothing to clean (table drained)");
         }
         let mut tick =

@@ -95,9 +95,8 @@ app.get('/api/torrents/:infohash', async (req, res) => {
     const r = await query(
       `SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.piece_length, t.total_size,
               t.file_count, t.files, t.fetch_attempts, t.verified_at,
-              s.first_seen, s.last_seen, s.total_seen, s.source_counts
+              t.first_seen, t.last_seen, t.total_seen
        FROM torrents t
-       LEFT JOIN infohash_sightings s ON s.infohash = t.infohash
        WHERE t.infohash = decode($1, 'hex')`,
       [ih]
     );
