@@ -70,10 +70,53 @@ app.get('/api/torrents', async (req, res) => {
     const params = [];
     let where = '';
     let orderBy = sort ? `ORDER BY ${sort} ${orderDir}` : 'ORDER BY verified_at DESC';
+
     if (hasSearch) {
-      params.push(`%${escapeLike(search)}%`, search);
-      where = `WHERE (name ILIKE $1 ESCAPE '\\' OR name % $2)`;
-      if (!sort) orderBy = 'ORDER BY similarity(name, $2) DESC';
+      // Split search into alphanumeric search tokens (ignore single chars unless digit)
+      const tokens = search
+        .split(/[\s._\-+]+/)
+        .map((t) => t.trim())
+        .filter((t) => t.length > 1 || /^\d+$/.test(t));
+
+      if (tokens.length > 1) {
+        // Multi-word search: all significant tokens must match (GIN trigram accelerated)
+        const tokenClauses = [];
+        tokens.forEach((tok) => {
+          params.push(`%${escapeLike(tok)}%`);
+          tokenClauses.push(`name ILIKE $${params.length} ESCAPE '\\'`);
+        });
+
+        // Exact phrase parameter
+        params.push(`%${escapeLike(search)}%`);
+        const fullPhraseParam = `$${params.length}`;
+
+        // Trigram similarity parameter
+        params.push(search);
+        const simParam = `$${params.length}`;
+
+        where = `WHERE ((${tokenClauses.join(' AND ')}) OR name ILIKE ${fullPhraseParam} ESCAPE '\\' OR name % ${simParam})`;
+
+        if (!sort) {
+          orderBy = `ORDER BY 
+            CASE 
+              WHEN name ILIKE ${fullPhraseParam} ESCAPE '\\' THEN 200
+              WHEN (${tokenClauses.join(' AND ')}) THEN 100
+              ELSE 50
+            END DESC,
+            similarity(name, ${simParam}) DESC,
+            verified_at DESC`;
+        }
+      } else {
+        // Single word or short search
+        params.push(`%${escapeLike(search)}%`, search);
+        where = `WHERE (name ILIKE $1 ESCAPE '\\' OR name % $2)`;
+        if (!sort) {
+          orderBy = `ORDER BY 
+            CASE WHEN name ILIKE $1 ESCAPE '\\' THEN 100 ELSE 50 END DESC,
+            similarity(name, $2) DESC,
+            verified_at DESC`;
+        }
+      }
     }
 
     const rowsRes = await query(

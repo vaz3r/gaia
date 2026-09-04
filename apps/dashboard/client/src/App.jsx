@@ -112,7 +112,13 @@ export default function App() {
     setSearchInput(val);
     clearTimeout(searchDebounceRef.current);
     searchDebounceRef.current = setTimeout(() => {
-      setSearchQuery(val.trim());
+      const trimmed = val.trim();
+      setSearchQuery(trimmed);
+      if (trimmed && sortField === 'verified_at') {
+        setSortField('relevance');
+      } else if (!trimmed && sortField === 'relevance') {
+        setSortField('verified_at');
+      }
       setTorrentsPage(1);
     }, 350);
   };
@@ -120,6 +126,9 @@ export default function App() {
   const handleClearSearch = () => {
     setSearchInput('');
     setSearchQuery('');
+    if (sortField === 'relevance') {
+      setSortField('verified_at');
+    }
     setTorrentsPage(1);
   };
 
@@ -236,9 +245,11 @@ export default function App() {
     const params = new URLSearchParams({
       page: torrentsPage,
       limit: torrentsLimit,
-      sort: sortField,
-      order: sortOrder,
     });
+    if (sortField && sortField !== 'relevance') {
+      params.set('sort', sortField);
+      params.set('order', sortOrder);
+    }
     if (searchQuery) params.set('search', searchQuery);
 
     api(`/api/torrents?${params.toString()}`)
@@ -1112,11 +1123,13 @@ export default function App() {
                     }}
                     className="bg-[#000] border border-[#222] rounded-lg px-2.5 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
                   >
+                    {searchQuery && <option value="relevance:desc">Best Match (Relevance)</option>}
                     <option value="verified_at:desc">Newest Verified</option>
                     <option value="verified_at:asc">Oldest Verified</option>
                     <option value="size:desc">Largest Size</option>
                     <option value="size:asc">Smallest Size</option>
                     <option value="files:desc">Most Files</option>
+                    <option value="sightings:desc">Most Active Swarms</option>
                     <option value="name:asc">Name (A-Z)</option>
                   </select>
                 </div>
