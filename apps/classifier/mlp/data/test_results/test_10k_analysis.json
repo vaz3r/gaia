@@ -1,0 +1,187 @@
+{
+  "total": 10000,
+  "category_distribution": {
+    "Adult": 3731,
+    "Television": 1660,
+    "Music": 1355,
+    "Movies": 1145,
+    "Other": 933,
+    "Games": 544,
+    "Applications": 283,
+    "Anime": 254,
+    "Documentaries": 95
+  },
+  "confidence_stats": {
+    "average": 0.9437,
+    "min": 0.2343,
+    "max": 1.0
+  },
+  "confidence_buckets": {
+    "high (>=0.9)": 8414,
+    "medium (0.7-0.9)": 812,
+    "low (0.5-0.7)": 571,
+    "very_low (<0.5)": 203
+  },
+  "low_confidence_examples": [
+    {
+      "infohash": "775c70d2f59a679781618085cade225621bbd558",
+      "name": "Steven Wright - When The Leaves Blow Away",
+      "file_count": 5,
+      "total_size": 734409275,
+      "predicted_category": "Television",
+      "confidence": 0.23434683983348367
+    },
+    {
+      "infohash": "90430c8c014ba68583b32dc4021e0ef8eeb475c2",
+      "name": "Cat and the Canary 1927 Silent",
+      "file_count": 3,
+      "total_size": 1006667646,
+      "predicted_category": "Other",
+      "confidence": 0.27830153545277975
+    },
+    {
+      "infohash": "718f8a896b4bc15af1bed455d8c3ed60a5d3edfb",
+      "name": "Minerva_Myrient",
+      "file_count": 60,
+      "total_size": 127055057753,
+      "predicted_category": "Music",
+      "confidence": 0.28044066325286726
+    },
+    {
+      "infohash": "509a503c56cb3c4486947ba5fbcb1dfeec8335ee",
+      "name": "Meitantei Conan (SP 2) [2007.12.17] (704x396 DivX6)",
+      "file_count": 2,
+      "total_size": 1017161128,
+      "predicted_category": "Movies",
+      "confidence": 0.2845890870062789
+    },
+    {
+      "infohash": "fd9ea3cec9a51478a0ddf231f6ce622960ca6568",
+      "name": "bez-trusikov.com",
+      "file_count": 61,
+      "total_size": 4597628855,
+      "predicted_category": "Other",
+      "confidence": 0.294871039835401
+    },
+    {
+      "infohash": "8116cbd29faaa7bcaedc1c033e2be023c61fcf05",
+      "name": "[Collector] 露出狂想曲",
+      "file_count": 14,
+      "total_size": 16703575773,
+      "predicted_category": "Other",
+      "confidence": 0.29567456586688673
+    },
+    {
+      "infohash": "fdd8d689e7cd09bcc997de93d345a6c1c039a1a0",
+      "name": "Wonderful Life [1964 PAL DVD5][En SingAlong]",
+      "file_count": 6,
+      "total_size": 4205553778,
+      "predicted_category": "Documentaries",
+      "confidence": 0.2980653728783966
+    },
+    {
+      "infohash": "0124ffc75f475f560d7fee3bd78a11f338126a0f",
+      "name": "Si Ling Fashi! Wo Ji Shi Tianzai RUS",
+      "file_count": 16,
+      "total_size": 423643995,
+      "predicted_category": "Anime",
+      "confidence": 0.3023783980311963
+    },
+    {
+      "infohash": "a30d4667d0f19ad381b4d36b9fa800adbcf90c98",
+      "name": "The Big Bang Theory 2s HDTVRip 1080p",
+      "file_count": 23,
+      "total_size": 35716082560,
+      "predicted_category": "Adult",
+      "confidence": 0.3043581864618221
+    },
+    {
+      "infohash": "5625ff8c1d60175bfa1c798717bde366abaa909e",
+      "name": "cream-disraeli-gears-classic-album-dvd-brazilian",
+      "file_count": 38,
+      "total_size": 5263851520,
+      "predicted_category": "Other",
+      "confidence": 0.30526492340486966
+    },
+    {
+      "infohash": "b8e2072584910879a88afa1bb588427e1bb1a322",
+      "name": "ROUGHNECKS",
+      "file_count": 12,
+      "total_size": 13859115135,
+      "predicted_category": "Television",
+      "confidence": 0.3111842461229871
+    },
+    {
+      "infohash": "9b4088d273f9cb053bfb4e860fc7774aa77a45c0",
+      "name": "ONE PUNCH MAN COFFRET BLURAY FRANCAIS-DragonMax",
+      "file_count": 327,
+      "total_size": 97127054384,
+      "predicted_category": "Adult",
+      "confidence": 0.31962880760699514
+    },
+    {
+      "infohash": "7a49fa830141d3376fda261d63cbdcebd232aa31",
+      "name": "Civilization.VI.v1.4.6",
+      "file_count": 1,
+      "total_size": 15215577606,
+      "predicted_category": "Movies",
+      "confidence": 0.3216876859832738
+    },
+    {
+      "infohash": "7b4472c41260dcd5d9ba5b61a63a6ddd525e397b",
+      "name": "The Ra Expeditions (1972 - Sweden, Norway) Thor Heyerdahl",
+      "file_count": 2,
+      "total_size": 830960778,
+      "predicted_category": "Other",
+      "confidence": 0.32315285632229884
+    },
+    {
+      "infohash": "656fff9dbcd6fc3ca9edda7eab01198b9d110c58",
+      "name": "[ www.Speed.Cd ] - Jack and Jill 2011 TS XviD-26k",
+      "file_count": 5,
+      "total_size": 1649857090,
+      "predicted_category": "Movies",
+      "confidence": 0.32528923702649915
+    },
+    {
+      "infohash": "7c6bdf986fe412cf621ac9b85563266f24f67d5a",
+      "name": "le_Contrat_des_Anges_2",
+      "file_count": 13,
+      "total_size": 5957296297,
+      "predicted_category": "Adult",
+      "confidence": 0.32640097241241267
+    },
+    {
+      "infohash": "2f608d3fd58971da3d0232939e2d67232a1cbbe5",
+      "name": "(�o����)�ݤˤʤ��`��ᥤ��",
+      "file_count": 7,
+      "total_size": 264205901,
+      "predicted_category": "Adult",
+      "confidence": 0.3324482649024007
+    },
+    {
+      "infohash": "9d9f039d8b028b4c0f25e6855f2ef4cee1392604",
+      "name": "lurkmore-to-20151226",
+      "file_count": 3,
+      "total_size": 67395511,
+      "predicted_category": "Other",
+      "confidence": 0.3328951643200696
+    },
+    {
+      "infohash": "7acca0be9ff42477a7fdb90e1766e17c87a6ce48",
+      "name": "JCalcPro-2.2.9",
+      "file_count": 29,
+      "total_size": 4748762,
+      "predicted_category": "Applications",
+      "confidence": 0.33290260761916596
+    },
+    {
+      "infohash": "face85ff25286d849277fd38f30f3fb704fcb355",
+      "name": "Morbid Angel - Live Madness 1989",
+      "file_count": 20,
+      "total_size": 3042766848,
+      "predicted_category": "Adult",
+      "confidence": 0.3352437378659799
+    }
+  ]
+}

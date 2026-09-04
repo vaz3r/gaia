@@ -324,6 +324,43 @@ def fetch_unclassified_batch(limit: int) -> tuple[list[dict], str]:
         conn.close()
 
 
+def fetch_torrents_by_infohashes(infohashes: list[str]) -> list[dict]:
+    """Fetch specific torrents by their infohashes."""
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Convert hex strings to bytea for comparison
+            bytea_list = [bytes.fromhex(ih) for ih in infohashes]
+
+            sql = f"""
+            SELECT
+                encode(t.infohash, 'hex') AS infohash,
+                t.name,
+                t.file_count,
+                t.total_size,
+                t.files AS files_raw
+            FROM torrents t
+            WHERE t.infohash = ANY(%s)
+            """
+            cur.execute(sql, (bytea_list,))
+            rows = cur.fetchall()
+
+        torrents = []
+        for row in rows:
+            torrents.append({
+                "infohash": row["infohash"],
+                "name": (row["name"] or "")[:200],
+                "file_count": row["file_count"],
+                "total_size": row["total_size"],
+                "files_raw": row["files_raw"],
+            })
+
+        logger.info(f"Fetched {len(torrents)} torrents by infohash")
+        return torrents
+    finally:
+        conn.close()
+
+
 def build_prompt(torrents: list[dict]) -> str:
     """Build the classification prompt with torrent metadata."""
     prompt = CLASSIFICATION_PROMPT
@@ -331,12 +368,12 @@ def build_prompt(torrents: list[dict]) -> str:
         prompt += f"{i}. infohash: {t['infohash']}\n"
         prompt += f"   name: {t['name']}\n"
         prompt += f"   file_count: {t['file_count']}\n"
-        prompt += f"   total_size_bytes: {t['total_size_bytes']}\n"
-        if t["extensions"]:
+        prompt += f"   total_size_bytes: {t.get('total_size_bytes', t.get('total_size', 0))}\n"
+        if t.get("extensions"):
             prompt += f"   extensions: {', '.join(t['extensions'])}\n"
-        if t["top_folders"]:
+        if t.get("top_folders"):
             prompt += f"   top_folders: {', '.join(t['top_folders'])}\n"
-        if t["largest_files"]:
+        if t.get("largest_files"):
             lf_str = ", ".join(
                 f"{f['name']} ({f['size']} bytes)" for f in t["largest_files"]
             )
@@ -442,6 +479,7 @@ def main():
     parser.add_argument("--loops", type=int, default=1, help="Number of batches to process (default: 1)")
     parser.add_argument("--delay", type=float, default=10.0, help="Seconds between batches (default: 10)")
     parser.add_argument("--max-retries", type=int, default=3, help="Max retries on rate limit (default: 3)")
+    parser.add_argument("--file", type=str, default=None, help="File with infohashes to classify (one per line)")
     args = parser.parse_args()
 
     ensure_schema()
@@ -462,6 +500,16 @@ def main():
     request_times = []
     MAX_RPM = 10  # Max requests per minute
 
+    # If --file is provided, load infohashes from file
+    file_infohashes = []
+    if args.file:
+        with open(args.file) as f:
+            file_infohashes = [line.strip() for line in f if line.strip()]
+        logger.info(f"Loaded {len(file_infohashes)} infohashes from {args.file}")
+        # Calculate loops from file size
+        args.loops = (len(file_infohashes) + args.batch - 1) // args.batch
+        logger.info(f"Will process {args.loops} batches of {args.batch}")
+
     for batch_num in range(1, args.loops + 1):
         logger.info(f"--- Batch {batch_num}/{args.loops} (size={args.batch}) ---")
 
@@ -473,8 +521,15 @@ def main():
             logger.info(f"Rate limit: waiting {wait_time:.1f}s (reached {MAX_RPM} RPM)")
             time.sleep(wait_time)
 
-        # Fetch unclassified torrents (biased toward underrepresented category)
-        torrents, target_category = fetch_unclassified_batch(args.batch)
+        # Fetch torrents — from file or random
+        if file_infohashes:
+            start_idx = (batch_num - 1) * args.batch
+            end_idx = min(start_idx + args.batch, len(file_infohashes))
+            batch_ihs = file_infohashes[start_idx:end_idx]
+            torrents = fetch_torrents_by_infohashes(batch_ihs)
+            target_category = "file-based"
+        else:
+            torrents, target_category = fetch_unclassified_batch(args.batch)
         if not torrents:
             logger.info("No more unclassified torrents. Done.")
             break

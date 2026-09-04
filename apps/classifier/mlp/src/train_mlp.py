@@ -29,13 +29,13 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.utils import resample
+from sklearn.neural_network import MLPClassifier
 
 try:
     from xgboost import XGBClassifier
     HAS_XGB = True
 except ImportError:
     HAS_XGB = False
-    from sklearn.neural_network import MLPClassifier
 
 sys.path.insert(0, str(Path(__file__).parent))
 from core.text_builder import build_input_text
