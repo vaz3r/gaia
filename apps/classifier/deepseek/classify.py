@@ -60,12 +60,12 @@ CATEGORY_PATTERNS = {
     "Adult": r"(porn|xxx|adult|hentai|jav|onlyfans|brazzers|bangbros|nubile|naughty|teamSkeet|realitykings|mofos|caribbeancom|heyzo|1pondo|fc2|uncensored|fc2-ppv|erotic|massage|nude|naked)",
     "Anime": r"\[(Erai-raws|SubsPlease|HorribleSubs|Judas|DKB|ASW|Commie|FFF|Coalgirls|Anime\s*Time|NeoAE|Baha|ANi|VCB-Studio|Kawaiika-Raws|Golumpa|EMBER|SweetSub|Lilith-Raws|NC-Raws|LoliHouse|Moozzi2|ReinForce|Kametsu|Yameii|ToonsHub|Nekomoe|Tenshi)\]|(AT-X|Tokyo\s*MX|BS11|MBS|TBS|TV\s*Tokyo|KBS|Animax|Crunchyroll|Funimation|HIDIVE)",
     "Applications": r"(Adobe|Autodesk|JetBrains|Microsoft\s*Office|Windows\s*(10|11|Server)|VMware|MATLAB|Ableton|FL\s*Studio|Cubase|CorelDRAW|SolidWorks|Photoshop|Illustrator|Premiere|Acrobat|Kaspersky|Bitdefender|CCleaner|Acronis|EaseUS|Tenorshare|Office\s*20\d{2})",
-    "Documentaries": r"(documentary|docuseries|frontline|NOVA|National\s*Geographic|Nat\s*Geo|Discovery\s*Channel|CuriosityStream|NHK|History\s*Channel|Panorama|Horizon|David\s*Attenborough|DW\s*Documentary|Storyville|Disneynature|Louis\s*Theroux)",
+    "Documentaries": r"(documentary|docuseries|frontline|NOVA|National\s*Geographic|Nat\s*Geo|Discovery\s*Channel|CuriosityStream|NHK|History\s*Channel|Panorama|Horizon|David\s*Attenborough|DW\s*Documentary|Storyville|Disneynature|Louis\s*Theroux|BBC\s*Earth|Planet\s*Earth|Blue\s*Planet|Frozen\s*Planet|Life\s*on\s*Earth|Cosmos|Nature\s*of\s*Things|W5|The\s*National|Enquête|Envoyé|Vice|Vox)",
     "Games": r"(FitGirl|CODEX|PLAZA|DODI|SKIDROW|RUNE|EMPRESS|TENOKE|Razor1911|PROPHET|GOG|ElAmigos|KaOs|TinyISO|TiNYiSO|CPY|HOODLUM|RELOADED|DARKSiDERS|Goldberg|SteamRip|Steam-Rip|NSP|XCI|NSZ|CIA|VPK|WBFS|CSO|NDS|GBA)",
-    "Movies": None,  # Fallback: random sampling
+    "Movies": r"(BRRip|BDRip|BluRay|WEBRip|WEB-DL|HDRip|DVDRip|HDTV|1080p|720p|480p|x264|x265|HEVC|AAC|AC3|DTS|YIFY|YTS|RARBG|1337x|YTS\.MX)",
     "Music": r"(discography|album|soundtrack|OST|FLAC|lossless|320kbps|remastered|greatest\s*hits|compilation)",
     "Television": r"(S\d{1,2}E\d{1,3}|Season\s+\d+|Complete\s*Series|Episode\s+\d+)",
-    "Other": None,  # Fallback: random sampling
+    "Other": r"(ebook|pdf|epub|mobi|udemy|coursera|tutorial|course|lecture|textbook|manual|guide|cookbook|recipes|self-help|self-help|meditation|yoga|fitness|workout|training|how-to|masterclass|skillshare|pluralsight|linux|ubuntu|debian|archlinux|centos|docker|kubernetes|aws|azure|gcp|github|gitlab|ansible|terraform|jenkins|ci/cd|devops)",
 }
 
 SCHEMA_SQL = """
@@ -140,8 +140,13 @@ def _pick_target_category(cat_counts: dict) -> str:
     return target
 
 
-def fetch_unclassified_batch(limit: int) -> tuple[list[dict], str]:
-    """Fetch unclassified torrents from PostgreSQL, biased toward target category."""
+def fetch_unclassified_batch(limit: int, target_override: str = None) -> tuple[list[dict], str]:
+    """Fetch unclassified torrents from PostgreSQL, biased toward target category.
+    
+    Args:
+        limit: Number of torrents to fetch
+        target_override: If set, force this category instead of auto-selecting
+    """
     conn = get_db()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -151,7 +156,11 @@ def fetch_unclassified_batch(limit: int) -> tuple[list[dict], str]:
             cur.execute("SELECT label_category, COUNT(*) AS cnt FROM labeled_results GROUP BY label_category")
             cat_counts = {row["label_category"]: row["cnt"] for row in cur.fetchall()}
 
-            target_category = _pick_target_category(cat_counts)
+            # Use override if provided, otherwise auto-select
+            if target_override and target_override in CATEGORY_PATTERNS:
+                target_category = target_override
+            else:
+                target_category = _pick_target_category(cat_counts)
             target_pattern = CATEGORY_PATTERNS.get(target_category)
 
             # Build query: bias toward target category if pattern exists
@@ -482,6 +491,8 @@ def main():
     parser.add_argument("--delay", type=float, default=10.0, help="Seconds between batches (default: 10)")
     parser.add_argument("--max-retries", type=int, default=5, help="Max retries on rate limit (default: 5)")
     parser.add_argument("--file", type=str, default=None, help="File with infohashes to classify (one per line)")
+    parser.add_argument("--target", type=str, default=None, choices=CATEGORY_LABELS,
+                        help="Target specific category (e.g., Documentaries, Other, Anime)")
     args = parser.parse_args()
 
     ensure_schema()
@@ -557,7 +568,8 @@ def main():
             torrents = fetch_torrents_by_infohashes(batch_ihs)
             target_category = "file-based"
         else:
-            torrents, target_category = fetch_unclassified_batch(args.batch)
+            target = args.target if args.target else None
+            torrents, target_category = fetch_unclassified_batch(args.batch, target_override=target)
         if not torrents:
             logger.info("No more unclassified torrents. Done.")
             break
