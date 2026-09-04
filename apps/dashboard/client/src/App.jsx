@@ -317,6 +317,8 @@ export default function App() {
       verifiedToday: serverStats?.verified_last_24h
         ? `+${(serverStats.verified_last_24h / 1000).toFixed(1)}k today`
         : '+248.5k today',
+      verified24h: serverStats?.verified_last_24h ?? 0,
+      verified1h: serverStats?.verified_last_1h ?? 0,
       verifiedRateNum: verifiedRateVal,
       verifiedRate: (verifiedRateVal / 1000).toFixed(1) + 'k/hr',
       discoveredRateNum: discoveredRateVal,
@@ -867,11 +869,11 @@ export default function App() {
 
                 <div className="flex items-center gap-4 text-xs font-mono">
                   <div className="text-[#888]">
-                    Last 24h Total: <span className="text-white font-bold">{metrics.verified24h.toLocaleString()}</span>
+                    Last 24h Total: <span className="text-white font-bold">{(metrics.verified24h ?? 0).toLocaleString()}</span>
                   </div>
                   <div className="h-3 w-[1px] bg-[#222]" />
                   <div className="text-emerald-400">
-                    Trailing 1h: <span className="font-bold">{metrics.verified1h.toLocaleString()}</span>
+                    Trailing 1h: <span className="font-bold">{(metrics.verified1h ?? 0).toLocaleString()}</span>
                   </div>
                 </div>
               </div>
