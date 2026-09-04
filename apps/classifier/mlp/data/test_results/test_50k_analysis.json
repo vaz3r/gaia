@@ -1,0 +1,187 @@
+{
+  "total": 50000,
+  "category_distribution": {
+    "Adult": 19072,
+    "Television": 8026,
+    "Music": 6315,
+    "Movies": 5984,
+    "Other": 4910,
+    "Games": 2567,
+    "Applications": 1428,
+    "Anime": 1339,
+    "Documentaries": 359
+  },
+  "confidence_stats": {
+    "average": 0.9568,
+    "min": 0.2174,
+    "max": 1.0
+  },
+  "confidence_buckets": {
+    "high (>=0.9)": 43850,
+    "medium (0.7-0.9)": 3222,
+    "low (0.5-0.7)": 2197,
+    "very_low (<0.5)": 731
+  },
+  "low_confidence_examples": [
+    {
+      "infohash": "78225b7de5b483537a2ef58e31f80a26637bd34d",
+      "name": "Now.Thats.What.I.Call.Music.Dance.and.Sing.2011.WII.PAL",
+      "file_count": 9,
+      "total_size": 4699981246,
+      "predicted_category": "Applications",
+      "confidence": 0.21736285631430596
+    },
+    {
+      "infohash": "19211666e450a06e5b5b120be18c3c2d5a18ba91",
+      "name": "joe9898@18p2p@ŷ�����������ӽ�",
+      "file_count": 329,
+      "total_size": 2818572793,
+      "predicted_category": "Adult",
+      "confidence": 0.22542089293698714
+    },
+    {
+      "infohash": "6f57a3018a86040c5634ceb888b9b38c403338ca",
+      "name": "�ӤH���v�X��01",
+      "file_count": 8,
+      "total_size": 4958167108,
+      "predicted_category": "Anime",
+      "confidence": 0.24921500112777836
+    },
+    {
+      "infohash": "622d7e81d347ce9396336e83a208e222410a733f",
+      "name": "Lick Library - Jam with Dire Straits",
+      "file_count": 161,
+      "total_size": 8120834356,
+      "predicted_category": "Other",
+      "confidence": 0.2626100578438988
+    },
+    {
+      "infohash": "2fe22cc3692f68b4502dfdc565d18b99a004b422",
+      "name": "Bomber X [SD-VF]",
+      "file_count": 25,
+      "total_size": 5977635257,
+      "predicted_category": "Adult",
+      "confidence": 0.2633834696172183
+    },
+    {
+      "infohash": "fd0e46dec95694375de43f5f0761ccfca8cc725b",
+      "name": "TheFirstRunTFREp.43_TheWarrior_sWay_TheGood_TheBad__TheWeird_InventoryOfOurMost",
+      "file_count": 6,
+      "total_size": 125897211,
+      "predicted_category": "Music",
+      "confidence": 0.2646634097507212
+    },
+    {
+      "infohash": "fbdc9f3ac01a875ae32224e0c47721d4e82196ec",
+      "name": "voyeur-russian(2005)",
+      "file_count": 667,
+      "total_size": 3883538804,
+      "predicted_category": "Television",
+      "confidence": 0.2660076980661393
+    },
+    {
+      "infohash": "7f2d8c283a7fa6a358e17f94404315728820154e",
+      "name": "紫色面具 张婉莹 暑假作业 福建兄妹 我本初中 包小瘦 赵小贝 小表妹 黑皮猪 刘老师 媲美欣 侄女 蘑菇 指挥等1200G学习资料，种子内文本标题有详细介绍，购买联系永久防失联客服邮件 papanenm@gmail.com",
+      "file_count": 17,
+      "total_size": 3619047370,
+      "predicted_category": "Adult",
+      "confidence": 0.26705050554558785
+    },
+    {
+      "infohash": "560f8bb54aba83b19198e47fcbbd84fbd92a22a8",
+      "name": "[DVDISO](18禁アニメ) オトメドリ",
+      "file_count": 7,
+      "total_size": 3046117601,
+      "predicted_category": "Other",
+      "confidence": 0.26792784171715167
+    },
+    {
+      "infohash": "7495e9a3d6f369854abcaacda760accb6894be28",
+      "name": "模特私拍合集168套无水印20-40套",
+      "file_count": 5168,
+      "total_size": 8291342390,
+      "predicted_category": "Adult",
+      "confidence": 0.2679366049270784
+    },
+    {
+      "infohash": "6a9b4b73c217dcf6619aab075de63c5f0551227a",
+      "name": "Power Rangers Operation Overdrive 480p italian mpeg2 mp2",
+      "file_count": 32,
+      "total_size": 10262452224,
+      "predicted_category": "Television",
+      "confidence": 0.2735725210808584
+    },
+    {
+      "infohash": "fbc9e0a194d1d4b2040976321069da38584f6291",
+      "name": "Bokura_ga_Ita",
+      "file_count": 183,
+      "total_size": 8130878153,
+      "predicted_category": "Adult",
+      "confidence": 0.27602719913503304
+    },
+    {
+      "infohash": "f45735e8791ded024f4665b06ba3d9d60445839a",
+      "name": "CPSKY-191  ISO",
+      "file_count": 5,
+      "total_size": 4285686510,
+      "predicted_category": "Games",
+      "confidence": 0.27754560912672677
+    },
+    {
+      "infohash": "fb5c235668a8f209eaed8dbae837eb7100f985ba",
+      "name": "HomeVideo",
+      "file_count": 6,
+      "total_size": 1787496876,
+      "predicted_category": "Movies",
+      "confidence": 0.2818894423778269
+    },
+    {
+      "infohash": "78da2793653dcbc11946d468ca813b473075ff18",
+      "name": "Acer E5-575G RECOVERY",
+      "file_count": 1,
+      "total_size": 10591536640,
+      "predicted_category": "Adult",
+      "confidence": 0.28378413526697716
+    },
+    {
+      "infohash": "81b332c618eddc96004029ba05147e1324bca871",
+      "name": "The Ultimate Iliad & Odyssey_ Two Full-Cast Dramatisations by Homer",
+      "file_count": 2,
+      "total_size": 328719956,
+      "predicted_category": "Applications",
+      "confidence": 0.28507607092213905
+    },
+    {
+      "infohash": "c174260a10ae29c0bcefdf959ff6bfc949decd55",
+      "name": "dokidoki-precure",
+      "file_count": 204,
+      "total_size": 48169484288,
+      "predicted_category": "Anime",
+      "confidence": 0.2873199415922619
+    },
+    {
+      "infohash": "d73b85831dca39c54454763be5ff2f3d9b416952",
+      "name": "Angel Cop [1989]",
+      "file_count": 41,
+      "total_size": 12240333439,
+      "predicted_category": "Television",
+      "confidence": 0.2877387273003627
+    },
+    {
+      "infohash": "563b629a206558e9c2960f969abca467464dbfde",
+      "name": "nike@SOE703 DVDISO",
+      "file_count": 11,
+      "total_size": 4401040501,
+      "predicted_category": "Music",
+      "confidence": 0.28835987426055587
+    },
+    {
+      "infohash": "7bcc8baa380975d4dadf0aa8045b14cda5eb1065",
+      "name": "HiddenShowers_hs647-hs1381",
+      "file_count": 1398,
+      "total_size": 31759124260,
+      "predicted_category": "Television",
+      "confidence": 0.28917279952443997
+    }
+  ]
+}

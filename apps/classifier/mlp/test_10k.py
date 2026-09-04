@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test MLP classifier on 10K torrents from PostgreSQL.
+Test MLP classifier on N torrents from PostgreSQL.
 Exports results and generates accuracy report.
 """
 import json
@@ -25,9 +25,9 @@ DB_CONFIG = {
     "connect_timeout": 10,
 }
 
-MODEL_PATH = "data/models/mlp_7k_human/torrent_classifier.joblib"
+MODEL_PATH = "data/models/mlp_8k_human/torrent_classifier.joblib"
 OUTPUT_DIR = Path("data/test_results")
-NUM_TORRENTS = 10000
+NUM_TORRENTS = 50000
 BATCH_SIZE = 512
 
 # SQL to fetch torrents with full metadata
@@ -163,7 +163,7 @@ def main():
     print(f"\nClassified {len(all_results)} torrents in {elapsed:.1f}s ({len(all_results)/elapsed:.0f} samples/s)")
     
     # Save results
-    output_file = OUTPUT_DIR / "test_10k_results.jsonl"
+    output_file = OUTPUT_DIR / "test_50k_results.jsonl"
     with open(output_file, "w") as f:
         for r in all_results:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
@@ -173,14 +173,14 @@ def main():
     analysis = analyze_results(all_results)
     
     # Save analysis
-    analysis_file = OUTPUT_DIR / "test_10k_analysis.json"
+    analysis_file = OUTPUT_DIR / "test_50k_analysis.json"
     with open(analysis_file, "w") as f:
         json.dump(analysis, f, indent=2, ensure_ascii=False)
     print(f"Analysis saved to: {analysis_file}")
     
     # Print report
     print("\n" + "=" * 60)
-    print("CLASSIFICATION REPORT — 10K Torrents")
+    print("CLASSIFICATION REPORT — 50K Torrents")
     print("=" * 60)
     print(f"\nTotal classified: {analysis['total']}")
     print(f"\nCategory distribution:")
@@ -198,6 +198,24 @@ def main():
     print(f"\nLow confidence examples (most uncertain):")
     for ex in analysis["low_confidence_examples"][:10]:
         print(f"  [{ex['confidence']:.3f}] {ex['predicted_category']:<15} {ex['name'][:60]}")
+    
+    # Export low-confidence items for re-labeling
+    low_conf_items = [r for r in all_results if r["confidence"] < 0.7]
+    low_conf_file = OUTPUT_DIR / "test_50k_low_conf.jsonl"
+    with open(low_conf_file, "w") as f:
+        for r in low_conf_items:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    print(f"\nLow confidence items (<0.7): {len(low_conf_items)} ({len(low_conf_items)/len(all_results)*100:.1f}%)")
+    print(f"Exported to: {low_conf_file}")
+    
+    # Export infohashes for targeted labeling
+    infohashes = [r["infohash"] for r in low_conf_items]
+    ih_file = OUTPUT_DIR / "test_50k_low_conf_infohashes.txt"
+    with open(ih_file, "w") as f:
+        for ih in infohashes:
+            f.write(ih + "\n")
+    print(f"Infohashes exported to: {ih_file}")
+    
     print("\n" + "=" * 60)
 
 
