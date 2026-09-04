@@ -201,15 +201,15 @@ async fn race_transports<S: Send>(
 
 enum FetchOutcome {
     ConnectFailed(SocketAddr, WireError, CandidateSource, Duration),
-    MetadataFailed(WireError, CandidateSource, Duration),
-    Success(Vec<u8>, std::net::SocketAddr, CandidateSource, Duration),
+    MetadataFailed(WireError, CandidateSource, Duration, Vec<SocketAddr>),
+    Success(Vec<u8>, std::net::SocketAddr, CandidateSource, Duration, Vec<SocketAddr>),
 }
 
 fn outcome_source(outcome: &FetchOutcome) -> CandidateSource {
     match outcome {
         FetchOutcome::ConnectFailed(_, _, s, _) => *s,
-        FetchOutcome::MetadataFailed(_, s, _) => *s,
-        FetchOutcome::Success(_, _, s, _) => *s,
+        FetchOutcome::MetadataFailed(_, s, _, _) => *s,
+        FetchOutcome::Success(_, _, s, _, _) => *s,
     }
 }
 
@@ -589,7 +589,8 @@ async fn try_fetch(
                 phase: Some("metadata".to_string()),
                 elapsed_ms: Some(metadata_start.elapsed().as_millis().min(i32::MAX as u128) as i32),
             });
-            FetchOutcome::Success(meta, addr, source, start.elapsed())
+            let pex = session.take_pex_peers();
+            FetchOutcome::Success(meta, addr, source, start.elapsed(), pex)
         }
         Err(e) => {
             metrics.metadata_failed_io.add(1);
@@ -614,7 +615,8 @@ async fn try_fetch(
                 phase: Some("metadata".to_string()),
                 elapsed_ms: Some(metadata_start.elapsed().as_millis().min(i32::MAX as u128) as i32),
             });
-            FetchOutcome::MetadataFailed(e, source, start.elapsed())
+            let pex = session.take_pex_peers();
+            FetchOutcome::MetadataFailed(e, source, start.elapsed(), pex)
         }
     };
     let meta_us = metadata_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
@@ -805,7 +807,17 @@ pub async fn verify_infohash(
             // Active attempt completed
             res = set.join_next(), if !set.is_empty() => {
                 match res {
-                    Some(Ok(FetchOutcome::Success(meta, addr, src, dur))) => {
+                    Some(Ok(FetchOutcome::Success(meta, addr, src, dur, pex_peers))) => {
+                        for peer in pex_peers {
+                            announce_peer_cache.insert(info_hash, peer);
+                            if candidate_queue.len() < race_peers && peers_seen.insert(peer) {
+                                if let Some(exp) = negative_cache.get(&peer.ip()) && *exp > tokio::time::Instant::now() {
+                                    continue;
+                                }
+                                metrics.source_announce_cache_accepted_total.fetch_add(1, Ordering::Relaxed);
+                                candidate_queue.push_back((peer, CandidateSource::AnnounceCache));
+                            }
+                        }
                         result = Some((meta, addr, src, dur));
                         break;
                     }
@@ -813,6 +825,18 @@ pub async fn verify_infohash(
                         let outcome_src = outcome_source(&outcome);
                         if outcome_src != CandidateSource::Dht {
                             active_lead_attempts = active_lead_attempts.saturating_sub(1);
+                        }
+                        if let FetchOutcome::MetadataFailed(_, _, _, pex_peers) = &outcome {
+                            for &peer in pex_peers {
+                                announce_peer_cache.insert(info_hash, peer);
+                                if candidate_queue.len() < race_peers && peers_seen.insert(peer) {
+                                    if let Some(exp) = negative_cache.get(&peer.ip()) && *exp > tokio::time::Instant::now() {
+                                        continue;
+                                    }
+                                    metrics.source_announce_cache_accepted_total.fetch_add(1, Ordering::Relaxed);
+                                    candidate_queue.push_back((peer, CandidateSource::AnnounceCache));
+                                }
+                            }
                         }
                         match outcome {
                             FetchOutcome::ConnectFailed(_addr, WireError::Timeout, src, dur) => {
@@ -868,7 +892,7 @@ pub async fn verify_infohash(
                                 }
                                 sample_failed_peer(&info_hash, &_addr, &metrics, params.failed_peer_sample_rate.max(1));
                             }
-                            FetchOutcome::MetadataFailed(WireError::Timeout, src, dur) => {
+                            FetchOutcome::MetadataFailed(WireError::Timeout, src, dur, _) => {
                                 if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_io.add(1);
                                 metrics.verify_timeouts.add(1);
@@ -876,62 +900,62 @@ pub async fn verify_infohash(
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
-                            FetchOutcome::MetadataFailed(WireError::Handshake, src, dur) => {
+                            FetchOutcome::MetadataFailed(WireError::Handshake, src, dur, _) => {
                                 if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_handshake.add(1);
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
-                            FetchOutcome::MetadataFailed(WireError::NoExtension, src, dur) => {
+                            FetchOutcome::MetadataFailed(WireError::NoExtension, src, dur, _) => {
                                 if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_no_extension.add(1);
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
-                            FetchOutcome::MetadataFailed(WireError::Reject, src, dur) => {
+                            FetchOutcome::MetadataFailed(WireError::Reject, src, dur, _) => {
                                 if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_reject.add(1);
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
-                            FetchOutcome::MetadataFailed(WireError::BadPiece, src, dur) => {
+                            FetchOutcome::MetadataFailed(WireError::BadPiece, src, dur, _) => {
                                 if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_bad_piece.add(1);
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
-                            FetchOutcome::MetadataFailed(WireError::Io(_), src, dur) => {
+                            FetchOutcome::MetadataFailed(WireError::Io(_), src, dur, _) => {
                                 if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_io.add(1);
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
-                            FetchOutcome::MetadataFailed(WireError::Eof, src, dur) => {
+                            FetchOutcome::MetadataFailed(WireError::Eof, src, dur, _) => {
                                 if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_io.add(1);
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
-                            FetchOutcome::MetadataFailed(WireError::Cancelled, src, dur) => {
+                            FetchOutcome::MetadataFailed(WireError::Cancelled, src, dur, _) => {
                                 if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 metrics.fetch_io.add(1);
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
-                            FetchOutcome::MetadataFailed(WireError::NoMetadataSize, src, dur) => {
+                            FetchOutcome::MetadataFailed(WireError::NoMetadataSize, src, dur, _) => {
                                 if matches!(src, CandidateSource::Dht | CandidateSource::AnnounceCache) { dht_meta_failures += 1; }
                                 if src != CandidateSource::Dht {
                                     record_lead_failure_latency(&metrics, dur);
                                 }
                             }
-                            FetchOutcome::Success(_, _, _, _) => {}
+                            FetchOutcome::Success(_, _, _, _, _) => {}
                         }
 
                         // Check lead exhaustion condition after a lead failure
@@ -1832,6 +1856,7 @@ mod tests {
                 "127.0.0.1:6881".parse().unwrap(),
                 CandidateSource::Direct,
                 Duration::from_millis(10),
+                Vec::new(),
             )
         });
 
@@ -1845,7 +1870,7 @@ mod tests {
         tokio::select! {
             biased;
             res = set.join_next(), if !set.is_empty() => {
-                if let Some(Ok(FetchOutcome::Success(meta, _addr, _src, _dur))) = res {
+                if let Some(Ok(FetchOutcome::Success(meta, _addr, _src, _dur, _pex))) = res {
                     result = Some(meta);
                 }
             }
@@ -2124,11 +2149,12 @@ mod tests {
                 "127.0.0.1:6881".parse().unwrap(),
                 CandidateSource::AnnounceCache,
                 Duration::from_millis(150),
+                Vec::new(),
             )
         });
 
         match set.join_next().await {
-            Some(Ok(FetchOutcome::Success(data, _addr, source, dur))) => {
+            Some(Ok(FetchOutcome::Success(data, _addr, source, dur, _pex))) => {
                 assert_eq!(data, vec![1, 2, 3]);
                 assert_eq!(source, CandidateSource::AnnounceCache);
                 assert_eq!(dur, Duration::from_millis(150));
@@ -2647,6 +2673,7 @@ mod tests {
                 "127.0.0.1:6881".parse().unwrap(),
                 CandidateSource::Direct,
                 Duration::from_millis(20),
+                Vec::new(),
             )
         });
         set.spawn(async {
@@ -2655,12 +2682,13 @@ mod tests {
                 WireError::Timeout,
                 CandidateSource::Dht,
                 Duration::from_millis(500),
+                Vec::new(),
             )
         });
 
         let mut dht_meta_failures = 0;
     let mut result = None;
-        if let Some(Ok(FetchOutcome::Success(meta, addr, src, dur))) = set.join_next().await {
+        if let Some(Ok(FetchOutcome::Success(meta, addr, src, dur, _pex))) = set.join_next().await {
             result = Some((meta, addr, src, dur));
             set.abort_all();
             dht_handle.abort();
