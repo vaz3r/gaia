@@ -353,8 +353,7 @@ app.get('/api/stats', async (req, res) => {
   if (statsCache.ts && now - statsCache.ts < STATS_CACHE_MS) {
     return res.json(statsCache.data);
   }
-  try {
-    const [total, v1h, v24h, seen1h, new1h, jobs, heart, sessionUp] = await Promise.all([
+    const [total, v1h, v24h, seen1h, new1h, jobs, heart, sessionUp, hourly24h] = await Promise.all([
       query(`SELECT count(*) AS n FROM torrents`),
       query(`SELECT count(*) AS n FROM torrents WHERE verified_at > now() - interval '1 hour'`),
       query(`SELECT count(*) AS n FROM torrents WHERE verified_at > now() - interval '24 hours'`),
@@ -368,6 +367,23 @@ app.get('/api/stats', async (req, res) => {
       query(`SELECT max(ts) AS ts FROM metrics`),
       query(`SELECT EXTRACT(EPOCH FROM (now() - ts))::int AS uptime_s
              FROM metrics WHERE metric_name = '_session_start' ORDER BY ts DESC LIMIT 1`),
+      query(`
+        WITH hours AS (
+          SELECT generate_series(
+            date_trunc('hour', now()) - interval '23 hours',
+            date_trunc('hour', now()),
+            interval '1 hour'
+          ) AS hr
+        )
+        SELECT 
+          to_char(h.hr, 'HH24:00') AS hour_label,
+          extract(epoch from h.hr) * 1000 AS ts,
+          COALESCE(count(t.infohash), 0)::int AS count
+        FROM hours h
+        LEFT JOIN torrents t ON date_trunc('hour', t.verified_at) = h.hr
+        GROUP BY h.hr
+        ORDER BY h.hr ASC
+      `),
     ]);
 
     const heartbeat = heart.rows[0].ts ? new Date(heart.rows[0].ts) : null;
@@ -382,6 +398,7 @@ app.get('/api/stats', async (req, res) => {
       crawler_heartbeat_ts: heartbeat,
       crawler_stale_s: heartbeat ? Math.round((Date.now() - heartbeat.getTime()) / 1000) : null,
       session_uptime_s: sessionUp.rows[0]?.uptime_s ?? null,
+      hourly_24h: hourly24h.rows,
     };
     statsCache = { ts: Date.now(), data };
     res.json(data);

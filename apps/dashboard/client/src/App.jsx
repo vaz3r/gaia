@@ -56,6 +56,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('overview');
   const [scaleMode, setScaleMode] = useState('log'); // 'linear' | 'log'
   const [hoveredIdx, setHoveredIdx] = useState(null);
+  const [hoveredBarIdx, setHoveredBarIdx] = useState(null);
 
   // Real backend state
   const [serverStats, setServerStats] = useState(null);
@@ -849,6 +850,94 @@ export default function App() {
                 <span>{points[Math.floor((3 * points.length) / 4)]?.time || '10:00'}</span>
                 <span>{points[points.length - 1]?.time || 'Now'}</span>
               </div>
+            </section>
+
+            {/* 24-Hour Hourly Ingestion Bar Chart */}
+            <section className="rounded-xl border border-[#1f1f1f] bg-[#080808] p-5 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#181818]">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-[#999]">24-Hour Verified Ingestion Velocity</span>
+                    <span className="text-[11px] font-mono text-[#555]">· Hourly breakdown from PostgreSQL</span>
+                  </div>
+                  <p className="text-xs text-[#777] mt-0.5">
+                    Cataloged torrent count indexed per hour over the trailing 24 hours.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-4 text-xs font-mono">
+                  <div className="text-[#888]">
+                    Last 24h Total: <span className="text-white font-bold">{metrics.verified24h.toLocaleString()}</span>
+                  </div>
+                  <div className="h-3 w-[1px] bg-[#222]" />
+                  <div className="text-emerald-400">
+                    Trailing 1h: <span className="font-bold">{metrics.verified1h.toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Bar Chart Container */}
+              {(() => {
+                const hourlyData = serverStats?.hourly_24h || [];
+                const maxCount = Math.max(...hourlyData.map((d) => d.count), 1);
+
+                return (
+                  <div className="space-y-2">
+                    <div className="h-36 w-full bg-[#000000] border border-[#161616] rounded-lg p-3 flex items-end justify-between gap-1 sm:gap-2 select-none relative">
+                      {hourlyData.map((bar, i) => {
+                        const heightPct = Math.max(4, Math.round((bar.count / maxCount) * 100));
+                        const isHovered = hoveredBarIdx === i;
+
+                        return (
+                          <div
+                            key={i}
+                            className="flex-1 flex flex-col items-center h-full justify-end group relative cursor-pointer"
+                            onMouseEnter={() => setHoveredBarIdx(i)}
+                            onMouseLeave={() => setHoveredBarIdx(null)}
+                          >
+                            {/* Hover Tooltip */}
+                            {isHovered && (
+                              <div className="absolute -top-12 z-30 pointer-events-none bg-[#141414] border border-[#333] rounded px-2 py-1 text-[11px] font-mono text-white whitespace-nowrap shadow-xl">
+                                <div className="text-[#888]">{bar.hour_label} UTC</div>
+                                <div className="text-emerald-400 font-bold">{bar.count.toLocaleString()} torrents</div>
+                              </div>
+                            )}
+
+                            {/* Bar Pillar */}
+                            <div
+                              className={`w-full rounded-t transition-all duration-150 ${
+                                isHovered
+                                  ? 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.5)]'
+                                  : bar.count >= 30000
+                                  ? 'bg-emerald-500'
+                                  : bar.count >= 15000
+                                  ? 'bg-emerald-600/80'
+                                  : 'bg-[#2a2a2a]'
+                              }`}
+                              style={{ height: `${heightPct}%` }}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* X-Axis Hour Labels */}
+                    <div className="flex justify-between text-[10px] font-mono text-[#555] px-1">
+                      {hourlyData.length > 0 ? (
+                        <>
+                          <span>{hourlyData[0]?.hour_label}</span>
+                          <span>{hourlyData[Math.floor(hourlyData.length * 0.25)]?.hour_label}</span>
+                          <span>{hourlyData[Math.floor(hourlyData.length * 0.5)]?.hour_label}</span>
+                          <span>{hourlyData[Math.floor(hourlyData.length * 0.75)]?.hour_label}</span>
+                          <span className="text-emerald-400">{hourlyData[hourlyData.length - 1]?.hour_label} (Now)</span>
+                        </>
+                      ) : (
+                        <span>Loading hourly data...</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </section>
 
             {/* Tri-card Telemetry Grid */}
