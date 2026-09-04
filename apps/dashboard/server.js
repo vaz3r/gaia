@@ -29,7 +29,14 @@ const STATS_CACHE_MS = parseInt(process.env.STATS_CACHE_MS || '30000', 10);
 let metricsCache = { ts: 0, data: null };
 let statsCache = { ts: 0, data: null };
 
-const SORTS = { verified_at: 'verified_at', size: 'total_size', files: 'file_count', name: 'name' };
+const SORTS = {
+  verified_at: 'verified_at',
+  size: 'total_size',
+  files: 'file_count',
+  name: 'name',
+  health: 'health_score',
+  popularity: 'popularity_score'
+};
 const INTERVALS = ['minute', 'hour', 'day'];
 
 function escapeLike(s) {
@@ -45,7 +52,7 @@ async function query(text, params) {
   }
 }
 
-// GET /api/torrents?search=&sort=verified_at|size|files|name&order=asc|desc&page=&limit=
+// GET /api/torrents?search=&sort=verified_at|size|files|name|health|popularity&order=asc|desc&page=&limit=
 app.get('/api/torrents', async (req, res) => {
   try {
     const search = (req.query.search || '').trim();
@@ -66,7 +73,8 @@ app.get('/api/torrents', async (req, res) => {
     }
 
     const rowsRes = await query(
-      `SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at
+      `SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
+              health_score, popularity_score, swarm_peers, seed_confirmed, last_health_check
        FROM torrents ${where} ${orderBy}
        LIMIT ${limit} OFFSET ${offset}`,
       params
@@ -95,7 +103,8 @@ app.get('/api/torrents/:infohash', async (req, res) => {
     const r = await query(
       `SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.piece_length, t.total_size,
               t.file_count, t.files, t.fetch_attempts, t.verified_at,
-              t.first_seen, t.last_seen, t.total_seen
+              t.first_seen, t.last_seen, t.total_seen,
+              t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed, t.last_health_check
        FROM torrents t
        WHERE t.infohash = decode($1, 'hex')`,
       [ih]

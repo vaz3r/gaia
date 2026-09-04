@@ -1,4 +1,5 @@
 pub mod fetch_pool;
+pub mod health_prober;
 pub mod peer_cache;
 pub mod peer_source;
 #[allow(clippy::module_inception)]

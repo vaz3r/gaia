@@ -278,7 +278,7 @@ async fn main() {
         verify_rx,
         fresh_verify_rx,
         announce_rx,
-        node_routers,
+        node_routers.clone(),
         if config.fetch.utp_enabled {
             utp_socket().await
         } else {
@@ -366,6 +366,15 @@ async fn main() {
         Duration::from_secs(config.cache.peer_cache_cleanup_interval_secs),
     );
 
+    let health_prober = Arc::new(crate::verify::health_prober::HealthProber::new(
+        pool.clone(),
+        node_routers[0].clone(),
+        metrics.clone(),
+        peer_cache.clone(),
+        crate::verify::health_prober::HealthProberConfig::default(),
+    ));
+    let health_prober_run = health_prober.run();
+
     let shutdown_signal = async {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("shutdown signal received, draining batch writer");
@@ -383,6 +392,7 @@ async fn main() {
         _ = pipeline => { eprintln!("[DBG] select: pipeline resolved"); }
         _ = report => { eprintln!("[DBG] select: report resolved"); }
         _ = cache_cleanup => { eprintln!("[DBG] select: cache_cleanup resolved"); }
+        _ = health_prober_run => { eprintln!("[DBG] select: health_prober_run resolved"); }
         _ = shutdown_signal => { eprintln!("[DBG] select: shutdown_signal resolved"); }
     }
 
