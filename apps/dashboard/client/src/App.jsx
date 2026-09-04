@@ -553,34 +553,30 @@ export default function App() {
               {[
                 { id: 'overview', label: 'Overview' },
                 { id: 'browser', label: 'Torrent Browser', badge: `${metrics.totalVerified}` },
-                { id: 'analysis', label: 'Analysis', icon: Flame },
+                { id: 'analysis', label: 'Analysis' },
                 { id: 'routing', label: 'DHT Routing' },
                 { id: 'diagnostics', label: 'Diagnostics' },
-              ].map((tab) => {
-                const IconComponent = tab.icon;
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => {
-                      setActiveTab(tab.id);
-                      setSelectedTorrent(null);
-                    }}
-                    className={`px-2.5 py-1 text-xs rounded-md transition-colors flex items-center gap-1.5 ${
-                      activeTab === tab.id
-                        ? 'bg-[#1a1a1a] text-white font-medium border border-[#333]'
-                        : 'text-[#888] hover:text-[#ededed] hover:bg-[#111]'
-                    }`}
-                  >
-                    {IconComponent && <IconComponent className="w-3 h-3 text-rose-400" />}
-                    <span>{tab.label}</span>
-                    {tab.badge && (
-                      <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-[#242424] text-[#aaa]">
-                        {tab.badge}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    setSelectedTorrent(null);
+                  }}
+                  className={`px-2.5 py-1 text-xs rounded-md transition-colors flex items-center gap-1.5 ${
+                    activeTab === tab.id
+                      ? 'bg-[#1a1a1a] text-white font-medium border border-[#333]'
+                      : 'text-[#888] hover:text-[#ededed] hover:bg-[#111]'
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                  {tab.badge && (
+                    <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-[#242424] text-[#aaa]">
+                      {tab.badge}
+                    </span>
+                  )}
+                </button>
+              ))}
             </nav>
           </div>
 
@@ -1317,229 +1313,6 @@ export default function App() {
                 </div>
               </div>
             )}
-
-            {/* Torrent Details Drawer / Inspector Modal */}
-            {selectedTorrent && (
-              <div
-                className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
-                onClick={() => setSelectedTorrent(null)}
-              >
-                <div
-                  className="w-full max-w-2xl bg-[#090909] border border-[#262626] rounded-2xl p-6 overflow-y-auto max-h-[85vh] shadow-2xl space-y-6"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {/* Modal Header */}
-                  <div className="space-y-3 pb-4 border-b border-[#1c1c1c]">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-[#181818] text-emerald-400 border border-[#282828]">
-                          {selectedTorrent.file_count > 1 ? 'Multi-File Bundle' : 'Single Payload'}
-                        </span>
-                        <h2 className="text-base font-semibold text-white mt-2 leading-tight">
-                          {selectedTorrent.name || `payload-${(selectedTorrent.infohash || selectedTorrent.hash).slice(0, 8)}`}
-                        </h2>
-                      </div>
-                      <button
-                        onClick={() => setSelectedTorrent(null)}
-                        className="p-1.5 rounded-lg border border-[#222] bg-[#111] text-[#666] hover:text-white transition-colors"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    {/* Hash Pill with Copy Button */}
-                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#000] border border-[#1e1e1e] font-mono text-xs">
-                      <div className="truncate text-[#aaa] text-[11px]">
-                        {selectedTorrent.infohash || selectedTorrent.hash}
-                      </div>
-                      <button
-                        onClick={() => copyToClipboard(selectedTorrent.infohash || selectedTorrent.hash, 'hash')}
-                        className="flex items-center gap-1.5 text-[11px] px-2 py-1 rounded bg-[#161616] text-[#ccc] hover:text-white border border-[#262626] transition-colors ml-3 shrink-0"
-                      >
-                        {copiedHash === (selectedTorrent.infohash || selectedTorrent.hash) ? (
-                          <>
-                            <Check className="w-3 h-3 text-emerald-400" />
-                            <span className="text-emerald-400">Copied</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3 h-3" />
-                            <span>Copy Hash</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Metadata Specs Grid */}
-                  <div className="grid grid-cols-3 gap-3 font-mono text-xs">
-                    <div className="p-3 rounded-lg bg-[#000] border border-[#1a1a1a]">
-                      <div className="text-[10px] text-[#555] uppercase font-sans">Total Size</div>
-                      <div className="text-white font-semibold mt-0.5">
-                        {formatBytes(selectedTorrent.total_size)}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-lg bg-[#000] border border-[#1a1a1a]">
-                      <div className="text-[10px] text-[#555] uppercase font-sans">Piece Length</div>
-                      <div className="text-white font-semibold mt-0.5">
-                        {selectedTorrent.pieceLength || '2.0 MB'}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-lg bg-[#000] border border-[#1a1a1a]">
-                      <div className="text-[10px] text-[#555] uppercase font-sans">Files Count</div>
-                      <div className="text-white font-semibold mt-0.5">
-                        {selectedTorrent.file_count || 1}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* File Tree List */}
-                  <div className="space-y-2">
-                    <div className="text-xs font-semibold text-[#888] uppercase tracking-wider flex items-center justify-between">
-                      <span>Payload File Structure ({selectedTorrent.files?.length || selectedTorrent.file_count || 1})</span>
-                      <span className="text-[10px] font-mono text-[#555]">Verified SHA1</span>
-                    </div>
-
-                    <div className="rounded-lg border border-[#1a1a1a] bg-[#000] divide-y divide-[#141414] overflow-hidden max-h-48 overflow-y-auto font-mono text-xs">
-                      {detailLoading ? (
-                        <div className="p-4 text-center text-[#666] flex items-center justify-center gap-2">
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Loading verified file manifest...
-                        </div>
-                      ) : selectedTorrent.files && selectedTorrent.files.length > 0 ? (
-                        selectedTorrent.files.map((f, idx) => {
-                          const filePath = Array.isArray(f.path) ? f.path.join('/') : f.path || f.name || 'file';
-                          const fileLen = f.length || f.size || 0;
-                          return (
-                            <div key={idx} className="p-2.5 flex items-center justify-between hover:bg-[#0c0c0c]">
-                              <div className="flex items-center gap-2 truncate pr-3">
-                                <Folder className="w-3.5 h-3.5 text-[#666] shrink-0" />
-                                <span className="truncate text-[#bbb]">{filePath}</span>
-                              </div>
-                              <span className="text-[#666] text-[11px] shrink-0">{formatBytes(fileLen)}</span>
-                            </div>
-                          );
-                        })
-                      ) : (
-                        <div className="p-2.5 flex items-center justify-between">
-                          <div className="flex items-center gap-2 truncate pr-3">
-                            <Folder className="w-3.5 h-3.5 text-[#666] shrink-0" />
-                            <span className="truncate text-[#bbb]">
-                              {selectedTorrent.name || 'payload.bin'}
-                            </span>
-                          </div>
-                          <span className="text-[#666] text-[11px] shrink-0">
-                            {formatBytes(selectedTorrent.total_size)}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Health & Popularity Meters */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 space-y-2">
-                      <div className="flex items-center justify-between text-xs font-mono">
-                        <span className="text-[#888] flex items-center gap-1.5">
-                          <Activity className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Swarm Health</span>
-                        </span>
-                        <span
-                          className={`font-bold ${
-                            (selectedTorrent.health_score ?? 0) >= 70
-                              ? 'text-emerald-400'
-                              : (selectedTorrent.health_score ?? 0) >= 40
-                              ? 'text-amber-400'
-                              : 'text-rose-400'
-                          }`}
-                        >
-                          {selectedTorrent.health_score ?? 0}%
-                        </span>
-                      </div>
-                      <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all ${
-                            (selectedTorrent.health_score ?? 0) >= 70
-                              ? 'bg-emerald-400'
-                              : (selectedTorrent.health_score ?? 0) >= 40
-                              ? 'bg-amber-400'
-                              : 'bg-rose-500'
-                          }`}
-                          style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.health_score ?? 0))}%` }}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1 border-t border-[#141414]">
-                        <span>{selectedTorrent.seed_confirmed ? '✓ Confirmed Seed' : 'Unconfirmed Seed'}</span>
-                        <span>{selectedTorrent.swarm_peers || 1} DHT Peers</span>
-                      </div>
-                    </div>
-
-                    <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 space-y-2">
-                      <div className="flex items-center justify-between text-xs font-mono">
-                        <span className="text-[#888] flex items-center gap-1.5">
-                          <TrendingUp className="w-3.5 h-3.5 text-cyan-400" />
-                          <span>Popularity</span>
-                        </span>
-                        <span className="text-cyan-400 font-bold font-mono">
-                          {selectedTorrent.popularity_score ?? 0}%
-                        </span>
-                      </div>
-                      <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-cyan-400 transition-all"
-                          style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.popularity_score ?? 0))}%` }}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1 border-t border-[#141414]">
-                        <span>Velocity: Active</span>
-                        <span>{Number(selectedTorrent.total_seen || 1).toLocaleString()} Hits</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Sighting & Verification Stats */}
-                  <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 text-xs font-mono space-y-1.5">
-                    <div className="flex justify-between text-[#888]">
-                      <span>Verified At:</span>
-                      <span className="text-white">
-                        {selectedTorrent.verified_at ? new Date(selectedTorrent.verified_at).toLocaleString() : '—'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-[#888]">
-                      <span>First Discovered:</span>
-                      <span className="text-white">
-                        {selectedTorrent.first_seen ? new Date(selectedTorrent.first_seen).toLocaleString() : '—'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-[#888]">
-                      <span>Sightings Count:</span>
-                      <span className="text-emerald-400 font-bold">
-                        {selectedTorrent.total_seen ? Number(selectedTorrent.total_seen).toLocaleString() : '1'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Modal Action Buttons */}
-                  <div className="pt-4 border-t border-[#1c1c1c] flex items-center justify-between gap-3">
-                    <button
-                      onClick={() => copyToClipboard(generateMagnetLink(selectedTorrent), 'magnet')}
-                      className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-white text-black font-semibold text-xs hover:bg-[#e0e0e0] transition-colors"
-                    >
-                      {copiedMagnet ? (
-                        <>
-                          <Check className="w-4 h-4 text-emerald-600" />
-                          <span>Magnet URI Copied!</span>
-                        </>
-                      ) : (
-                        <>
-                          <DownloadCloud className="w-4 h-4 text-black" />
-                          <span>Copy Magnet URI</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -2255,6 +2028,229 @@ export default function App() {
                 ) : (
                   <div className="text-[#555] text-[11px]">Streaming live daemon logs from cluster...</div>
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Global Torrent Details Drawer / Inspector Modal */}
+        {selectedTorrent && (
+          <div
+            className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setSelectedTorrent(null)}
+          >
+            <div
+              className="w-full max-w-2xl bg-[#090909] border border-[#262626] rounded-2xl p-6 overflow-y-auto max-h-[85vh] shadow-2xl space-y-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal Header */}
+              <div className="space-y-3 pb-4 border-b border-[#1c1c1c]">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-[#181818] text-emerald-400 border border-[#282828]">
+                      {selectedTorrent.file_count > 1 ? 'Multi-File Bundle' : 'Single Payload'}
+                    </span>
+                    <h2 className="text-base font-semibold text-white mt-2 leading-tight">
+                      {selectedTorrent.name || `payload-${(selectedTorrent.infohash || selectedTorrent.hash).slice(0, 8)}`}
+                    </h2>
+                  </div>
+                  <button
+                    onClick={() => setSelectedTorrent(null)}
+                    className="p-1.5 rounded-lg border border-[#222] bg-[#111] text-[#666] hover:text-white transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Hash Pill with Copy Button */}
+                <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#000] border border-[#1e1e1e] font-mono text-xs">
+                  <div className="truncate text-[#aaa] text-[11px]">
+                    {selectedTorrent.infohash || selectedTorrent.hash}
+                  </div>
+                  <button
+                    onClick={() => copyToClipboard(selectedTorrent.infohash || selectedTorrent.hash, 'hash')}
+                    className="flex items-center gap-1.5 text-[11px] px-2 py-1 rounded bg-[#161616] text-[#ccc] hover:text-white border border-[#262626] transition-colors ml-3 shrink-0"
+                  >
+                    {copiedHash === (selectedTorrent.infohash || selectedTorrent.hash) ? (
+                      <>
+                        <Check className="w-3 h-3 text-emerald-400" />
+                        <span className="text-emerald-400">Copied</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3" />
+                        <span>Copy Hash</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Metadata Specs Grid */}
+              <div className="grid grid-cols-3 gap-3 font-mono text-xs">
+                <div className="p-3 rounded-lg bg-[#000] border border-[#1a1a1a]">
+                  <div className="text-[10px] text-[#555] uppercase font-sans">Total Size</div>
+                  <div className="text-white font-semibold mt-0.5">
+                    {formatBytes(selectedTorrent.total_size)}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-[#000] border border-[#1a1a1a]">
+                  <div className="text-[10px] text-[#555] uppercase font-sans">Piece Length</div>
+                  <div className="text-white font-semibold mt-0.5">
+                    {selectedTorrent.pieceLength || '2.0 MB'}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-[#000] border border-[#1a1a1a]">
+                  <div className="text-[10px] text-[#555] uppercase font-sans">Files Count</div>
+                  <div className="text-white font-semibold mt-0.5">
+                    {selectedTorrent.file_count || 1}
+                  </div>
+                </div>
+              </div>
+
+              {/* File Tree List */}
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-[#888] uppercase tracking-wider flex items-center justify-between">
+                  <span>Payload File Structure ({selectedTorrent.files?.length || selectedTorrent.file_count || 1})</span>
+                  <span className="text-[10px] font-mono text-[#555]">Verified SHA1</span>
+                </div>
+
+                <div className="rounded-lg border border-[#1a1a1a] bg-[#000] divide-y divide-[#141414] overflow-hidden max-h-48 overflow-y-auto font-mono text-xs">
+                  {detailLoading ? (
+                    <div className="p-4 text-center text-[#666] flex items-center justify-center gap-2">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Loading verified file manifest...
+                    </div>
+                  ) : selectedTorrent.files && selectedTorrent.files.length > 0 ? (
+                    selectedTorrent.files.map((f, idx) => {
+                      const filePath = Array.isArray(f.path) ? f.path.join('/') : f.path || f.name || 'file';
+                      const fileLen = f.length || f.size || 0;
+                      return (
+                        <div key={idx} className="p-2.5 flex items-center justify-between hover:bg-[#0c0c0c]">
+                          <div className="flex items-center gap-2 truncate pr-3">
+                            <Folder className="w-3.5 h-3.5 text-[#666] shrink-0" />
+                            <span className="truncate text-[#bbb]">{filePath}</span>
+                          </div>
+                          <span className="text-[#666] text-[11px] shrink-0">{formatBytes(fileLen)}</span>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="p-2.5 flex items-center justify-between">
+                      <div className="flex items-center gap-2 truncate pr-3">
+                        <Folder className="w-3.5 h-3.5 text-[#666] shrink-0" />
+                        <span className="truncate text-[#bbb]">
+                          {selectedTorrent.name || 'payload.bin'}
+                        </span>
+                      </div>
+                      <span className="text-[#666] text-[11px] shrink-0">
+                        {formatBytes(selectedTorrent.total_size)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Health & Popularity Meters */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span className="text-[#888] flex items-center gap-1.5">
+                      <Activity className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Swarm Health</span>
+                    </span>
+                    <span
+                      className={`font-bold ${
+                        (selectedTorrent.health_score ?? 0) >= 70
+                          ? 'text-emerald-400'
+                          : (selectedTorrent.health_score ?? 0) >= 40
+                          ? 'text-amber-400'
+                          : 'text-rose-400'
+                      }`}
+                    >
+                      {selectedTorrent.health_score ?? 0}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${
+                        (selectedTorrent.health_score ?? 0) >= 70
+                          ? 'bg-emerald-400'
+                          : (selectedTorrent.health_score ?? 0) >= 40
+                          ? 'bg-amber-400'
+                          : 'bg-rose-500'
+                      }`}
+                      style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.health_score ?? 0))}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1 border-t border-[#141414]">
+                    <span>{selectedTorrent.seed_confirmed ? '✓ Confirmed Seed' : 'Unconfirmed Seed'}</span>
+                    <span>{selectedTorrent.swarm_peers || 1} DHT Peers</span>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span className="text-[#888] flex items-center gap-1.5">
+                      <TrendingUp className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Popularity</span>
+                    </span>
+                    <span className="text-cyan-400 font-bold font-mono">
+                      {selectedTorrent.popularity_score ?? 0}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-cyan-400 transition-all"
+                      style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.popularity_score ?? 0))}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1 border-t border-[#141414]">
+                    <span>Velocity: Active</span>
+                    <span>{Number(selectedTorrent.total_seen || 1).toLocaleString()} Hits</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sighting & Verification Stats */}
+              <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 text-xs font-mono space-y-1.5">
+                <div className="flex justify-between text-[#888]">
+                  <span>Verified At:</span>
+                  <span className="text-white">
+                    {selectedTorrent.verified_at ? new Date(selectedTorrent.verified_at).toLocaleString() : '—'}
+                  </span>
+                </div>
+                <div className="flex justify-between text-[#888]">
+                  <span>First Discovered:</span>
+                  <span className="text-white">
+                    {selectedTorrent.first_seen ? new Date(selectedTorrent.first_seen).toLocaleString() : '—'}
+                  </span>
+                </div>
+                <div className="flex justify-between text-[#888]">
+                  <span>Sightings Count:</span>
+                  <span className="text-emerald-400 font-bold">
+                    {selectedTorrent.total_seen ? Number(selectedTorrent.total_seen).toLocaleString() : '1'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Modal Action Buttons */}
+              <div className="pt-4 border-t border-[#1c1c1c] flex items-center justify-between gap-3">
+                <button
+                  onClick={() => copyToClipboard(generateMagnetLink(selectedTorrent), 'magnet')}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-white text-black font-semibold text-xs hover:bg-[#e0e0e0] transition-colors"
+                >
+                  {copiedMagnet ? (
+                    <>
+                      <Check className="w-4 h-4 text-emerald-600" />
+                      <span>Magnet URI Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <DownloadCloud className="w-4 h-4 text-black" />
+                      <span>Copy Magnet URI</span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           </div>
