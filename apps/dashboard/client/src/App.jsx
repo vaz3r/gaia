@@ -48,7 +48,7 @@ import {
   BarChart3
 } from 'lucide-react';
 import { api, loadTrackers, magnetFrom } from './api.js';
-import { formatBytes, formatNum, formatTime, formatUptime } from './utils.js';
+import { formatBytes, formatNum, formatTime, formatUptime, formatDubaiDate, formatDubaiTimeHM } from './utils.js';
 import AnalysisView from './components/AnalysisView.jsx';
 
 export default function App() {
@@ -190,8 +190,7 @@ export default function App() {
           const pts = [];
 
           for (let i = 1; i < vData.length; i++) {
-            const t = new Date(vData[i].t);
-            const timeStr = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+            const timeStr = formatDubaiTimeHM(vData[i].t);
             const dtMin = Math.max(1, (vData[i].t - vData[i - 1].t) / 60000);
 
             // Verified rate per hour
@@ -585,6 +584,13 @@ export default function App() {
 
           {/* Right Controls */}
           <div className="flex items-center gap-3">
+            {/* Timezone Indicator */}
+            <div className="hidden sm:flex items-center gap-1.5 bg-[#0c0c0c] border border-[#222] px-2.5 py-1 rounded-full text-[11px] font-mono text-[#888]">
+              <Clock className="w-3 h-3 text-[#666]" />
+              <span className="text-[#ededed]">{formatDubaiTimeHM(Date.now())}</span>
+              <span className="text-[#555]">GST (UTC+4)</span>
+            </div>
+
             {/* Live Indicator */}
             <div className="flex items-center gap-2 bg-[#0c0c0c] border border-[#222] px-2.5 py-1 rounded-full text-[11px] text-[#888]">
               <span className="relative flex h-2 w-2">
@@ -860,10 +866,10 @@ export default function App() {
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-semibold uppercase tracking-wider text-[#999]">24-Hour Verified Ingestion Velocity</span>
-                    <span className="text-[11px] font-mono text-[#555]">· Hourly breakdown from PostgreSQL</span>
+                    <span className="text-[11px] font-mono text-[#555]">· Asia/Dubai (GST · UTC+4)</span>
                   </div>
                   <p className="text-xs text-[#777] mt-0.5">
-                    Cataloged torrent count indexed per hour over the trailing 24 hours.
+                    Cataloged torrent count indexed per hour over the trailing 24 hours (Dubai local time).
                   </p>
                 </div>
 
@@ -900,7 +906,7 @@ export default function App() {
                             {/* Hover Tooltip */}
                             {isHovered && (
                               <div className="absolute -top-12 z-30 pointer-events-none bg-[#141414] border border-[#333] rounded px-2 py-1 text-[11px] font-mono text-white whitespace-nowrap shadow-xl">
-                                <div className="text-[#888]">{bar.hour_label} UTC</div>
+                                <div className="text-[#888]">{bar.hour_label} GST (UTC+4)</div>
                                 <div className="text-emerald-400 font-bold">{bar.count.toLocaleString()} torrents</div>
                               </div>
                             )}
@@ -2307,13 +2313,13 @@ export default function App() {
                 <div className="flex justify-between text-[#888]">
                   <span>Verified At:</span>
                   <span className="text-white">
-                    {selectedTorrent.verified_at ? new Date(selectedTorrent.verified_at).toLocaleString() : '—'}
+                    {selectedTorrent.verified_at ? formatDubaiDate(selectedTorrent.verified_at) : '—'}
                   </span>
                 </div>
                 <div className="flex justify-between text-[#888]">
                   <span>First Discovered:</span>
                   <span className="text-white">
-                    {selectedTorrent.first_seen ? new Date(selectedTorrent.first_seen).toLocaleString() : '—'}
+                    {selectedTorrent.first_seen ? formatDubaiDate(selectedTorrent.first_seen) : '—'}
                   </span>
                 </div>
                 <div className="flex justify-between text-[#888]">

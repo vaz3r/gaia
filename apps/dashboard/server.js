@@ -377,7 +377,7 @@ app.get('/api/stats', async (req, res) => {
           ) AS hr
         )
         SELECT 
-          to_char(h.hr, 'HH24:00') AS hour_label,
+          to_char(h.hr AT TIME ZONE 'Asia/Dubai', 'HH24:00') AS hour_label,
           extract(epoch from h.hr) * 1000 AS ts,
           COALESCE(count(t.infohash), 0)::int AS count
         FROM hours h

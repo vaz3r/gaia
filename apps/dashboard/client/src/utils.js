@@ -13,15 +13,45 @@ export function formatNum(n) {
   return String(Math.round(n))
 }
 
+export const TIMEZONE = 'Asia/Dubai';
+
 export function formatTime(ts) {
   if (!ts) return '—'
   const d = new Date(ts)
-  return d.toLocaleString(undefined, {
+  return d.toLocaleString('en-US', {
+    timeZone: TIMEZONE,
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
+    hour12: false,
+  })
+}
+
+export function formatDubaiTimeHM(ts) {
+  if (!ts) return '—'
+  const d = new Date(ts)
+  return d.toLocaleTimeString('en-US', {
+    timeZone: TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
+export function formatDubaiDate(ts) {
+  if (!ts) return '—'
+  const d = new Date(ts)
+  return d.toLocaleString('en-US', {
+    timeZone: TIMEZONE,
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
   })
 }
 
