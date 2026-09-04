@@ -15,7 +15,9 @@ import argparse
 import json
 import logging
 import os
+import random
 import re
+import ssl
 import sys
 import time
 from pathlib import Path
@@ -25,7 +27,7 @@ import psycopg2.extras
 
 # Add parent dir so we can import the deepseek package
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from deepseek import DeepSeekClient
+from deepseek import DeepSeekClient, RateLimitError
 
 # --- Logging ---
 logging.basicConfig(
@@ -478,7 +480,7 @@ def main():
     parser.add_argument("--batch", type=int, default=50, help="Batch size (default: 50)")
     parser.add_argument("--loops", type=int, default=1, help="Number of batches to process (default: 1)")
     parser.add_argument("--delay", type=float, default=10.0, help="Seconds between batches (default: 10)")
-    parser.add_argument("--max-retries", type=int, default=3, help="Max retries on rate limit (default: 3)")
+    parser.add_argument("--max-retries", type=int, default=5, help="Max retries on rate limit (default: 5)")
     parser.add_argument("--file", type=str, default=None, help="File with infohashes to classify (one per line)")
     args = parser.parse_args()
 
@@ -500,6 +502,15 @@ def main():
     request_times = []
     MAX_RPM = 10  # Max requests per minute
 
+    # Circuit breaker: track failures in rolling window
+    failure_times = []
+    CIRCUIT_BREAKER_THRESHOLD = 0.25  # Stop if 25% of recent requests failed
+    CIRCUIT_BREAKER_WINDOW = 300  # 5 minute rolling window
+    CIRCUIT_BREAKER_COOLDOWN = 180  # 3 minute cooldown
+
+    # Session reuse: store conversation_id to reuse across batches
+    conversation_id = None
+
     # If --file is provided, load infohashes from file
     file_infohashes = []
     if args.file:
@@ -512,6 +523,23 @@ def main():
 
     for batch_num in range(1, args.loops + 1):
         logger.info(f"--- Batch {batch_num}/{args.loops} (size={args.batch}) ---")
+
+        # Circuit breaker check
+        now = time.time()
+        failure_times = [t for t in failure_times if now - t < CIRCUIT_BREAKER_WINDOW]
+        total_recent = len(request_times) + len(failure_times)
+        if total_recent > 10:  # Only check after enough data
+            failure_rate = len(failure_times) / total_recent
+            if failure_rate > CIRCUIT_BREAKER_THRESHOLD:
+                logger.warning(
+                    f"Circuit breaker: {failure_rate:.1%} failure rate in last {CIRCUIT_BREAKER_WINDOW}s. "
+                    f"Cooling down for {CIRCUIT_BREAKER_COOLDOWN}s..."
+                )
+                time.sleep(CIRCUIT_BREAKER_COOLDOWN)
+                failure_times.clear()
+                # Reset session after cooldown
+                conversation_id = None
+                continue
 
         # Rate limiting: ensure we don't exceed MAX_RPM
         now = time.time()
@@ -540,24 +568,62 @@ def main():
         prompt += "Pay extra attention to identifying torrents that match this category.\n"
         logger.info(f"Sending {len(torrents)} torrents to DeepSeek (target: {target_category})...")
 
-        # Exponential backoff retry loop
+        # Exponential backoff retry loop with jitter
         success = False
         for attempt in range(args.max_retries):
             try:
-                reply = client.chat(prompt, model="expert")
+                reply = client.chat(
+                    prompt,
+                    conversation_id=conversation_id,
+                    model="expert" if conversation_id is None else None,
+                )
+                conversation_id = reply.conversation_id  # Reuse for next batch
                 request_times.append(time.time())
                 logger.info(f"Got response ({len(reply.text)} chars)")
                 success = True
                 break
+            except RateLimitError as e:
+                # Use Retry-After from the response
+                wait_time = max(e.retry_after, (2 ** attempt) * 10)
+                wait_time += random.uniform(0, wait_time * 0.2)  # Add 20% jitter
+                logger.warning(
+                    f"Rate limited. Retrying in {wait_time:.1f}s "
+                    f"(attempt {attempt + 1}/{args.max_retries}, Retry-After: {e.retry_after}s)"
+                )
+                failure_times.append(time.time())
+                time.sleep(wait_time)
+                # Reset conversation on rate limit (might be session-specific)
+                conversation_id = None
+            except (ssl.SSLError, ConnectionError, OSError) as e:
+                # Transient network/SSL errors — retry with backoff
+                wait_time = (2 ** attempt) * 15 + random.uniform(0, 10)
+                logger.warning(
+                    f"Network/SSL error: {e}. Retrying in {wait_time:.1f}s "
+                    f"(attempt {attempt + 1}/{args.max_retries})"
+                )
+                failure_times.append(time.time())
+                time.sleep(wait_time)
+                # Reset conversation on network error
+                conversation_id = None
             except Exception as e:
                 error_str = str(e)
-                is_rate_limit = "429" in error_str or "rate" in error_str.lower() or "too many" in error_str.lower()
+                is_rate_limit = (
+                    "429" in error_str
+                    or "rate" in error_str.lower()
+                    or "too many" in error_str.lower()
+                )
                 if is_rate_limit and attempt < args.max_retries - 1:
-                    wait_time = (2 ** attempt) * 10  # 10s, 20s, 40s
-                    logger.warning(f"Rate limited. Retrying in {wait_time}s (attempt {attempt + 1}/{args.max_retries})")
+                    wait_time = (2 ** attempt) * 10 + random.uniform(0, 5)
+                    logger.warning(
+                        f"Rate limited (string match). Retrying in {wait_time:.1f}s "
+                        f"(attempt {attempt + 1}/{args.max_retries})"
+                    )
+                    failure_times.append(time.time())
                     time.sleep(wait_time)
+                    conversation_id = None
                 else:
                     logger.error(f"DeepSeek error: {e}")
+                    failure_times.append(time.time())
                     break
 
         if not success:
@@ -574,10 +640,11 @@ def main():
             f"skipped={record_result['skipped']}"
         )
 
-        # Delay between batches
+        # Delay between batches with jitter (80%-120% of base delay)
         if batch_num < args.loops:
-            logger.info(f"Waiting {args.delay}s before next batch...")
-            time.sleep(args.delay)
+            jittered_delay = args.delay * random.uniform(0.8, 1.2)
+            logger.info(f"Waiting {jittered_delay:.1f}s before next batch...")
+            time.sleep(jittered_delay)
 
     client.close()
 

@@ -22,6 +22,7 @@ session (see `deepseek.auth`). For each message it:
 from __future__ import annotations
 
 import json
+import random
 import threading
 from dataclasses import dataclass
 from typing import Iterator, Optional
@@ -42,6 +43,9 @@ DEFAULT_MODEL_TYPE = "default"
 # A conversation_id is an opaque "<chat_session_id>:<last_message_id>" token. It
 # carries everything needed to resume a thread, so the client stays stateless.
 _CID_SEP = ":"
+
+# Real Chrome User-Agent (not HeadlessChrome)
+REAL_CHROME_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 
 def _encode_cid(session_id: str, message_id: Optional[int]) -> str:
@@ -80,6 +84,13 @@ def _biz(data: dict) -> dict:
     return biz
 
 
+class RateLimitError(Exception):
+    """Raised when DeepSeek returns a 429 rate limit response."""
+    def __init__(self, message: str, retry_after: int = 60):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 class DeepSeekClient:
     def __init__(
         self,
@@ -106,7 +117,7 @@ class DeepSeekClient:
             "authorization": f"Bearer {self.session.token}",
             "accept": "*/*",
             "content-type": "application/json",
-            "user-agent": self.session.user_agent,
+            "user-agent": REAL_CHROME_UA,
             "origin": BASE,
             "referer": f"{BASE}/",
             "x-app-version": "2.0.0",
@@ -121,6 +132,7 @@ class DeepSeekClient:
 
     def create_chat_session(self) -> str:
         r = self._http.post("/api/v0/chat_session/create", json={})
+        self._check_rate_limit(r)
         r.raise_for_status()
         return _biz(r.json())["chat_session"]["id"]
 
@@ -128,10 +140,21 @@ class DeepSeekClient:
         r = self._http.post(
             "/api/v0/chat/create_pow_challenge", json={"target_path": target_path}
         )
+        self._check_rate_limit(r)
         r.raise_for_status()
         challenge = _biz(r.json())["challenge"]
         with self._pow_lock:
             return self._pow.make_header(challenge)
+
+    def _check_rate_limit(self, r: httpx.Response) -> None:
+        """Check for rate limit headers and raise with Retry-After if needed."""
+        if r.status_code == 429:
+            retry_after = r.headers.get("Retry-After")
+            wait_time = int(retry_after) if retry_after else 60
+            raise RateLimitError(
+                f"Rate limited (429). Retry-After: {wait_time}s",
+                retry_after=wait_time,
+            )
 
     # --- public API ---------------------------------------------------------
 
@@ -222,6 +245,14 @@ class _Stream:
         with self._client._http.stream(
             "POST", COMPLETION_PATH, json=body, headers=headers
         ) as resp:
+            # Check for rate limit before consuming the stream
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                wait_time = int(retry_after) if retry_after else 60
+                raise RateLimitError(
+                    f"Rate limited (429). Retry-After: {wait_time}s",
+                    retry_after=wait_time,
+                )
             resp.raise_for_status()
             yield from _parse_sse(resp.iter_lines(), meta)
         if meta.get("message_id") is not None:
