@@ -92,6 +92,7 @@ pub struct RetryConfig {
     pub scheduler_fresh_ratio: f64,
     pub stale_verifying_timeout_secs: u64,
     pub no_peers_terminal_on_first: bool,
+    pub no_peers_max_retries: i32,
     pub no_metadata_max_retries: i32,
 }
 
@@ -250,6 +251,7 @@ impl Default for RetryConfig {
             scheduler_fresh_ratio: 0.7,
             stale_verifying_timeout_secs: 300,
             no_peers_terminal_on_first: true,
+            no_peers_max_retries: 2,
             no_metadata_max_retries: 1,
         }
     }
@@ -283,11 +285,11 @@ impl Default for CacheConfig {
     fn default() -> Self {
         CacheConfig {
             peer_cache_ttl_secs: 300,
-            peer_cache_max_entries: 100_000,
+            peer_cache_max_entries: 500_000,
             peer_cache_cleanup_interval_secs: 60,
             peer_cache_failure_threshold: 2,
             announce_cache_ttl_secs: 600,
-            announce_cache_max_entries: 50_000,
+            announce_cache_max_entries: 250_000,
             announce_cache_initial_capacity: 1024,
             announce_cache_shards: 64,
         }
@@ -509,16 +511,36 @@ impl Config {
         // cache
         self.cache.peer_cache_ttl_secs =
             env_u64("CRAW_PEER_CACHE_TTL_SECS", self.cache.peer_cache_ttl_secs);
+        self.cache.peer_cache_max_entries = env_usize(
+            "CRAW_PEER_CACHE_MAX_ENTRIES",
+            self.cache.peer_cache_max_entries,
+        );
         self.cache.peer_cache_failure_threshold = env_u64(
             "CRAW_PEER_CACHE_FAILURE_THRESHOLD",
             self.cache.peer_cache_failure_threshold as u64,
         ) as u8;
+        self.cache.announce_cache_ttl_secs =
+            env_u64("CRAW_ANNOUNCE_CACHE_TTL_SECS", self.cache.announce_cache_ttl_secs);
+        self.cache.announce_cache_max_entries = env_usize(
+            "CRAW_ANNOUNCE_CACHE_MAX_ENTRIES",
+            self.cache.announce_cache_max_entries,
+        );
 
         // harvest
         self.harvest.harvest_channel_capacity = env_usize(
             "CRAW_HARVEST_CHANNEL_CAPACITY",
             self.harvest.harvest_channel_capacity,
         );
+
+        // retry
+        self.retry.no_peers_terminal_on_first = env_bool(
+            "CRAW_NO_PEERS_TERMINAL_ON_FIRST",
+            self.retry.no_peers_terminal_on_first,
+        );
+        self.retry.no_peers_max_retries = env_usize(
+            "CRAW_NO_PEERS_MAX_RETRIES",
+            self.retry.no_peers_max_retries as usize,
+        ) as i32;
 
         // logging
         if let Ok(dir) = std::env::var("CRAW_LOG_DIR") {
@@ -750,6 +772,8 @@ struct PartialRetry {
     stale_verifying_timeout_secs: Option<u64>,
     #[serde(default)]
     no_peers_terminal_on_first: Option<bool>,
+    #[serde(default)]
+    no_peers_max_retries: Option<i32>,
     #[serde(default)]
     no_metadata_max_retries: Option<i32>,
 }
@@ -1058,6 +1082,9 @@ impl PartialRetry {
         if let Some(v) = self.no_peers_terminal_on_first {
             cfg.no_peers_terminal_on_first = v;
         }
+        if let Some(v) = self.no_peers_max_retries {
+            cfg.no_peers_max_retries = v;
+        }
         if let Some(v) = self.no_metadata_max_retries {
             cfg.no_metadata_max_retries = v;
         }
@@ -1235,7 +1262,7 @@ mod tests {
         assert_eq!(c.fetch.lead_source_grace_ms, 1000);
         assert_eq!(c.harvest.harvest_channel_capacity, 10_000);
         assert_eq!(c.dht.find_node_response_percent, 100);
-        assert!(!c.dht.linux_mmsg_receive);
+        assert!(c.dht.linux_mmsg_receive);
     }
 
     #[test]

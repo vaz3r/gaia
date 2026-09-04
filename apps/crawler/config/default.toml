@@ -66,7 +66,8 @@ scheduler_interval_secs = 15
 scheduler_claim_limit = 4000
 scheduler_fresh_ratio = 0.7
 stale_verifying_timeout_secs = 300
-no_peers_terminal_on_first = true
+no_peers_terminal_on_first = false
+no_peers_max_retries = 2
 no_metadata_max_retries = 1
 
 [storage]
@@ -90,11 +91,11 @@ janitor_batch_sleep_ms = 100
 
 [cache]
 peer_cache_ttl_secs = 300
-peer_cache_max_entries = 100000
+peer_cache_max_entries = 500000
 peer_cache_cleanup_interval_secs = 60
 peer_cache_failure_threshold = 2
 announce_cache_ttl_secs = 600
-announce_cache_max_entries = 50000
+announce_cache_max_entries = 250000
 announce_cache_initial_capacity = 1024
 announce_cache_shards = 64
 

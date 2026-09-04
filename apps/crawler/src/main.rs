@@ -208,6 +208,7 @@ async fn main() {
         retry_backoffs.clone(),
         config.retry.max_retries,
         config.retry.no_peers_terminal_on_first,
+        config.retry.no_peers_max_retries,
         config.retry.no_metadata_max_retries,
         config.storage.batch_flush_chunk,
         config.storage.torrent_batch_chunk,

@@ -400,7 +400,7 @@ impl WireSession {
                             for chunk in added.chunks_exact(6) {
                                 let ip = std::net::Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]);
                                 let port = u16::from_be_bytes([chunk[4], chunk[5]]);
-                                if port > 0 {
+                                if port > 0 && self.discovered_pex_peers.len() < 256 {
                                     self.discovered_pex_peers.push(SocketAddr::new(ip.into(), port));
                                 }
                             }
