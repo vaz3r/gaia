@@ -1,187 +1,187 @@
 {
   "total": 50000,
   "category_distribution": {
-    "Adult": 19072,
-    "Television": 8026,
-    "Music": 6315,
-    "Movies": 5984,
-    "Other": 4910,
-    "Games": 2567,
-    "Applications": 1428,
-    "Anime": 1339,
-    "Documentaries": 359
+    "Adult": 18769,
+    "Television": 8048,
+    "Movies": 6409,
+    "Music": 6218,
+    "Other": 4826,
+    "Games": 2713,
+    "Anime": 1379,
+    "Applications": 1349,
+    "Documentaries": 289
   },
   "confidence_stats": {
-    "average": 0.9568,
-    "min": 0.2174,
+    "average": 0.9623,
+    "min": 0.248,
     "max": 1.0
   },
   "confidence_buckets": {
-    "high (>=0.9)": 43850,
-    "medium (0.7-0.9)": 3222,
-    "low (0.5-0.7)": 2197,
-    "very_low (<0.5)": 731
+    "high (>=0.9)": 44488,
+    "medium (0.7-0.9)": 3025,
+    "low (0.5-0.7)": 1973,
+    "very_low (<0.5)": 514
   },
   "low_confidence_examples": [
     {
-      "infohash": "78225b7de5b483537a2ef58e31f80a26637bd34d",
-      "name": "Now.Thats.What.I.Call.Music.Dance.and.Sing.2011.WII.PAL",
-      "file_count": 9,
-      "total_size": 4699981246,
-      "predicted_category": "Applications",
-      "confidence": 0.21736285631430596
-    },
-    {
-      "infohash": "19211666e450a06e5b5b120be18c3c2d5a18ba91",
-      "name": "joe9898@18p2p@ŷ�����������ӽ�",
-      "file_count": 329,
-      "total_size": 2818572793,
-      "predicted_category": "Adult",
-      "confidence": 0.22542089293698714
-    },
-    {
-      "infohash": "6f57a3018a86040c5634ceb888b9b38c403338ca",
-      "name": "�ӤH���v�X��01",
-      "file_count": 8,
-      "total_size": 4958167108,
-      "predicted_category": "Anime",
-      "confidence": 0.24921500112777836
-    },
-    {
-      "infohash": "622d7e81d347ce9396336e83a208e222410a733f",
-      "name": "Lick Library - Jam with Dire Straits",
-      "file_count": 161,
-      "total_size": 8120834356,
-      "predicted_category": "Other",
-      "confidence": 0.2626100578438988
-    },
-    {
-      "infohash": "2fe22cc3692f68b4502dfdc565d18b99a004b422",
-      "name": "Bomber X [SD-VF]",
-      "file_count": 25,
-      "total_size": 5977635257,
-      "predicted_category": "Adult",
-      "confidence": 0.2633834696172183
-    },
-    {
-      "infohash": "fd0e46dec95694375de43f5f0761ccfca8cc725b",
-      "name": "TheFirstRunTFREp.43_TheWarrior_sWay_TheGood_TheBad__TheWeird_InventoryOfOurMost",
-      "file_count": 6,
-      "total_size": 125897211,
-      "predicted_category": "Music",
-      "confidence": 0.2646634097507212
-    },
-    {
-      "infohash": "fbdc9f3ac01a875ae32224e0c47721d4e82196ec",
-      "name": "voyeur-russian(2005)",
-      "file_count": 667,
-      "total_size": 3883538804,
-      "predicted_category": "Television",
-      "confidence": 0.2660076980661393
-    },
-    {
-      "infohash": "7f2d8c283a7fa6a358e17f94404315728820154e",
-      "name": "紫色面具 张婉莹 暑假作业 福建兄妹 我本初中 包小瘦 赵小贝 小表妹 黑皮猪 刘老师 媲美欣 侄女 蘑菇 指挥等1200G学习资料，种子内文本标题有详细介绍，购买联系永久防失联客服邮件 papanenm@gmail.com",
-      "file_count": 17,
-      "total_size": 3619047370,
-      "predicted_category": "Adult",
-      "confidence": 0.26705050554558785
-    },
-    {
-      "infohash": "560f8bb54aba83b19198e47fcbbd84fbd92a22a8",
-      "name": "[DVDISO](18禁アニメ) オトメドリ",
-      "file_count": 7,
-      "total_size": 3046117601,
-      "predicted_category": "Other",
-      "confidence": 0.26792784171715167
-    },
-    {
-      "infohash": "7495e9a3d6f369854abcaacda760accb6894be28",
-      "name": "模特私拍合集168套无水印20-40套",
-      "file_count": 5168,
-      "total_size": 8291342390,
-      "predicted_category": "Adult",
-      "confidence": 0.2679366049270784
-    },
-    {
-      "infohash": "6a9b4b73c217dcf6619aab075de63c5f0551227a",
-      "name": "Power Rangers Operation Overdrive 480p italian mpeg2 mp2",
-      "file_count": 32,
-      "total_size": 10262452224,
-      "predicted_category": "Television",
-      "confidence": 0.2735725210808584
-    },
-    {
-      "infohash": "fbc9e0a194d1d4b2040976321069da38584f6291",
-      "name": "Bokura_ga_Ita",
-      "file_count": 183,
-      "total_size": 8130878153,
-      "predicted_category": "Adult",
-      "confidence": 0.27602719913503304
-    },
-    {
-      "infohash": "f45735e8791ded024f4665b06ba3d9d60445839a",
-      "name": "CPSKY-191  ISO",
-      "file_count": 5,
-      "total_size": 4285686510,
-      "predicted_category": "Games",
-      "confidence": 0.27754560912672677
-    },
-    {
-      "infohash": "fb5c235668a8f209eaed8dbae837eb7100f985ba",
-      "name": "HomeVideo",
-      "file_count": 6,
-      "total_size": 1787496876,
+      "infohash": "05af3affa00214c0d9d6f23e54b0e9bdf6d5afdd",
+      "name": "ten-cents-a-dance-1931_202507",
+      "file_count": 4,
+      "total_size": 637026112,
       "predicted_category": "Movies",
-      "confidence": 0.2818894423778269
+      "confidence": 0.24802828273170735
     },
     {
-      "infohash": "78da2793653dcbc11946d468ca813b473075ff18",
-      "name": "Acer E5-575G RECOVERY",
-      "file_count": 1,
-      "total_size": 10591536640,
-      "predicted_category": "Adult",
-      "confidence": 0.28378413526697716
-    },
-    {
-      "infohash": "81b332c618eddc96004029ba05147e1324bca871",
-      "name": "The Ultimate Iliad & Odyssey_ Two Full-Cast Dramatisations by Homer",
+      "infohash": "35d0d5d7ba67870d1d0afb77b32b60620f2a50fd",
+      "name": "Ice Age 2.The Meltdown.(Полностью русская).Repack",
       "file_count": 2,
-      "total_size": 328719956,
-      "predicted_category": "Applications",
-      "confidence": 0.28507607092213905
+      "total_size": 741757570,
+      "predicted_category": "Documentaries",
+      "confidence": 0.26946119231920956
     },
     {
-      "infohash": "c174260a10ae29c0bcefdf959ff6bfc949decd55",
-      "name": "dokidoki-precure",
-      "file_count": 204,
-      "total_size": 48169484288,
+      "infohash": "37f77449a1e34daf4ced606e8368d99c2d41dc9b",
+      "name": "Synapse - Street Forever Extreme Special Edition 1970",
+      "file_count": 1,
+      "total_size": 749402276,
+      "predicted_category": "Documentaries",
+      "confidence": 0.27434916644008417
+    },
+    {
+      "infohash": "d620b5f8bad2cae2991d0ba1837d3416e7333dee",
+      "name": "Lemon.Popsicle.Collection.1-9.A-SupershareRG-KVCD-Collection-BY-Privacy",
+      "file_count": 28,
+      "total_size": 7511275461,
+      "predicted_category": "Games",
+      "confidence": 0.29056152553595666
+    },
+    {
+      "infohash": "93a6ed5c41be728ec4622368205a220e31567569",
+      "name": "【yy.1028.fit】名称：[欧美剧][开发者][2020][全8集][简英字幕][1080P][11G]",
+      "file_count": 4,
+      "total_size": 82755,
+      "predicted_category": "Television",
+      "confidence": 0.29313394447938035
+    },
+    {
+      "infohash": "621aec64b85c9473329a75a4b24194103464aa50",
+      "name": "coronation-of-king-charles-iii-and-queen-camilla-bbc-news",
+      "file_count": 8,
+      "total_size": 9336520704,
+      "predicted_category": "Other",
+      "confidence": 0.2954137142087791
+    },
+    {
+      "infohash": "35d9c3ac6cdd18a80ed13c9a4f622e84f8e1a06b",
+      "name": "Amon Amarth - The Pursuit Of Vikings (BD) (2018)",
+      "file_count": 50,
+      "total_size": 49248598440,
       "predicted_category": "Anime",
-      "confidence": 0.2873199415922619
+      "confidence": 0.2977514802524649
     },
     {
-      "infohash": "d73b85831dca39c54454763be5ff2f3d9b416952",
-      "name": "Angel Cop [1989]",
-      "file_count": 41,
-      "total_size": 12240333439,
+      "infohash": "7b00d1d3dcb9179de4189f2d15414ed2483881fd",
+      "name": "Marc Dorcel - Les putes de l'autoroute FRENCH",
+      "file_count": 1,
+      "total_size": 727332864,
+      "predicted_category": "Documentaries",
+      "confidence": 0.3007616223261667
+    },
+    {
+      "infohash": "e645492f368711e642c576b24d22539bdd4eff41",
+      "name": "Pacino",
+      "file_count": 47,
+      "total_size": 76834110949,
+      "predicted_category": "Documentaries",
+      "confidence": 0.3010042504930866
+    },
+    {
+      "infohash": "d7e6d1679544665b11529afb24fcec36609b26ec",
+      "name": "[nicollubin] Reksio odcinki 1-51",
+      "file_count": 52,
+      "total_size": 3726503612,
+      "predicted_category": "Anime",
+      "confidence": 0.3067968775786445
+    },
+    {
+      "infohash": "55378a21945040c2172f1217c9538d5c2db8e639",
+      "name": "Motto To Love-Ru Trouble",
+      "file_count": 12,
+      "total_size": 80927909496,
+      "predicted_category": "Anime",
+      "confidence": 0.31270480033658465
+    },
+    {
+      "infohash": "8637185cfde26a42281c6160b4c32b5e4d208ed6",
+      "name": "Blade Runner 2049 2017 Bonus Disc (1080p Bluray x265 HEVC 10bit AAC 2.0 Tigole)",
+      "file_count": 3,
+      "total_size": 177552979,
+      "predicted_category": "Anime",
+      "confidence": 0.3159293333883824
+    },
+    {
+      "infohash": "fa2ea907625f5e808b0611486fb9fa93a189632f",
+      "name": "【yiyidj.org】名称：现在就出发第三季现在就出发3(2025)【4K.60Fps.高码率&1080p】【更0131期】",
+      "file_count": 4,
+      "total_size": 331474,
       "predicted_category": "Television",
-      "confidence": 0.2877387273003627
+      "confidence": 0.3162972171064895
     },
     {
-      "infohash": "563b629a206558e9c2960f969abca467464dbfde",
-      "name": "nike@SOE703 DVDISO",
-      "file_count": 11,
-      "total_size": 4401040501,
-      "predicted_category": "Music",
-      "confidence": 0.28835987426055587
+      "infohash": "766895fbcb310a8f0c6338f8833eea66306ca763",
+      "name": "Sarah 3",
+      "file_count": 4,
+      "total_size": 5695486976,
+      "predicted_category": "Other",
+      "confidence": 0.318325122694084
     },
     {
-      "infohash": "7bcc8baa380975d4dadf0aa8045b14cda5eb1065",
-      "name": "HiddenShowers_hs647-hs1381",
-      "file_count": 1398,
-      "total_size": 31759124260,
-      "predicted_category": "Television",
-      "confidence": 0.28917279952443997
+      "infohash": "60d8744416340f546a3aaf9edfeadab63a1a3f87",
+      "name": "Step_brothers_[tfile.ru]",
+      "file_count": 2,
+      "total_size": 1572848257,
+      "predicted_category": "Movies",
+      "confidence": 0.3186211516051125
+    },
+    {
+      "infohash": "982c0fe028cb8d722f60828a732194077a4c4f31",
+      "name": "story-of-o-disc-1-episode-1",
+      "file_count": 4,
+      "total_size": 405525878,
+      "predicted_category": "Games",
+      "confidence": 0.3186966678775327
+    },
+    {
+      "infohash": "7e48218b1e22e0ca024c3a9d40191c9226bfadd4",
+      "name": "[Minori] Ef",
+      "file_count": 24,
+      "total_size": 5928794166,
+      "predicted_category": "Games",
+      "confidence": 0.31904678272656833
+    },
+    {
+      "infohash": "a89ab9e621b195505f688837d1c8c2035c700e4b",
+      "name": "legend-of-the-devil-1996",
+      "file_count": 22,
+      "total_size": 9328132096,
+      "predicted_category": "Games",
+      "confidence": 0.32216219999063006
+    },
+    {
+      "infohash": "76fe01db1ec48976652452fd583099af820e0b14",
+      "name": "1978.5-1503.1541.kremlin-armoury",
+      "file_count": 24,
+      "total_size": 28718833,
+      "predicted_category": "Adult",
+      "confidence": 0.3239515108030708
+    },
+    {
+      "infohash": "704e56bb8cf2d333965fff7ddb3d938934077989",
+      "name": "Cannabis Collection - High Grower - Indoor Growing",
+      "file_count": 26,
+      "total_size": 2159346389,
+      "predicted_category": "Adult",
+      "confidence": 0.32406772189247657
     }
   ]
 }

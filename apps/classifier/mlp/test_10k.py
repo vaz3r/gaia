@@ -25,7 +25,7 @@ DB_CONFIG = {
     "connect_timeout": 10,
 }
 
-MODEL_PATH = "data/models/mlp_8k_human/torrent_classifier.joblib"
+MODEL_PATH = "data/models/mlp_10k_human/torrent_classifier.joblib"
 OUTPUT_DIR = Path("data/test_results")
 NUM_TORRENTS = 50000
 BATCH_SIZE = 512
