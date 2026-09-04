@@ -26,8 +26,10 @@ const HOST = process.env.HOST || '0.0.0.0';
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const METRICS_CACHE_MS = parseInt(process.env.METRICS_CACHE_MS || '15000', 10);
 const STATS_CACHE_MS = parseInt(process.env.STATS_CACHE_MS || '30000', 10);
+const ANALYSIS_CACHE_MS = parseInt(process.env.ANALYSIS_CACHE_MS || '60000', 10);
 let metricsCache = { ts: 0, data: null };
 let statsCache = { ts: 0, data: null };
+let analysisCache = { ts: 0, data: null };
 
 const SORTS = {
   verified_at: 'verified_at',
@@ -35,7 +37,9 @@ const SORTS = {
   files: 'file_count',
   name: 'name',
   health: 'health_score',
-  popularity: 'popularity_score'
+  popularity: 'popularity_score',
+  sightings: 'total_seen',
+  first_seen: 'first_seen'
 };
 const INTERVALS = ['minute', 'hour', 'day'];
 
@@ -74,6 +78,7 @@ app.get('/api/torrents', async (req, res) => {
 
     const rowsRes = await query(
       `SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
+              first_seen, last_seen, total_seen,
               health_score, popularity_score, swarm_peers, seed_confirmed, last_health_check
        FROM torrents ${where} ${orderBy}
        LIMIT ${limit} OFFSET ${offset}`,
@@ -381,6 +386,86 @@ app.get('/api/stats', async (req, res) => {
     statsCache = { ts: Date.now(), data };
     res.json(data);
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/analysis - Swarm activity, velocity, trending, and telemetry insights
+app.get('/api/analysis', async (req, res) => {
+  const now = Date.now();
+  if (analysisCache.ts && now - analysisCache.ts < ANALYSIS_CACHE_MS) {
+    return res.json(analysisCache.data);
+  }
+
+  try {
+    const [trendingRes, velocityRes, topSwarmsRes, summaryRes] = await Promise.all([
+      // 1. Trending Swarms: high sightings scaled by logarithm of age
+      query(`
+        SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
+               first_seen, last_seen, total_seen, health_score, popularity_score, swarm_peers,
+               round(total_seen / log(GREATEST(2.0, EXTRACT(epoch FROM (now() - first_seen)) / 3600.0) + 1), 2) as trend_score,
+               round(total_seen / GREATEST(0.5, EXTRACT(epoch FROM (now() - first_seen)) / 3600.0), 2) as velocity
+        FROM torrents
+        WHERE total_seen >= 5 AND last_seen >= now() - interval '7 days'
+        ORDER BY total_seen DESC
+        LIMIT 20
+      `),
+
+      // 2. Release Velocity: New releases spreading fastest across the DHT (<48 hours old)
+      query(`
+        SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
+               first_seen, last_seen, total_seen, health_score, popularity_score, swarm_peers,
+               round(total_seen / GREATEST(0.5, EXTRACT(epoch FROM (now() - first_seen)) / 3600.0), 2) as velocity,
+               round(EXTRACT(epoch FROM (now() - first_seen)) / 3600.0, 1) as age_hours
+        FROM torrents
+        WHERE first_seen >= now() - interval '48 hours' AND total_seen >= 2
+        ORDER BY total_seen DESC
+        LIMIT 20
+      `),
+
+      // 3. Top Swarms All-Time (Cumulative sightings)
+      query(`
+        SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
+               first_seen, last_seen, total_seen, health_score, popularity_score, swarm_peers,
+               round(total_seen / GREATEST(0.5, EXTRACT(epoch FROM (now() - first_seen)) / 3600.0), 2) as velocity
+        FROM torrents
+        ORDER BY total_seen DESC
+        LIMIT 20
+      `),
+
+      // 4. Global Swarm Telemetry Summary
+      query(`
+        SELECT 
+          count(*) as total_torrents,
+          round(avg(total_seen), 1) as avg_sightings,
+          max(total_seen) as max_sightings,
+          count(*) filter (where total_seen >= 10) as high_activity_swarms,
+          count(*) filter (where first_seen >= now() - interval '48 hours') as fresh_swarms_48h,
+          count(*) filter (where last_seen >= now() - interval '24 hours') as active_swarms_24h
+        FROM torrents
+      `)
+    ]);
+
+    const summary = summaryRes.rows[0] || {};
+    const data = {
+      summary: {
+        total_torrents: parseInt(summary.total_torrents || 0, 10),
+        avg_sightings: parseFloat(summary.avg_sightings || 0),
+        max_sightings: parseInt(summary.max_sightings || 0, 10),
+        high_activity_swarms: parseInt(summary.high_activity_swarms || 0, 10),
+        fresh_swarms_48h: parseInt(summary.fresh_swarms_48h || 0, 10),
+        active_swarms_24h: parseInt(summary.active_swarms_24h || 0, 10),
+      },
+      trending: trendingRes.rows,
+      fastest_growing: velocityRes.rows,
+      top_swarms: topSwarmsRes.rows,
+      cached_at: new Date().toISOString()
+    };
+
+    analysisCache = { ts: now, data };
+    res.json(data);
+  } catch (err) {
+    console.error('Failed to compute analysis telemetry:', err);
     res.status(500).json({ error: err.message });
   }
 });

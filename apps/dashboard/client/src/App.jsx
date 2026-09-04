@@ -43,13 +43,16 @@ import {
   ChevronLeft,
   ChevronsLeft,
   ChevronsRight,
-  ArrowUpDown
+  ArrowUpDown,
+  Flame,
+  BarChart3
 } from 'lucide-react';
 import { api, loadTrackers, magnetFrom } from './api.js';
 import { formatBytes, formatNum, formatTime, formatUptime } from './utils.js';
+import AnalysisView from './components/AnalysisView.jsx';
 
 export default function App() {
-  // Navigation & Primary Views: 'overview' | 'browser' | 'routing' | 'diagnostics'
+  // Navigation & Primary Views: 'overview' | 'browser' | 'analysis' | 'routing' | 'diagnostics'
   const [activeTab, setActiveTab] = useState('overview');
   const [scaleMode, setScaleMode] = useState('log'); // 'linear' | 'log'
   const [hoveredIdx, setHoveredIdx] = useState(null);
@@ -550,29 +553,34 @@ export default function App() {
               {[
                 { id: 'overview', label: 'Overview' },
                 { id: 'browser', label: 'Torrent Browser', badge: `${metrics.totalVerified}` },
+                { id: 'analysis', label: 'Analysis', icon: Flame },
                 { id: 'routing', label: 'DHT Routing' },
                 { id: 'diagnostics', label: 'Diagnostics' },
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => {
-                    setActiveTab(tab.id);
-                    setSelectedTorrent(null);
-                  }}
-                  className={`px-2.5 py-1 text-xs rounded-md transition-colors flex items-center gap-1.5 ${
-                    activeTab === tab.id
-                      ? 'bg-[#1a1a1a] text-white font-medium border border-[#333]'
-                      : 'text-[#888] hover:text-[#ededed] hover:bg-[#111]'
-                  }`}
-                >
-                  <span>{tab.label}</span>
-                  {tab.badge && (
-                    <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-[#242424] text-[#aaa]">
-                      {tab.badge}
-                    </span>
-                  )}
-                </button>
-              ))}
+              ].map((tab) => {
+                const IconComponent = tab.icon;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => {
+                      setActiveTab(tab.id);
+                      setSelectedTorrent(null);
+                    }}
+                    className={`px-2.5 py-1 text-xs rounded-md transition-colors flex items-center gap-1.5 ${
+                      activeTab === tab.id
+                        ? 'bg-[#1a1a1a] text-white font-medium border border-[#333]'
+                        : 'text-[#888] hover:text-[#ededed] hover:bg-[#111]'
+                    }`}
+                  >
+                    {IconComponent && <IconComponent className="w-3 h-3 text-rose-400" />}
+                    <span>{tab.label}</span>
+                    {tab.badge && (
+                      <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-[#242424] text-[#aaa]">
+                        {tab.badge}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </nav>
           </div>
 
@@ -1533,6 +1541,16 @@ export default function App() {
               </div>
             )}
           </div>
+        )}
+
+        {/* ============================================================ */}
+        {/* TAB: ANALYSIS & TRENDING (Sightings, Velocity, Swarm Telemetry)*/}
+        {/* ============================================================ */}
+        {activeTab === 'analysis' && (
+          <AnalysisView
+            onInspectTorrent={handleInspectTorrent}
+            copyToClipboard={copyToClipboard}
+          />
         )}
 
         {/* ============================================================ */}
