@@ -91,11 +91,11 @@ janitor_batch_sleep_ms = 100
 
 [cache]
 peer_cache_ttl_secs = 300
-peer_cache_max_entries = 100000
+peer_cache_max_entries = 500000
 peer_cache_cleanup_interval_secs = 60
 peer_cache_failure_threshold = 2
 announce_cache_ttl_secs = 600
-announce_cache_max_entries = 50000
+announce_cache_max_entries = 250000
 announce_cache_initial_capacity = 1024
 announce_cache_shards = 64
 

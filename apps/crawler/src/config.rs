@@ -285,11 +285,11 @@ impl Default for CacheConfig {
     fn default() -> Self {
         CacheConfig {
             peer_cache_ttl_secs: 300,
-            peer_cache_max_entries: 100_000,
+            peer_cache_max_entries: 500_000,
             peer_cache_cleanup_interval_secs: 60,
             peer_cache_failure_threshold: 2,
             announce_cache_ttl_secs: 600,
-            announce_cache_max_entries: 50_000,
+            announce_cache_max_entries: 250_000,
             announce_cache_initial_capacity: 1024,
             announce_cache_shards: 64,
         }
@@ -511,10 +511,20 @@ impl Config {
         // cache
         self.cache.peer_cache_ttl_secs =
             env_u64("CRAW_PEER_CACHE_TTL_SECS", self.cache.peer_cache_ttl_secs);
+        self.cache.peer_cache_max_entries = env_usize(
+            "CRAW_PEER_CACHE_MAX_ENTRIES",
+            self.cache.peer_cache_max_entries,
+        );
         self.cache.peer_cache_failure_threshold = env_u64(
             "CRAW_PEER_CACHE_FAILURE_THRESHOLD",
             self.cache.peer_cache_failure_threshold as u64,
         ) as u8;
+        self.cache.announce_cache_ttl_secs =
+            env_u64("CRAW_ANNOUNCE_CACHE_TTL_SECS", self.cache.announce_cache_ttl_secs);
+        self.cache.announce_cache_max_entries = env_usize(
+            "CRAW_ANNOUNCE_CACHE_MAX_ENTRIES",
+            self.cache.announce_cache_max_entries,
+        );
 
         // harvest
         self.harvest.harvest_channel_capacity = env_usize(
