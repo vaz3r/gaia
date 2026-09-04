@@ -460,27 +460,27 @@ app.get('/api/analysis', async (req, res) => {
 
   try {
     const [trendingRes, velocityRes, topSwarmsRes, summaryRes] = await Promise.all([
-      // 1. Trending Swarms: high sightings scaled by logarithm of age
+      // 1. Trending Swarms: high sightings scaled by age decay over the past 7 days
       query(`
         SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
                first_seen, last_seen, total_seen, health_score, popularity_score, swarm_peers,
-               round(total_seen / log(GREATEST(2.0, EXTRACT(epoch FROM (now() - first_seen)) / 3600.0) + 1), 2) as trend_score,
-               round(total_seen / GREATEST(0.5, EXTRACT(epoch FROM (now() - first_seen)) / 3600.0), 2) as velocity
+               round(total_seen / (GREATEST(0.5, EXTRACT(epoch FROM (now() - first_seen)) / 86400.0) ^ 1.1), 2) as trend_score,
+               round(total_seen / GREATEST(0.25, EXTRACT(epoch FROM (CASE WHEN last_seen > first_seen THEN last_seen - first_seen ELSE now() - first_seen END)) / 3600.0), 2) as velocity
         FROM torrents
-        WHERE total_seen >= 5 AND last_seen >= now() - interval '7 days'
-        ORDER BY total_seen DESC
+        WHERE first_seen >= now() - interval '7 days' AND total_seen >= 3 AND last_seen >= now() - interval '48 hours'
+        ORDER BY trend_score DESC
         LIMIT 20
       `),
 
-      // 2. Release Velocity: New releases spreading fastest across the DHT (<48 hours old)
+      // 2. Release Velocity: New releases spreading fastest across the DHT (<48 hours old, ordered by velocity)
       query(`
         SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
                first_seen, last_seen, total_seen, health_score, popularity_score, swarm_peers,
-               round(total_seen / GREATEST(0.5, EXTRACT(epoch FROM (now() - first_seen)) / 3600.0), 2) as velocity,
+               round(total_seen / GREATEST(0.25, EXTRACT(epoch FROM (CASE WHEN last_seen > first_seen THEN last_seen - first_seen ELSE now() - first_seen END)) / 3600.0), 2) as velocity,
                round(EXTRACT(epoch FROM (now() - first_seen)) / 3600.0, 1) as age_hours
         FROM torrents
         WHERE first_seen >= now() - interval '48 hours' AND total_seen >= 2
-        ORDER BY total_seen DESC
+        ORDER BY velocity DESC
         LIMIT 20
       `),
 
