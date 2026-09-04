@@ -92,7 +92,7 @@ export default function App() {
   const [copiedMagnet, setCopiedMagnet] = useState(false);
 
   // Diagnostics state
-  const [cacheAllocSize, setCacheAllocSize] = useState(100);
+  const [cacheAllocSize, setCacheAllocSize] = useState(500);
   const [logFilter, setLogFilter] = useState('ALL');
 
   // Realtime tick pulse
@@ -1957,7 +1957,7 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-2 text-xs font-mono">
                   <span className="text-[#666]">Production:</span>
-                  <span className="text-white font-bold">100,000 keys (~16 MB)</span>
+                  <span className="text-white font-bold">500,000 keys (~32 MB)</span>
                   <span className="text-[#333]">·</span>
                   <span className="text-emerald-400 font-bold">{metrics.peerCacheSize.toLocaleString()} active</span>
                 </div>
@@ -1966,7 +1966,7 @@ export default function App() {
               <div className="space-y-2">
                 <div className="flex justify-between text-xs font-mono">
                   <span className="text-[#888]">Capacity & Memory Sizing Estimator:</span>
-                  <span className="text-white font-bold">{cacheAllocSize},000 keys (~{(cacheAllocSize * 0.16).toFixed(1)} MB RAM)</span>
+                  <span className="text-white font-bold">{cacheAllocSize},000 keys (~{(cacheAllocSize * 0.064).toFixed(1)} MB RAM)</span>
                 </div>
                 <input
                   type="range"
@@ -1978,8 +1978,8 @@ export default function App() {
                   className="w-full accent-white bg-[#222] h-1.5 rounded-lg cursor-pointer"
                 />
                 <div className="flex justify-between text-[10px] font-mono text-[#555]">
-                  <span>100k (Active Production · 11.3M+ saved)</span>
-                  <span>500k (Recommended for High Throughput)</span>
+                  <span>100k (Prior Baseline)</span>
+                  <span>500k (Active Production · High Throughput)</span>
                   <span>1,000k (Heavy Enterprise Pool)</span>
                 </div>
               </div>
