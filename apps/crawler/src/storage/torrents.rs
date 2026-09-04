@@ -45,12 +45,13 @@ impl TorrentStore {
         let p = parse_info_dict(metadata);
         let files = p.files.as_ref().map(serde_json::Value::to_string);
         sqlx::query(
-            "INSERT INTO torrents (infohash, name, piece_length, total_size, file_count, files, verified_at) \
-             VALUES ($1, $2, $3, $4, $5, $6::jsonb, now()) \
+            "INSERT INTO torrents (infohash, name, piece_length, total_size, file_count, files, verified_at, \
+             health_score, popularity_score, swarm_peers, seed_confirmed, last_health_check) \
+             VALUES ($1, $2, $3, $4, $5, $6::jsonb, now(), 90, 50, 1, true, now()) \
              ON CONFLICT (infohash) DO UPDATE SET \
              name = EXCLUDED.name, piece_length = EXCLUDED.piece_length, \
              total_size = EXCLUDED.total_size, file_count = EXCLUDED.file_count, files = EXCLUDED.files, \
-             verified_at = now()",
+             verified_at = now(), health_score = 90, seed_confirmed = true, last_health_check = now()",
         )
         .bind(ih.as_slice())
         .bind(p.name.as_deref())

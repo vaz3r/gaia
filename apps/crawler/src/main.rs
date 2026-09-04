@@ -224,12 +224,19 @@ async fn main() {
     let janitor_config = JanitorConfig {
         dead_retention_secs: config.storage.janitor_dead_retention_secs,
         verified_retention_secs: config.storage.janitor_verified_retention_secs,
+        peer_outcomes_retention_secs: config.storage.janitor_peer_outcomes_retention_secs,
+        sightings_single_seen_retention_secs: config.storage.janitor_sightings_single_seen_retention_secs,
+        sightings_max_retention_secs: config.storage.janitor_sightings_max_retention_secs,
         batch_size: config.storage.janitor_batch_size,
         batch_sleep_ms: config.storage.janitor_batch_sleep_ms,
     };
     tokio::spawn(async move {
         let report = storage::janitor::run(&janitor_pool, &janitor_config).await;
-        if report.dead_deleted == 0 && report.verified_deleted == 0 {
+        if report.dead_deleted == 0
+            && report.verified_deleted == 0
+            && report.peer_outcomes_deleted == 0
+            && report.sightings_deleted == 0
+        {
             tracing::info!("janitor: nothing to clean (table drained)");
         }
         let mut tick =
@@ -277,7 +284,7 @@ async fn main() {
         verify_rx,
         fresh_verify_rx,
         announce_rx,
-        node_routers,
+        node_routers.clone(),
         if config.fetch.utp_enabled {
             utp_socket().await
         } else {
@@ -365,6 +372,15 @@ async fn main() {
         Duration::from_secs(config.cache.peer_cache_cleanup_interval_secs),
     );
 
+    let health_prober = Arc::new(crate::verify::health_prober::HealthProber::new(
+        pool.clone(),
+        node_routers[0].clone(),
+        metrics.clone(),
+        peer_cache.clone(),
+        crate::verify::health_prober::HealthProberConfig::default(),
+    ));
+    let health_prober_run = health_prober.run();
+
     let shutdown_signal = async {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("shutdown signal received, draining batch writer");
@@ -382,6 +398,7 @@ async fn main() {
         _ = pipeline => { eprintln!("[DBG] select: pipeline resolved"); }
         _ = report => { eprintln!("[DBG] select: report resolved"); }
         _ = cache_cleanup => { eprintln!("[DBG] select: cache_cleanup resolved"); }
+        _ = health_prober_run => { eprintln!("[DBG] select: health_prober_run resolved"); }
         _ = shutdown_signal => { eprintln!("[DBG] select: shutdown_signal resolved"); }
     }
 

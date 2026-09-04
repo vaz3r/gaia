@@ -113,6 +113,9 @@ pub struct StorageConfig {
     pub janitor_interval_secs: u64,
     pub janitor_dead_retention_secs: u64,
     pub janitor_verified_retention_secs: u64,
+    pub janitor_peer_outcomes_retention_secs: u64,
+    pub janitor_sightings_single_seen_retention_secs: u64,
+    pub janitor_sightings_max_retention_secs: u64,
     pub janitor_batch_size: i64,
     pub janitor_batch_sleep_ms: u64,
 }
@@ -275,6 +278,9 @@ impl Default for StorageConfig {
             janitor_interval_secs: 1800,
             janitor_dead_retention_secs: 86400,
             janitor_verified_retention_secs: 3600,
+            janitor_peer_outcomes_retention_secs: 172800,
+            janitor_sightings_single_seen_retention_secs: 604800,
+            janitor_sightings_max_retention_secs: 2592000,
             janitor_batch_size: 25000,
             janitor_batch_sleep_ms: 100,
         }
@@ -494,6 +500,18 @@ impl Config {
         self.storage.janitor_dead_retention_secs = env_u64(
             "CRAW_JANITOR_DEAD_RETENTION_SECS",
             self.storage.janitor_dead_retention_secs,
+        );
+        self.storage.janitor_peer_outcomes_retention_secs = env_u64(
+            "CRAW_JANITOR_PEER_OUTCOMES_RETENTION_SECS",
+            self.storage.janitor_peer_outcomes_retention_secs,
+        );
+        self.storage.janitor_sightings_single_seen_retention_secs = env_u64(
+            "CRAW_JANITOR_SIGHTINGS_SINGLE_SEEN_RETENTION_SECS",
+            self.storage.janitor_sightings_single_seen_retention_secs,
+        );
+        self.storage.janitor_sightings_max_retention_secs = env_u64(
+            "CRAW_JANITOR_SIGHTINGS_MAX_RETENTION_SECS",
+            self.storage.janitor_sightings_max_retention_secs,
         );
 
         // fetch (tcp/utp timeout)
@@ -810,6 +828,12 @@ struct PartialStorage {
     janitor_dead_retention_secs: Option<u64>,
     #[serde(default)]
     janitor_verified_retention_secs: Option<u64>,
+    #[serde(default)]
+    janitor_peer_outcomes_retention_secs: Option<u64>,
+    #[serde(default)]
+    janitor_sightings_single_seen_retention_secs: Option<u64>,
+    #[serde(default)]
+    janitor_sightings_max_retention_secs: Option<u64>,
     #[serde(default)]
     janitor_batch_size: Option<i64>,
     #[serde(default)]
@@ -1137,6 +1161,15 @@ impl PartialStorage {
         }
         if let Some(v) = self.janitor_verified_retention_secs {
             cfg.janitor_verified_retention_secs = v;
+        }
+        if let Some(v) = self.janitor_peer_outcomes_retention_secs {
+            cfg.janitor_peer_outcomes_retention_secs = v;
+        }
+        if let Some(v) = self.janitor_sightings_single_seen_retention_secs {
+            cfg.janitor_sightings_single_seen_retention_secs = v;
+        }
+        if let Some(v) = self.janitor_sightings_max_retention_secs {
+            cfg.janitor_sightings_max_retention_secs = v;
         }
         if let Some(v) = self.janitor_batch_size {
             cfg.janitor_batch_size = v;

@@ -343,14 +343,17 @@ async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry], flush_chunk: usiz
         let n = chunk.len();
         let param_count = n * 7;
         let mut sql = String::with_capacity(256 + param_count * 4);
-        sql.push_str("INSERT INTO torrents (infohash, name, piece_length, total_size, file_count, files, verified_at) VALUES ");
+        sql.push_str(
+            "INSERT INTO torrents (infohash, name, piece_length, total_size, file_count, files, verified_at, \
+             health_score, popularity_score, swarm_peers, seed_confirmed, last_health_check) VALUES ",
+        );
         for i in 0..n {
             let base = i * 7;
             if i > 0 {
                 sql.push_str(", ");
             }
             sql.push_str(&format!(
-                "(${}, ${}, ${}, ${}, ${}, ${}, ${})",
+                "(${}, ${}, ${}, ${}, ${}, ${}, ${}, 90, 50, 1, true, now())",
                 base + 1,
                 base + 2,
                 base + 3,
@@ -364,7 +367,8 @@ async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry], flush_chunk: usiz
             " ON CONFLICT (infohash) DO UPDATE SET \
              name = EXCLUDED.name, piece_length = EXCLUDED.piece_length, \
              total_size = EXCLUDED.total_size, file_count = EXCLUDED.file_count, \
-             files = EXCLUDED.files, verified_at = now()",
+             files = EXCLUDED.files, verified_at = now(), \
+             health_score = 90, seed_confirmed = true, last_health_check = now()",
         );
 
         let mut q = sqlx::query(&sql);
