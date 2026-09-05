@@ -2293,8 +2293,10 @@ export default function App() {
                     />
                   </div>
                   <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1 border-t border-[#141414]">
-                    <span>{selectedTorrent.seed_confirmed ? '✓ Confirmed Seed' : 'Unconfirmed Seed'}</span>
-                    <span>{selectedTorrent.swarm_peers || 1} DHT Peers</span>
+                    <span className={selectedTorrent.seed_confirmed && (selectedTorrent.health_score ?? 0) >= 40 ? 'text-emerald-400 font-semibold' : 'text-[#777]'}>
+                      {selectedTorrent.seed_confirmed && (selectedTorrent.health_score ?? 0) >= 40 ? '✓ Confirmed Active Seed' : 'Unconfirmed / Stale Swarm'}
+                    </span>
+                    <span>{selectedTorrent.swarm_peers || 0} DHT Peers</span>
                   </div>
                 </div>
 
@@ -2321,8 +2323,37 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Swarm Recency Alert if stale */}
+              {(selectedTorrent.health_score ?? 0) < 30 && (
+                <div className="rounded-lg border border-amber-900/50 bg-amber-950/20 px-3.5 py-2.5 flex items-start gap-2.5 text-xs text-amber-300 font-sans">
+                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold">Low or Stale DHT Activity: </span>
+                    <span className="text-amber-300/80">
+                      This release has low connectable swarm activity. Downloads may be slow or stalled unless an active seeder comes back online.
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Sighting & Verification Stats */}
               <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 text-xs font-mono space-y-1.5">
+                <div className="flex justify-between text-[#888]">
+                  <span>Last Sighted in DHT:</span>
+                  <span className={`font-semibold ${
+                    selectedTorrent.last_seen && (Date.now() - new Date(selectedTorrent.last_seen).getTime()) < 172800000
+                      ? 'text-emerald-400'
+                      : 'text-rose-400'
+                  }`}>
+                    {selectedTorrent.last_seen ? formatTime(selectedTorrent.last_seen) : '—'}
+                  </span>
+                </div>
+                <div className="flex justify-between text-[#888]">
+                  <span>Last Health Probe:</span>
+                  <span className="text-white">
+                    {selectedTorrent.last_health_check ? formatTime(selectedTorrent.last_health_check) : 'Pending probe'}
+                  </span>
+                </div>
                 <div className="flex justify-between text-[#888]">
                   <span>Verified At:</span>
                   <span className="text-white">

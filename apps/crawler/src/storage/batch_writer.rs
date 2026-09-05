@@ -353,7 +353,7 @@ async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry], flush_chunk: usiz
                 sql.push_str(", ");
             }
             sql.push_str(&format!(
-                "(${}, ${}, ${}, ${}, ${}, ${}, ${}, 90, 50, 1, true, now())",
+                "(${}, ${}, ${}, ${}, ${}, ${}, ${}, 50, 50, 0, false, now())",
                 base + 1,
                 base + 2,
                 base + 3,
@@ -367,8 +367,7 @@ async fn flush_torrents(pool: &PgPool, batch: &[TorrentEntry], flush_chunk: usiz
             " ON CONFLICT (infohash) DO UPDATE SET \
              name = EXCLUDED.name, piece_length = EXCLUDED.piece_length, \
              total_size = EXCLUDED.total_size, file_count = EXCLUDED.file_count, \
-             files = EXCLUDED.files, verified_at = now(), \
-             health_score = 90, seed_confirmed = true, last_health_check = now()",
+             files = EXCLUDED.files, verified_at = now()",
         );
 
         let mut q = sqlx::query(&sql);

@@ -102,7 +102,7 @@ impl HealthProber {
             };
 
             let hours_decay = (now - last_seen).num_seconds().max(0) as f64 / 3600.0;
-            let decay = (-hours_decay / 720.0).exp(); // 30-day half-life
+            let decay = (-hours_decay / 48.0).exp(); // 48-hour half-life (honest real-time swarm decay)
 
             let p_sat = if peers_count > 0 {
                 ((1.0 + peers_count as f64).ln() / (26.0f64).ln()).min(1.0)
@@ -119,15 +119,19 @@ impl HealthProber {
             let pop_score = ((100.0 * (0.40 * pop_base + 0.35 * vel + 0.25 * p_sat)).round() as i16)
                 .clamp(0, 100);
 
+            // Confirmed seed requires active peers probed AND sighted within 48h
+            let seed_confirmed = peers_count > 0 && hours_decay <= 48.0;
+
             let _ = sqlx::query(
                 "UPDATE torrents \
-                 SET swarm_peers = $2, health_score = $3, popularity_score = $4, last_health_check = now() \
+                 SET swarm_peers = $2, health_score = $3, popularity_score = $4, seed_confirmed = $5, last_health_check = now() \
                  WHERE infohash = $1",
             )
             .bind(&ih_bytes)
             .bind(peers_count as i32)
             .bind(health_score)
             .bind(pop_score)
+            .bind(seed_confirmed)
             .execute(&self.pool)
             .await;
         }
