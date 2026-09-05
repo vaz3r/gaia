@@ -24,6 +24,11 @@ global_fetch_limit = 1200
 race_peers = 8
 metadata_timeout_secs = 25
 utp_enabled = true
+conn_limiter_max_entries = 500000
+
+[cache]
+peer_cache_max_entries = 250000
+announce_cache_max_entries = 100000
 
 [logging]
 log_dir = "/data/logs"

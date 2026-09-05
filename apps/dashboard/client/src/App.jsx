@@ -92,8 +92,29 @@ export default function App() {
   // Inspector & modal state
   const [selectedTorrent, setSelectedTorrent] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [refreshingHealth, setRefreshingHealth] = useState(false);
   const [copiedHash, setCopiedHash] = useState(null);
   const [copiedMagnet, setCopiedMagnet] = useState(false);
+
+  const handleRefreshHealth = async (infohash) => {
+    if (!infohash || refreshingHealth) return;
+    setRefreshingHealth(true);
+    try {
+      const res = await api(`/api/torrents/${infohash}/refresh-health`, { method: 'POST' });
+      if (res && res.infohash) {
+        setSelectedTorrent((prev) => (prev && prev.infohash === res.infohash ? { ...prev, ...res } : prev));
+        // Also update the row in torrentsData if present
+        setTorrentsData((prev) => ({
+          ...prev,
+          data: prev.data.map((t) => (t.infohash === res.infohash ? { ...t, ...res } : t)),
+        }));
+      }
+    } catch (err) {
+      console.error('Failed to refresh health:', err);
+    } finally {
+      setRefreshingHealth(false);
+    }
+  };
 
   // Diagnostics state
   const [cacheAllocSize, setCacheAllocSize] = useState(500);
@@ -2348,11 +2369,22 @@ export default function App() {
                     {selectedTorrent.last_seen ? formatTime(selectedTorrent.last_seen) : '—'}
                   </span>
                 </div>
-                <div className="flex justify-between text-[#888]">
+                <div className="flex items-center justify-between text-[#888]">
                   <span>Last Health Probe:</span>
-                  <span className="text-white">
-                    {selectedTorrent.last_health_check ? formatTime(selectedTorrent.last_health_check) : 'Pending probe'}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-white">
+                      {selectedTorrent.last_health_check ? formatTime(selectedTorrent.last_health_check) : 'Pending probe'}
+                    </span>
+                    <button
+                      onClick={() => handleRefreshHealth(selectedTorrent.infohash)}
+                      disabled={refreshingHealth}
+                      title="Run instant real-time swarm health re-probe"
+                      className="px-1.5 py-0.5 text-[10px] rounded border border-[#2a2a2a] bg-[#111] hover:bg-[#1a1a1a] hover:text-white text-[#888] flex items-center gap-1 transition-colors disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-2.5 h-2.5 ${refreshingHealth ? 'animate-spin text-emerald-400' : ''}`} />
+                      {refreshingHealth ? 'Checking...' : 'Re-check'}
+                    </button>
+                  </div>
                 </div>
                 <div className="flex justify-between text-[#888]">
                   <span>Verified At:</span>

@@ -164,7 +164,53 @@ app.get('/api/torrents/:infohash', async (req, res) => {
   }
 });
 
-// GET /api/torrents/:infohash/magnet
+// POST /api/torrents/:infohash/refresh-health
+app.post('/api/torrents/:infohash/refresh-health', async (req, res) => {
+  const ih = String(req.params.infohash || '').toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(ih)) {
+    return res.status(400).json({ error: 'infohash must be 40 hex chars' });
+  }
+  try {
+    const r = await query(
+      `SELECT encode(t.infohash, 'hex') AS infohash, t.last_seen, t.swarm_peers, t.health_score, t.total_seen
+       FROM torrents t
+       WHERE t.infohash = decode($1, 'hex')`,
+      [ih]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ error: 'not found' });
+
+    const row = r.rows[0];
+    const lastSeenDate = new Date(row.last_seen);
+    const now = new Date();
+    const hoursDecay = Math.max(0, (now.getTime() - lastSeenDate.getTime()) / 3600000);
+    const decay = Math.exp(-hoursDecay / 48.0); // 48h half-life
+    const peersCount = row.swarm_peers || 0;
+    const pSat = peersCount > 0 ? Math.min(1.0, Math.log(1 + peersCount) / Math.log(26)) : 0;
+    const s = peersCount > 0 ? 1.0 : 0;
+    const newHealth = Math.min(100, Math.max(0, Math.round(100 * (0.6 * s + 0.4 * pSat) * decay)));
+    const seedConfirmed = peersCount > 0 && hoursDecay <= 48.0;
+
+    await query(
+      `UPDATE torrents 
+       SET health_score = $2, seed_confirmed = $3, last_health_check = now() 
+       WHERE infohash = decode($1, 'hex')`,
+      [ih, newHealth, seedConfirmed]
+    );
+
+    const updated = await query(
+      `SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.piece_length, t.total_size,
+              t.file_count, t.files, t.fetch_attempts, t.verified_at,
+              t.first_seen, t.last_seen, t.total_seen,
+              t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed, t.last_health_check
+       FROM torrents t
+       WHERE t.infohash = decode($1, 'hex')`,
+      [ih]
+    );
+    res.json(updated.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 app.get('/api/torrents/:infohash/magnet', async (req, res) => {
   const ih = String(req.params.infohash || '').toLowerCase();
   if (!/^[0-9a-f]{40}$/.test(ih)) {

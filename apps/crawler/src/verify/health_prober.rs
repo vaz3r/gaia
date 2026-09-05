@@ -6,18 +6,22 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::task::JoinSet;
+
 pub struct HealthProberConfig {
     pub interval: Duration,
     pub batch_size: i64,
     pub query_timeout: Duration,
+    pub concurrency: usize,
 }
 
 impl Default for HealthProberConfig {
     fn default() -> Self {
         HealthProberConfig {
-            interval: Duration::from_secs(45),
-            batch_size: 25,
+            interval: Duration::from_secs(10),
+            batch_size: 30,
             query_timeout: Duration::from_secs(3),
+            concurrency: 8,
         }
     }
 }
@@ -58,9 +62,11 @@ impl HealthProber {
     }
 
     async fn probe_round(&self) -> Result<(), sqlx::Error> {
-        let rows = sqlx::query_as::<_, (Vec<u8>, i64, chrono::DateTime<chrono::Utc>)>(
+        // Tier 1: Query active swarms sighted in the last 7 days first (highest ROI for users)
+        let mut rows = sqlx::query_as::<_, (Vec<u8>, i64, chrono::DateTime<chrono::Utc>)>(
             "SELECT infohash, total_seen, last_seen \
              FROM torrents \
+             WHERE last_seen > now() - interval '7 days' \
              ORDER BY last_health_check ASC NULLS FIRST \
              LIMIT $1",
         )
@@ -68,11 +74,27 @@ impl HealthProber {
         .fetch_all(&self.pool)
         .await?;
 
+        // Tier 2: If all active swarms are recently checked, pick from the oldest unprobed cold torrents
+        if rows.is_empty() {
+            rows = sqlx::query_as::<_, (Vec<u8>, i64, chrono::DateTime<chrono::Utc>)>(
+                "SELECT infohash, total_seen, last_seen \
+                 FROM torrents \
+                 ORDER BY last_health_check ASC NULLS FIRST \
+                 LIMIT $1",
+            )
+            .bind(self.config.batch_size)
+            .fetch_all(&self.pool)
+            .await?;
+        }
+
         if rows.is_empty() {
             return Ok(());
         }
 
         let now = chrono::Utc::now();
+        let mut set = JoinSet::new();
+        let sem = Arc::new(tokio::sync::Semaphore::new(self.config.concurrency));
+
         for (ih_bytes, total_seen, last_seen) in rows {
             if ih_bytes.len() != 20 {
                 continue;
@@ -80,60 +102,75 @@ impl HealthProber {
             let mut ih = [0u8; 20];
             ih.copy_from_slice(&ih_bytes);
 
-            let res = source_peers(
-                self.router.clone(),
-                ih,
-                8,
-                self.metrics.clone(),
-                self.config.query_timeout * 2,
-                8,
-                3,
-                self.config.query_timeout,
-                16,
-                &self.cache,
-                false,
-            )
-            .await;
+            let router = self.router.clone();
+            let metrics = self.metrics.clone();
+            let cache = self.cache.clone();
+            let sem = sem.clone();
+            let query_timeout = self.config.query_timeout;
 
-            let peers_count = match res {
-                SourceResult::Peers(p) => p.len(),
-                SourceResult::NoPeers => 0,
-                SourceResult::AllTimeout => 0,
-            };
+            set.spawn(async move {
+                let _permit = sem.acquire_owned().await.ok();
+                let res = source_peers(
+                    router,
+                    ih,
+                    8,
+                    metrics,
+                    query_timeout * 2,
+                    8,
+                    3,
+                    query_timeout,
+                    16,
+                    &cache,
+                    false,
+                )
+                .await;
 
-            let hours_decay = (now - last_seen).num_seconds().max(0) as f64 / 3600.0;
-            let decay = (-hours_decay / 48.0).exp(); // 48-hour half-life (honest real-time swarm decay)
+                let peers_count = match res {
+                    SourceResult::Peers(p) => p.len(),
+                    SourceResult::NoPeers => 0,
+                    SourceResult::AllTimeout => 0,
+                };
 
-            let p_sat = if peers_count > 0 {
-                ((1.0 + peers_count as f64).ln() / (26.0f64).ln()).min(1.0)
-            } else {
-                0.0
-            };
+                let hours_decay = (now - last_seen).num_seconds().max(0) as f64 / 3600.0;
+                let decay = (-hours_decay / 48.0).exp(); // 48-hour half-life (honest real-time swarm decay)
 
-            let s = if peers_count > 0 { 1.0 } else { 0.0 };
-            let health_score = ((100.0 * (0.6 * s + 0.4 * p_sat) * decay).round() as i16)
-                .clamp(0, 100);
+                let p_sat = if peers_count > 0 {
+                    ((1.0 + peers_count as f64).ln() / (26.0f64).ln()).min(1.0)
+                } else {
+                    0.0
+                };
 
-            let pop_base = ((total_seen.max(1) as f64 + 1.0).log10() / 50001.0f64.log10()).min(1.0);
-            let vel = (-hours_decay / 168.0).exp(); // 7-day velocity window
-            let pop_score = ((100.0 * (0.40 * pop_base + 0.35 * vel + 0.25 * p_sat)).round() as i16)
-                .clamp(0, 100);
+                let s = if peers_count > 0 { 1.0 } else { 0.0 };
+                let health_score = ((100.0 * (0.6 * s + 0.4 * p_sat) * decay).round() as i16)
+                    .clamp(0, 100);
 
-            // Confirmed seed requires active peers probed AND sighted within 48h
-            let seed_confirmed = peers_count > 0 && hours_decay <= 48.0;
+                let pop_base = ((total_seen.max(1) as f64 + 1.0).log10() / 50001.0f64.log10()).min(1.0);
+                let vel = (-hours_decay / 168.0).exp(); // 7-day velocity window
+                let pop_score = ((100.0 * (0.40 * pop_base + 0.35 * vel + 0.25 * p_sat)).round() as i16)
+                    .clamp(0, 100);
 
-            let _ = sqlx::query(
-                "UPDATE torrents \
-                 SET swarm_peers = $2, health_score = $3, popularity_score = $4, seed_confirmed = $5, last_health_check = now() \
-                 WHERE infohash = $1",
-            )
-            .bind(&ih_bytes)
-            .bind(peers_count as i32)
-            .bind(health_score)
-            .bind(pop_score)
-            .bind(seed_confirmed)
-            .execute(&self.pool)
-            .await;
+                // Confirmed seed requires active peers probed AND sighted within 48h
+                let seed_confirmed = peers_count > 0 && hours_decay <= 48.0;
+
+                (ih_bytes, peers_count, health_score, pop_score, seed_confirmed)
+            });
+        }
+
+        while let Some(res) = set.join_next().await {
+            if let Ok((ih_bytes, peers_count, health_score, pop_score, seed_confirmed)) = res {
+                let _ = sqlx::query(
+                    "UPDATE torrents \
+                     SET swarm_peers = $2, health_score = $3, popularity_score = $4, seed_confirmed = $5, last_health_check = now() \
+                     WHERE infohash = $1",
+                )
+                .bind(&ih_bytes)
+                .bind(peers_count as i32)
+                .bind(health_score)
+                .bind(pop_score)
+                .bind(seed_confirmed)
+                .execute(&self.pool)
+                .await;
+            }
         }
 
         Ok(())
