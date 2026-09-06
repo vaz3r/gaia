@@ -84,6 +84,7 @@ export default function App() {
   // Navigation & Primary Views: 'overview' | 'browser' | 'classifier' | 'analysis' | 'routing' | 'diagnostics'
   const [activeTab, setActiveTab] = useState('overview');
   const [classifierReviewCount, setClassifierReviewCount] = useState(null);
+  const [classifierTotalClassified, setClassifierTotalClassified] = useState(null);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const moreMenuRef = useRef(null);
   const [scaleMode, setScaleMode] = useState('log'); // 'linear' | 'log'
@@ -237,6 +238,9 @@ export default function App() {
         .then((res) => {
           if (res?.review_queue_depth != null) {
             setClassifierReviewCount(res.review_queue_depth);
+          }
+          if (res?.total_classified != null) {
+            setClassifierTotalClassified(res.total_classified);
           }
         })
         .catch(() => {});
@@ -663,7 +667,11 @@ export default function App() {
                 {
                   id: 'classifier',
                   label: 'Classifier',
-                  badge: classifierReviewCount != null && classifierReviewCount > 0 ? `${classifierReviewCount.toLocaleString()}` : null,
+                  badge: classifierTotalClassified != null
+                    ? (classifierTotalClassified >= 1000000
+                        ? (classifierTotalClassified / 1000000).toFixed(2) + 'M'
+                        : (classifierTotalClassified / 1000).toFixed(0) + 'k')
+                    : (classifierReviewCount != null && classifierReviewCount > 0 ? `${classifierReviewCount.toLocaleString()}` : null),
                 },
                 { id: 'analysis', label: 'Analysis' },
               ].map((tab) => (

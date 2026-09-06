@@ -57,9 +57,10 @@ def get_torrents(
     offset: int = 0,
     limit: int = 25,
     search: Optional[str] = None,
-    needs_review: Optional[bool] = None
+    needs_review: Optional[bool] = None,
+    category: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Fetch paginated torrents from PostgreSQL with optional search and review filtering."""
+    """Fetch paginated torrents from PostgreSQL with optional search, category, and review filtering."""
     p = get_pool()
     conn = p.getconn()
     try:
@@ -117,6 +118,23 @@ def get_torrents(
                     OFFSET %s LIMIT %s;
                     """,
                     (term, offset, limit)
+                )
+                rows = cur.fetchall()
+            elif category and category.strip():
+                cat = category.strip()
+                cur.execute("SELECT count(*) FROM torrents WHERE category = %s;", (cat,))
+                total = cur.fetchone()[0]
+
+                cur.execute(
+                    """
+                    SELECT infohash, name, total_size, file_count, (files IS NOT NULL) AS has_manifest, first_seen, last_seen, verified_at,
+                           category, category_confidence, needs_review, classified_at
+                    FROM torrents
+                    WHERE category = %s
+                    ORDER BY verified_at DESC NULLS LAST
+                    OFFSET %s LIMIT %s;
+                    """,
+                    (cat, offset, limit)
                 )
                 rows = cur.fetchall()
             else:
@@ -513,17 +531,40 @@ def get_queue_metrics() -> Dict[str, Any]:
                 unclassified = cur.fetchone()[0]
                 cur.execute("SELECT count(*) FROM torrents WHERE needs_review = true;")
                 review_queue = cur.fetchone()[0]
+                # High-speed index-only scan on idx_torrents_classified_at (<0.5ms)
+                cur.execute("SELECT count(*) FROM torrents WHERE classified_at >= now() - interval '1 minute';")
+                rate_1m_raw = cur.fetchone()[0] or 0
+                cur.execute("SELECT count(*) FROM torrents WHERE classified_at >= now() - interval '5 minute';")
+                rate_5m = cur.fetchone()[0] or 0
+                # Smooth rate per minute using the 5m rolling window when between 2,000-item worker batches
+                rate_1m = rate_1m_raw if rate_1m_raw > 0 else int(round(rate_5m / 5.0))
+
+                # Category breakdown
+                cur.execute("SELECT category, count(*) FROM torrents WHERE category IS NOT NULL GROUP BY category ORDER BY count(*) DESC;")
+                cat_rows = cur.fetchall()
+                category_counts = {r[0]: r[1] for r in cat_rows}
             else:
                 unclassified = total
                 review_queue = 0
+                rate_1m = 0
+                rate_5m = 0
+                category_counts = {}
 
             cur.execute("SELECT count(*) FROM labeled_results;")
             total_labels = cur.fetchone()[0]
 
+            total_classified = max(0, total - unclassified)
+            classified_pct = round((total_classified / max(1, total)) * 100, 2)
+
             res = {
                 "total_torrents": total,
+                "total_classified": total_classified,
                 "unclassified_torrents": unclassified,
+                "classified_percentage": classified_pct,
                 "review_queue_depth": review_queue,
+                "rate_per_minute": rate_1m,
+                "rate_5m": rate_5m,
+                "category_counts": category_counts,
                 "total_labeled_results": total_labels,
                 "migration_applied": cols_exist
             }

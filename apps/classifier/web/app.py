@@ -101,11 +101,12 @@ def list_torrents(
     offset: int = Query(0, ge=0),
     limit: int = Query(25, ge=1, le=100),
     search: Optional[str] = Query(None),
-    needs_review: Optional[bool] = Query(None)
+    needs_review: Optional[bool] = Query(None),
+    category: Optional[str] = Query(None)
 ):
     """Fetch paginated torrents from PostgreSQL."""
     try:
-        data = db.get_torrents(offset=offset, limit=limit, search=search, needs_review=needs_review)
+        data = db.get_torrents(offset=offset, limit=limit, search=search, needs_review=needs_review, category=category)
         return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
