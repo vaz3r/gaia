@@ -81,12 +81,12 @@ services:
     volumes:
       - /home/${DEPLOY_USER:-ubuntu}/gaia-data/rclone:/root/.config/rclone
 
-  classifier-web:
+  classifier-api:
     build:
       context: ../../../apps/classifier
       dockerfile: Dockerfile
-    image: gaia-classifier-web:${GIT_COMMIT:-latest}
-    container_name: gaia-classifier-web
+    image: gaia-classifier-api:${GIT_COMMIT:-latest}
+    container_name: gaia-classifier-api
     restart: unless-stopped
     network_mode: host
     environment:
@@ -97,7 +97,7 @@ services:
       PG_PASSWORD: ${PG_PASSWORD}
       PORT: ${CLASSIFIER_PORT:-8080}
     volumes:
-      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/classifier/models:/app/models
+      - /home/${DEPLOY_USER:-core}/gaia-data/classifier/models:/app/models
     command: ["uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8080"]
 
   classifier-worker:
@@ -117,5 +117,5 @@ services:
       WORKER_BATCH_SIZE: 2000
       WORKER_POLL_INTERVAL: 15
     volumes:
-      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/classifier/models:/app/models
+      - /home/${DEPLOY_USER:-core}/gaia-data/classifier/models:/app/models
     command: ["python", "scripts/worker.py"]

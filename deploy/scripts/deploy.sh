@@ -7,7 +7,7 @@ set -euo pipefail
 # Examples:
 #   ./deploy/scripts/deploy.sh gaia-node
 #   ./deploy/scripts/deploy.sh workspace-production HEAD
-#   ./deploy/scripts/deploy.sh workspace-production HEAD "classifier-web classifier-worker"
+#   ./deploy/scripts/deploy.sh workspace-production HEAD "classifier-api classifier-worker"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"

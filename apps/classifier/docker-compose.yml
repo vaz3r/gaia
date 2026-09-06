@@ -1,12 +1,12 @@
 name: gaia-classifier-local
 
 services:
-  classifier-web:
+  classifier-api:
     build:
       context: .
       dockerfile: Dockerfile
     image: gaia-classifier:latest
-    container_name: gaia-classifier-web
+    container_name: gaia-classifier-api
     restart: unless-stopped
     ports:
       - "8000:8000"
