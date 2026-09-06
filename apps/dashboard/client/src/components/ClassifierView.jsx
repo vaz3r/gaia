@@ -112,15 +112,16 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
       }
 
       const res = await api(`/api/classifier/torrents?${params.toString()}`);
-      setTorrents(res.items || []);
+      const items = res.torrents || res.items || [];
+      setTorrents(items);
       setTotalTorrents(res.total || 0);
 
       // Auto-select first item if none selected or not in current items
-      if (res.items && res.items.length > 0) {
+      if (items.length > 0) {
         setSelectedTorrent((prev) => {
-          if (!prev) return res.items[0];
-          const exists = res.items.some((it) => it.infohash === prev.infohash);
-          return exists ? prev : res.items[0];
+          if (!prev) return items[0];
+          const exists = items.some((it) => it.infohash === prev.infohash);
+          return exists ? prev : items[0];
         });
       } else {
         setSelectedTorrent(null);
