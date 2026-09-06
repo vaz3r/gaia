@@ -23,10 +23,13 @@ import {
   Activity,
   AlertCircle,
   Zap,
-  Filter
+  Filter,
+  FileText,
+  Folder,
+  Info
 } from 'lucide-react';
 import { api, magnetFrom } from '../api.js';
-import { formatBytes, formatNum, formatTime } from '../utils.js';
+import { formatBytes, formatNum, formatTime, formatDubaiDate } from '../utils.js';
 
 const CATEGORY_COLORS = {
   Adult: 'bg-rose-500/10 text-rose-400 border-rose-500/30',
@@ -76,6 +79,8 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
 
   // Selected item & Live Classification Explainability
   const [selectedTorrent, setSelectedTorrent] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [fileSearch, setFileSearch] = useState('');
   const [explainData, setExplainData] = useState(null);
   const [explainLoading, setExplainLoading] = useState(false);
 
@@ -154,46 +159,75 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
     fetchQueueTorrents();
   }, [fetchQueueTorrents]);
 
-  // Fetch explainability / probabilities when selectedTorrent changes
+  // Fetch full torrent details (files, classification_meta) and explainability when selected item changes
+  const selectedInfohash = selectedTorrent?.infohash;
   useEffect(() => {
-    if (!selectedTorrent) {
+    if (!selectedInfohash) {
       setExplainData(null);
       return;
     }
 
+    setFileSearch('');
     let isMounted = true;
-    const fetchExplain = async () => {
+
+    const loadTorrentDetailsAndExplain = async () => {
+      setDetailLoading(true);
       setExplainLoading(true);
       try {
+        // 1. Fetch full details from database including files manifest and classification_meta
+        let detailed = null;
+        try {
+          const detRes = await api(`/api/classifier/torrents/${selectedInfohash}`);
+          if (detRes && detRes.infohash === selectedInfohash && isMounted) {
+            detailed = detRes;
+            setSelectedTorrent((prev) => (prev?.infohash === selectedInfohash ? { ...prev, ...detRes } : prev));
+          }
+        } catch (detailErr) {
+          console.warn('Failed to load full torrent details:', detailErr.message);
+        }
+
+        if (!isMounted) return;
+
+        // 2. Fetch live explainability / probability distribution
         const payload = {
-          infohash: selectedTorrent.infohash,
-          name: selectedTorrent.name,
-          total_size: selectedTorrent.total_size,
-          file_count: selectedTorrent.file_count,
-          files: selectedTorrent.files || []
+          infohash: selectedInfohash,
+          name: detailed?.name || selectedTorrent.name,
+          total_size: detailed?.total_size ?? selectedTorrent.total_size,
+          file_count: detailed?.file_count ?? selectedTorrent.file_count,
+          files: detailed?.files || selectedTorrent.files || []
         };
+
         const res = await fetch('/api/classifier/classify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
+
         if (res.ok && isMounted) {
           const json = await res.json();
           setExplainData(json.classification);
-          setSelectedCategory(json.classification?.predicted_category || selectedTorrent.category || 'Movies');
+          setSelectedCategory(
+            json.classification?.predicted_category ||
+            detailed?.category ||
+            selectedTorrent.category ||
+            'Movies'
+          );
         }
       } catch (err) {
         console.warn('Explainability fetch failed:', err);
       } finally {
-        if (isMounted) setExplainLoading(false);
+        if (isMounted) {
+          setDetailLoading(false);
+          setExplainLoading(false);
+        }
       }
     };
 
-    fetchExplain();
+    loadTorrentDetailsAndExplain();
     return () => {
       isMounted = false;
     };
-  }, [selectedTorrent]);
+  }, [selectedInfohash]);
 
   // Handle Search submit
   const handleSearchSubmit = (e) => {
@@ -707,7 +741,103 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
 
               {/* Main Inspector Body */}
               <div className="p-4 space-y-5 flex-1">
-                {/* 1. Interactive Human Relabeling Bar */}
+                {/* 1. Classification Metadata & Diagnostics (Database Ground-Truth & ML Model Decisions) */}
+                <div className="rounded-lg border border-[#1e1e1e] bg-[#0c0c0c] p-3.5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-mono text-[#888] uppercase tracking-wider flex items-center gap-1.5">
+                      <Cpu className="w-3.5 h-3.5 text-white" />
+                      Classification Metadata & Diagnostics
+                    </span>
+                    {detailLoading && (
+                      <span className="text-[11px] font-mono text-[#888] flex items-center gap-1">
+                        <RefreshCw className="w-3 h-3 animate-spin text-white" /> Loading metadata...
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 font-mono text-xs">
+                    {/* Assigned Category */}
+                    <div className="bg-[#121212] border border-[#1f1f1f] rounded p-2.5 space-y-1">
+                      <div className="text-[10px] text-[#666] uppercase">Assigned Category</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`px-2 py-0.5 rounded border text-[11px] font-semibold ${CATEGORY_COLORS[selectedTorrent.category] || CATEGORY_COLORS.Other}`}>
+                          {selectedTorrent.category || 'Unclassified'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Confidence Score */}
+                    <div className="bg-[#121212] border border-[#1f1f1f] rounded p-2.5 space-y-1">
+                      <div className="text-[10px] text-[#666] uppercase">Confidence</div>
+                      <div className="text-white font-bold text-sm">
+                        {selectedTorrent.category_confidence !== null && selectedTorrent.category_confidence !== undefined
+                          ? `${Math.round(selectedTorrent.category_confidence * 100)}%`
+                          : '—'}
+                      </div>
+                    </div>
+
+                    {/* Review Flag Status */}
+                    <div className="bg-[#121212] border border-[#1f1f1f] rounded p-2.5 space-y-1">
+                      <div className="text-[10px] text-[#666] uppercase">Review Queue Status</div>
+                      <div>
+                        {selectedTorrent.needs_review ? (
+                          <span className="text-amber-400 font-semibold flex items-center gap-1 text-[11px]">
+                            <AlertTriangle className="w-3 h-3" /> Needs Review
+                          </span>
+                        ) : (
+                          <span className="text-emerald-400 font-semibold flex items-center gap-1 text-[11px]">
+                            <Check className="w-3 h-3" /> Confirmed
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Review Reason / Flag Type */}
+                    <div className="bg-[#121212] border border-[#1f1f1f] rounded p-2.5 space-y-1">
+                      <div className="text-[10px] text-[#666] uppercase">Flag Reason</div>
+                      <div className="text-[#ededed] font-medium text-[11px] capitalize">
+                        {selectedTorrent.classification_meta?.review_type
+                          ? selectedTorrent.classification_meta.review_type.replace('_', ' ')
+                          : selectedTorrent.needs_review ? 'Low Confidence' : 'None'}
+                      </div>
+                    </div>
+
+                    {/* Runner-up / Margin */}
+                    <div className="bg-[#121212] border border-[#1f1f1f] rounded p-2.5 space-y-1">
+                      <div className="text-[10px] text-[#666] uppercase">Runner-up Candidate</div>
+                      <div className="text-[#ccc] text-[11px] truncate">
+                        {selectedTorrent.classification_meta?.top2 ? (
+                          <span>
+                            {selectedTorrent.classification_meta.top2.category}{' '}
+                            <span className="text-[#777]">
+                              ({Math.round((selectedTorrent.classification_meta.top2.confidence || 0) * 100)}%)
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-[#666]">N/A</span>
+                        )}
+                      </div>
+                      {selectedTorrent.classification_meta?.margin !== undefined && (
+                        <div className="text-[10px] text-[#666]">
+                          Margin: {(selectedTorrent.classification_meta.margin * 100).toFixed(1)}%
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Model Version & Date */}
+                    <div className="bg-[#121212] border border-[#1f1f1f] rounded p-2.5 space-y-1">
+                      <div className="text-[10px] text-[#666] uppercase">Model & Classified At</div>
+                      <div className="text-white text-[11px]">
+                        Model: <span className="font-semibold">{selectedTorrent.classification_meta?.model_version || 'v2'}</span>
+                      </div>
+                      <div className="text-[10px] text-[#666] truncate" title={selectedTorrent.classified_at || '—'}>
+                        {selectedTorrent.classified_at ? formatDubaiDate(selectedTorrent.classified_at) : '—'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Interactive Human Relabeling Bar */}
                 <div className="rounded-lg border border-[#1e1e1e] bg-[#0c0c0c] p-3.5 space-y-2.5">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-mono text-[#888] uppercase tracking-wider">
@@ -767,7 +897,7 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                   </div>
                 </div>
 
-                {/* 2. Model Confidence & Class Probabilities */}
+                {/* 3. Model Confidence & Class Probabilities */}
                 <div className="space-y-2.5">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-mono text-[#888] uppercase tracking-wider">
@@ -825,31 +955,118 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                   )}
                 </div>
 
-                {/* 3. Feature Signals & File Structure Breakdown */}
-                {selectedTorrent.files && Array.isArray(selectedTorrent.files) && selectedTorrent.files.length > 0 && (
-                  <div className="space-y-2">
-                    <span className="text-[11px] font-mono text-[#888] uppercase tracking-wider">
-                      Payload Files ({selectedTorrent.files.length})
+                {/* 4. Payload Files Manifest & File Hierarchy */}
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-mono text-[#888] uppercase tracking-wider flex items-center gap-1.5">
+                      <Folder className="w-3.5 h-3.5 text-white" />
+                      Payload Files Manifest (
+                      {selectedTorrent.files && Array.isArray(selectedTorrent.files)
+                        ? selectedTorrent.files.length
+                        : selectedTorrent.file_count || 0}
+                      )
                     </span>
-                    <div className="rounded-lg border border-[#1e1e1e] bg-[#0c0c0c] p-3 max-h-48 overflow-y-auto space-y-1 font-mono text-xs text-[#888]">
-                      {selectedTorrent.files.slice(0, 30).map((file, idx) => {
-                        const path = typeof file === 'string' ? file : file.path || file.name || 'unnamed';
-                        const sz = typeof file === 'object' && file.length ? formatBytes(file.length) : '';
-                        return (
-                          <div key={idx} className="flex items-center justify-between py-0.5 hover:text-white">
-                            <span className="truncate pr-4">• {path}</span>
-                            {sz && <span className="text-[#555] text-[11px] shrink-0">{sz}</span>}
-                          </div>
-                        );
-                      })}
-                      {selectedTorrent.files.length > 30 && (
-                        <div className="text-[11px] text-[#555] pt-1 italic">
-                          + {selectedTorrent.files.length - 30} more files
-                        </div>
-                      )}
-                    </div>
+                    {selectedTorrent.files && selectedTorrent.files.length > 5 && (
+                      <div className="relative w-44">
+                        <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-[#555]" />
+                        <input
+                          type="text"
+                          value={fileSearch}
+                          onChange={(e) => setFileSearch(e.target.value)}
+                          placeholder="Filter files..."
+                          className="w-full bg-[#050505] border border-[#222] rounded pl-6 pr-2 py-0.5 text-[11px] text-[#ededed] placeholder-[#555] focus:outline-none focus:border-[#444] font-mono"
+                        />
+                      </div>
+                    )}
                   </div>
-                )}
+
+                  {detailLoading && (!selectedTorrent.files || selectedTorrent.files.length === 0) ? (
+                    <div className="p-6 text-center text-[#666] text-xs font-mono border border-[#1e1e1e] rounded-lg bg-[#0c0c0c] flex items-center justify-center gap-2">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" />
+                      <span>Loading file manifest...</span>
+                    </div>
+                  ) : selectedTorrent.files && Array.isArray(selectedTorrent.files) && selectedTorrent.files.length > 0 ? (
+                    (() => {
+                      const filteredFiles = selectedTorrent.files.filter((file) => {
+                        if (!fileSearch.trim()) return true;
+                        const rawPath = typeof file === 'string'
+                          ? file
+                          : Array.isArray(file.path)
+                          ? file.path.join('/')
+                          : file.path || file.name || '';
+                        return rawPath.toLowerCase().includes(fileSearch.trim().toLowerCase());
+                      });
+
+                      return (
+                        <div className="rounded-lg border border-[#1e1e1e] bg-[#0c0c0c] p-3 max-h-64 overflow-y-auto space-y-1 font-mono text-xs">
+                          {filteredFiles.length === 0 ? (
+                            <div className="text-center py-4 text-[#555] text-xs">
+                              No files matching "{fileSearch}"
+                            </div>
+                          ) : (
+                            filteredFiles.slice(0, 100).map((file, idx) => {
+                              const rawPath = typeof file === 'string'
+                                ? file
+                                : Array.isArray(file.path)
+                                ? file.path.join('/')
+                                : file.path || file.name || 'unnamed';
+                              const sz = typeof file === 'object' && file.length !== undefined
+                                ? formatBytes(file.length)
+                                : '';
+
+                              // Extract extension
+                              const ext = rawPath.split('.').pop()?.toLowerCase();
+                              const isMedia = ['mkv', 'mp4', 'avi', 'mov', 'ts', 'webm', 'wmv'].includes(ext);
+                              const isAudio = ['mp3', 'flac', 'm4a', 'aac', 'wav', 'ogg'].includes(ext);
+                              const isDoc = ['pdf', 'epub', 'mobi', 'cbr', 'cbz', 'txt'].includes(ext);
+                              const isApp = ['exe', 'iso', 'dmg', 'pkg', 'apk', 'zip', 'rar', '7z', 'tar', 'gz'].includes(ext);
+
+                              return (
+                                <div
+                                  key={idx}
+                                  className="flex items-center justify-between py-1 px-1.5 rounded hover:bg-[#141414] text-[#888] hover:text-[#ededed] transition-colors group"
+                                >
+                                  <div className="flex items-center gap-2 truncate pr-4">
+                                    <FileCode
+                                      className={`w-3.5 h-3.5 shrink-0 ${
+                                        isMedia
+                                          ? 'text-blue-400'
+                                          : isAudio
+                                          ? 'text-cyan-400'
+                                          : isDoc
+                                          ? 'text-teal-400'
+                                          : isApp
+                                          ? 'text-amber-400'
+                                          : 'text-[#555]'
+                                      }`}
+                                    />
+                                    <span className="truncate">{rawPath}</span>
+                                  </div>
+                                  {sz && (
+                                    <span className="text-[#666] group-hover:text-[#aaa] text-[11px] shrink-0 font-mono">
+                                      {sz}
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })
+                          )}
+
+                          {filteredFiles.length > 100 && (
+                            <div className="text-[11px] text-[#555] pt-2 text-center italic border-t border-[#181818]">
+                              Showing first 100 of {filteredFiles.length} files
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <div className="p-4 rounded-lg border border-[#1e1e1e] bg-[#0c0c0c] text-xs font-mono text-[#666] flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-[#444] shrink-0" />
+                      <span>Single-file torrent without multi-file manifest or files list unavailable.</span>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           ) : (
