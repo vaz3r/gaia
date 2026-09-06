@@ -803,6 +803,8 @@ app.get('/api/analytics', async (req, res) => {
     console.error('Failed to compute analytics:', err);
     res.json({ clients: [], sources: null, slowQueries: [] });
   }
+});
+
 // ============================================================
 // CLASSIFIER API REVERSE PROXY
 // Routes /api/classifier/* to the Python headless ML daemon (default port 8080)
