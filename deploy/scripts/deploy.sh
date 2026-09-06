@@ -73,7 +73,7 @@ $SSH "cd $DEPLOY_REMOTE_GIT && git fetch origin && git checkout $TAG"
 
 # ── 3. Ensure data directories exist ──
 echo "[3/4] Ensuring data directories..."
-$SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S mkdir -p ${DEPLOY_REMOTE_DATA}/crawler ${DEPLOY_REMOTE_DATA}/postgres ${DEPLOY_REMOTE_DATA}/logs ${DEPLOY_REMOTE_DATA}/classifier/models /mnt/gaia/logs/crawler && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R 10001:10001 ${DEPLOY_REMOTE_DATA} /mnt/gaia/logs || true"
+$SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S mkdir -p ${DEPLOY_REMOTE_DATA}/crawler ${DEPLOY_REMOTE_DATA}/postgres ${DEPLOY_REMOTE_DATA}/logs ${DEPLOY_REMOTE_DATA}/classifier/models /mnt/gaia/logs/crawler && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R 10001:10001 ${DEPLOY_REMOTE_DATA} /mnt/gaia/logs && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R $DEPLOY_USER:$DEPLOY_USER ${DEPLOY_REMOTE_DATA}/classifier && echo '${DEPLOY_PASSWORD:-}' | sudo -S chmod -R 777 ${DEPLOY_REMOTE_DATA}/classifier || true"
 
 # Ensure baseline classifier model exists on remote host
 if [ -f "$REPO_ROOT/apps/classifier/models/torrent_classifier_v2.joblib" ]; then
@@ -81,7 +81,7 @@ if [ -f "$REPO_ROOT/apps/classifier/models/torrent_classifier_v2.joblib" ]; then
         echo "Syncing baseline classifier model to remote ${DEPLOY_HOST}..."
         $SCP "$REPO_ROOT/apps/classifier/models/torrent_classifier_v2.joblib" "$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_REMOTE_DATA}/classifier/models/"
         $SCP "$REPO_ROOT/apps/classifier/models/active_model.json" "$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_REMOTE_DATA}/classifier/models/"
-        $SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R 10001:10001 ${DEPLOY_REMOTE_DATA}/classifier || true"
+        $SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S chmod -R 777 ${DEPLOY_REMOTE_DATA}/classifier || true"
     fi
 fi
 
