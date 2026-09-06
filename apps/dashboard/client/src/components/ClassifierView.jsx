@@ -305,108 +305,107 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
   return (
     <div className="space-y-6">
       {/* Top Metrics Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
         {/* Review Queue Depth */}
-        <div className="rounded-xl border border-[#222] bg-[#0c0c0c] p-4 flex items-center justify-between">
-          <div>
-            <div className="text-[11px] text-[#888] uppercase tracking-wider font-semibold">
-              Review Queue Depth
-            </div>
-            <div className="text-2xl font-bold font-mono text-white mt-1 flex items-center gap-2">
-              <span>{metrics?.review_queue_depth != null ? metrics.review_queue_depth.toLocaleString() : '—'}</span>
-              {(metrics?.review_queue_depth || 0) > 0 && (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                  Needs Attention
-                </span>
-              )}
-            </div>
-            <div className="text-xs text-[#666] mt-1">Ambiguous or low confidence</div>
+        <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 hover:border-[#333] transition-colors">
+          <div className="flex items-center justify-between text-[#666] mb-2 text-xs">
+            <span className="font-mono text-[11px]">01 / Review Queue</span>
+            {(metrics?.review_queue_depth || 0) > 0 ? (
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#242424] text-[#aaa]">
+                Needs Attention
+              </span>
+            ) : (
+              <span className="text-[10px] font-mono text-[#666]">Optimal</span>
+            )}
           </div>
-          <div className="w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
-            <AlertTriangle className="w-5 h-5" />
+          <div className="text-xl font-bold text-white tracking-tight font-mono">
+            {metrics?.review_queue_depth != null ? metrics.review_queue_depth.toLocaleString() : '—'}
+          </div>
+          <p className="text-[11px] text-[#777] mt-1">Ambiguous or low confidence</p>
+          <div className="mt-3 h-[2px] w-full bg-[#1a1a1a]">
+            <div
+              className="h-full bg-white transition-all"
+              style={{ width: `${Math.min(100, Math.max(5, ((metrics?.review_queue_depth || 0) / 10000) * 100))}%` }}
+            />
           </div>
         </div>
 
         {/* Unclassified Backlog */}
-        <div className="rounded-xl border border-[#222] bg-[#0c0c0c] p-4 flex items-center justify-between">
-          <div>
-            <div className="text-[11px] text-[#888] uppercase tracking-wider font-semibold">
-              Unclassified Backlog
-            </div>
-            <div className="text-2xl font-bold font-mono text-white mt-1">
-              {metrics?.unclassified_torrents != null ? metrics.unclassified_torrents.toLocaleString() : '—'}
-            </div>
-            <div className="text-xs text-emerald-400 mt-1 flex items-center gap-1">
-              <Activity className="w-3 h-3" /> Continuous worker ingesting
-            </div>
+        <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 hover:border-[#333] transition-colors">
+          <div className="flex items-center justify-between text-[#666] mb-2 text-xs">
+            <span className="font-mono text-[11px]">02 / Unclassified Backlog</span>
+            <span className="text-white font-mono text-[11px]">Worker active</span>
           </div>
-          <div className="w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
-            <Database className="w-5 h-5" />
+          <div className="text-xl font-bold text-white tracking-tight font-mono">
+            {metrics?.unclassified_torrents != null ? metrics.unclassified_torrents.toLocaleString() : '—'}
+          </div>
+          <p className="text-[11px] text-[#777] mt-1">Continuous ingestion stream</p>
+          <div className="mt-3 h-[2px] w-full bg-[#1a1a1a]">
+            <div className="h-full bg-white w-full" />
           </div>
         </div>
 
         {/* Total Labeled Ground Truth */}
-        <div className="rounded-xl border border-[#222] bg-[#0c0c0c] p-4 flex items-center justify-between">
-          <div>
-            <div className="text-[11px] text-[#888] uppercase tracking-wider font-semibold">
-              Training Corpus Ground Truth
-            </div>
-            <div className="text-2xl font-bold font-mono text-white mt-1">
-              {metrics?.total_labeled_results != null ? metrics.total_labeled_results.toLocaleString() : '—'}
-            </div>
-            <div className="text-xs text-[#666] mt-1">Direct DB training samples</div>
+        <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 hover:border-[#333] transition-colors">
+          <div className="flex items-center justify-between text-[#666] mb-2 text-xs">
+            <span className="font-mono text-[11px]">03 / Ground Truth</span>
+            <span className="text-white font-mono text-[11px]">Direct DB</span>
           </div>
-          <div className="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
-            <CheckCircle2 className="w-5 h-5" />
+          <div className="text-xl font-bold text-white tracking-tight font-mono">
+            {metrics?.total_labeled_results != null ? metrics.total_labeled_results.toLocaleString() : '—'}
+          </div>
+          <p className="text-[11px] text-[#777] mt-1">Verified training samples</p>
+          <div className="mt-3 h-[2px] w-full bg-[#1a1a1a]">
+            <div className="h-full bg-white w-[64%]" />
           </div>
         </div>
 
         {/* Model Version & Actions */}
-        <div className="rounded-xl border border-[#222] bg-[#0c0c0c] p-4 flex items-center justify-between">
+        <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 hover:border-[#333] transition-colors flex flex-col justify-between">
           <div>
-            <div className="text-[11px] text-[#888] uppercase tracking-wider font-semibold">
-              Active Model Architecture
+            <div className="flex items-center justify-between text-[#666] mb-2 text-xs">
+              <span className="font-mono text-[11px]">04 / Active Model</span>
+              <button
+                onClick={openModelManager}
+                className="text-[11px] text-[#aaa] hover:text-white underline underline-offset-2 transition-colors font-mono"
+              >
+                Manage
+              </button>
             </div>
-            <div className="text-lg font-bold font-mono text-white mt-1 flex items-center gap-2">
-              <span className="text-cyan-400">{status?.model_version || 'LightGBM v2'}</span>
+            <div className="text-xl font-bold text-white tracking-tight font-mono">
+              {status?.model_version ? `LightGBM ${status.model_version}` : 'LightGBM v2'}
             </div>
-            <button
-              onClick={openModelManager}
-              className="text-xs text-[#aaa] hover:text-white mt-1 flex items-center gap-1 underline underline-offset-2 transition-colors"
-            >
-              <Cpu className="w-3 h-3 text-cyan-400" /> Manage Models & Retraining
-            </button>
+            <p className="text-[11px] text-[#777] mt-1">11 classes · Zero downtime deploy</p>
           </div>
-          <div className="w-10 h-10 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
-            <Sliders className="w-5 h-5" />
+          <div className="mt-3 h-[2px] w-full bg-[#1a1a1a]">
+            <div className="h-full bg-white w-full" />
           </div>
         </div>
       </div>
 
       {/* Main Split Layout: Queue on Left, Inspector & Active Learning on Right */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-[600px]">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 min-h-[600px]">
         {/* Left Column: Torrent Queue (5 cols) */}
-        <div className="lg:col-span-5 flex flex-col rounded-xl border border-[#1e1e1e] bg-[#090909] overflow-hidden">
+        <div className="lg:col-span-5 flex flex-col rounded-lg border border-[#1e1e1e] bg-[#090909] overflow-hidden">
           {/* Header Controls */}
-          <div className="p-3 border-b border-[#181818] bg-[#0d0d0d] space-y-2.5">
+          <div className="p-3 border-b border-[#181818] bg-[#0c0c0c] space-y-2.5">
             <div className="flex items-center justify-between">
               {/* Tabs: Needs Review vs All */}
-              <div className="flex items-center p-0.5 rounded-lg bg-[#141414] border border-[#222]">
+              <div className="flex items-center p-0.5 rounded-md bg-[#141414] border border-[#222]">
                 <button
                   onClick={() => {
                     setQueueTab('review');
                     setPage(1);
                   }}
-                  className={`px-3 py-1 text-xs rounded-md font-medium transition-colors flex items-center gap-1.5 ${
+                  className={`px-2.5 py-1 text-xs rounded transition-colors flex items-center gap-1.5 ${
                     queueTab === 'review'
-                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                      : 'text-[#888] hover:text-white'
+                      ? 'bg-[#222] text-white font-medium'
+                      : 'text-[#888] hover:text-[#ededed]'
                   }`}
                 >
-                  <AlertTriangle className="w-3 h-3" />
                   <span>Review Queue</span>
                   {(metrics?.review_queue_depth || 0) > 0 && (
-                    <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-500/40 text-amber-200">
+                    <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-[#2a2a2a] text-[#aaa]">
                       {metrics.review_queue_depth.toLocaleString()}
                     </span>
                   )}
@@ -416,10 +415,10 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                     setQueueTab('all');
                     setPage(1);
                   }}
-                  className={`px-3 py-1 text-xs rounded-md font-medium transition-colors ${
+                  className={`px-2.5 py-1 text-xs rounded transition-colors ${
                     queueTab === 'all'
-                      ? 'bg-[#222] text-white'
-                      : 'text-[#888] hover:text-white'
+                      ? 'bg-[#222] text-white font-medium'
+                      : 'text-[#888] hover:text-[#ededed]'
                   }`}
                 >
                   All Classified
@@ -483,8 +482,8 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                     onClick={() => setSelectedTorrent(t)}
                     className={`p-3 cursor-pointer transition-colors ${
                       isSelected
-                        ? 'bg-[#181818] border-l-2 border-l-amber-400'
-                        : 'hover:bg-[#111]'
+                        ? 'bg-[#141414] border-l-2 border-l-white'
+                        : 'hover:bg-[#0e0e0e]'
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
@@ -493,7 +492,7 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                       </div>
                       <ChevronRight
                         className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${
-                          isSelected ? 'text-amber-400' : 'text-[#444]'
+                          isSelected ? 'text-white' : 'text-[#444]'
                         }`}
                       />
                     </div>
@@ -547,14 +546,14 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
         </div>
 
         {/* Right Column: Deep Inspector & Human Relabeling Action Bar (7 cols) */}
-        <div className="lg:col-span-7 flex flex-col rounded-xl border border-[#1e1e1e] bg-[#090909] overflow-hidden">
+        <div className="lg:col-span-7 flex flex-col rounded-lg border border-[#1e1e1e] bg-[#090909] overflow-hidden">
           {selectedTorrent ? (
             <div className="flex-1 flex flex-col overflow-y-auto max-h-[800px]">
               {/* Header */}
-              <div className="p-5 border-b border-[#181818] bg-[#0c0c0c] space-y-3">
+              <div className="p-4 border-b border-[#181818] bg-[#0c0c0c] space-y-3">
                 <div className="flex items-start justify-between gap-4">
                   <div className="space-y-1">
-                    <h2 className="text-base font-semibold text-white leading-snug">
+                    <h2 className="text-sm font-semibold text-white leading-snug">
                       {selectedTorrent.name || 'Unnamed Torrent'}
                     </h2>
                     <div className="flex items-center gap-2 text-xs font-mono text-[#777]">
@@ -571,26 +570,26 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
 
                   <button
                     onClick={() => onInspectTorrent && onInspectTorrent(selectedTorrent)}
-                    className="px-3 py-1.5 rounded-lg bg-[#181818] border border-[#282828] text-xs text-[#aaa] hover:text-white flex items-center gap-1 shrink-0"
+                    className="px-2.5 py-1 rounded bg-[#181818] border border-[#282828] text-xs text-[#aaa] hover:text-white flex items-center gap-1 shrink-0 font-mono"
                   >
-                    <span>Open in Browser</span>
+                    <span>Inspect</span>
                     <ExternalLink className="w-3 h-3" />
                   </button>
                 </div>
 
                 {/* Metadata Pills */}
-                <div className="flex flex-wrap items-center gap-3 pt-1 text-xs font-mono">
-                  <div className="bg-[#141414] border border-[#222] px-2.5 py-1 rounded text-[#bbb]">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+                  <div className="bg-[#141414] border border-[#222] px-2 py-0.5 rounded text-[#bbb]">
                     Size: <span className="text-white font-bold">{formatBytes(selectedTorrent.total_size)}</span>
                   </div>
-                  <div className="bg-[#141414] border border-[#222] px-2.5 py-1 rounded text-[#bbb]">
+                  <div className="bg-[#141414] border border-[#222] px-2 py-0.5 rounded text-[#bbb]">
                     Files: <span className="text-white font-bold">{selectedTorrent.file_count || 1}</span>
                   </div>
-                  <div className="bg-[#141414] border border-[#222] px-2.5 py-1 rounded text-[#bbb]">
-                    Swarm: <span className="text-emerald-400 font-bold">{selectedTorrent.swarm_peers || 0} peers</span>
+                  <div className="bg-[#141414] border border-[#222] px-2 py-0.5 rounded text-[#bbb]">
+                    Swarm: <span className="text-[#ddd] font-bold">{selectedTorrent.swarm_peers || 0} peers</span>
                   </div>
                   {selectedTorrent.needs_review && (
-                    <span className="px-2.5 py-1 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 font-medium">
+                    <span className="px-2 py-0.5 rounded border border-[#333] bg-[#1a1a1a] text-[#ededed] font-medium">
                       Needs Review
                     </span>
                   )}
@@ -599,35 +598,34 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
 
               {/* Action Success Alert */}
               {actionSuccess && (
-                <div className="m-4 p-3 rounded-lg border border-emerald-800/40 bg-emerald-950/20 text-emerald-400 text-xs font-mono flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <div className="m-3 p-2.5 rounded border border-[#333] bg-[#111] text-[#ededed] text-xs font-mono flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-white shrink-0" />
                   <span>{actionSuccess}</span>
                 </div>
               )}
 
               {/* Main Inspector Body */}
-              <div className="p-5 space-y-6 flex-1">
-                {/* 1. Interactive Human Relabeling Bar (Active Learning Feedback Loop) */}
-                <div className="rounded-xl border border-[#262626] bg-[#0f0f0f] p-4 space-y-3">
+              <div className="p-4 space-y-5 flex-1">
+                {/* 1. Interactive Human Relabeling Bar */}
+                <div className="rounded-lg border border-[#1e1e1e] bg-[#0c0c0c] p-3.5 space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                      Active Learning Labeling Console
+                    <span className="text-[11px] font-mono text-[#888] uppercase tracking-wider">
+                      Active Learning Labeling
                     </span>
-                    <span className="text-[11px] text-[#666] font-mono">Anti-bias verified</span>
+                    <span className="text-[11px] text-[#555] font-mono">PostgreSQL ground-truth</span>
                   </div>
 
-                  <p className="text-xs text-[#888]">
-                    Verify the predicted classification or assign a correction. Updates PostgreSQL <code className="text-white font-mono">torrents</code> and saves to ground-truth training set.
+                  <p className="text-xs text-[#777] leading-relaxed">
+                    Verify predicted classification or assign a category correction to feed continuous training.
                   </p>
 
-                  <div className="flex flex-wrap items-center gap-2.5 pt-2">
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
                     {/* Quick Confirm button for predicted category */}
                     {explainData?.predicted_category && (
                       <button
                         disabled={submittingLabel}
                         onClick={() => handleApplyLabel(explainData.predicted_category, 'One-click confirmation')}
-                        className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                        className="px-3 py-1.5 rounded bg-white hover:bg-[#ededed] text-black font-semibold text-xs transition-colors flex items-center gap-1.5 disabled:opacity-50"
                       >
                         <Check className="w-3.5 h-3.5" />
                         <span>Confirm: {explainData.predicted_category}</span>
@@ -639,7 +637,7 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                       <select
                         value={selectedCategory}
                         onChange={(e) => setSelectedCategory(e.target.value)}
-                        className="bg-[#181818] border border-[#333] rounded-lg px-3 py-2 text-xs text-white focus:outline-none cursor-pointer font-mono"
+                        className="bg-[#141414] border border-[#222] rounded px-2.5 py-1.5 text-xs text-white focus:outline-none cursor-pointer font-mono"
                       >
                         {ALL_CATEGORIES.map((cat) => (
                           <option key={cat} value={cat}>
@@ -651,9 +649,9 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                       <button
                         disabled={submittingLabel || !selectedCategory}
                         onClick={() => handleApplyLabel(selectedCategory, 'Manual category correction')}
-                        className="px-3.5 py-2 rounded-lg bg-[#222] hover:bg-[#2a2a2a] text-[#ededed] text-xs font-medium border border-[#333] transition-colors disabled:opacity-50"
+                        className="px-3 py-1.5 rounded bg-[#1c1c1c] hover:bg-[#252525] text-[#ededed] text-xs font-medium border border-[#2a2a2a] transition-colors disabled:opacity-50"
                       >
-                        Apply Label
+                        Apply
                       </button>
                     </div>
 
@@ -661,29 +659,28 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                     <button
                       disabled={submittingLabel}
                       onClick={() => handleApplyLabel('Other', 'Classified as Junk / Other')}
-                      className="px-3 py-2 rounded-lg bg-rose-950/30 hover:bg-rose-900/50 text-rose-300 text-xs border border-rose-800/40 transition-colors ml-auto disabled:opacity-50"
+                      className="px-2.5 py-1.5 rounded bg-[#141414] hover:bg-[#1a1a1a] text-[#888] hover:text-[#ccc] text-xs border border-[#222] transition-colors ml-auto disabled:opacity-50"
                     >
-                      Mark as Other / Junk
+                      Mark Other
                     </button>
                   </div>
                 </div>
 
-                {/* 2. Model Explainability & Category Probability Distribution */}
-                <div className="space-y-3">
+                {/* 2. Model Confidence & Class Probabilities */}
+                <div className="space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                      <Cpu className="w-3.5 h-3.5 text-cyan-400" />
-                      Model Confidence & Class Probabilities
+                    <span className="text-[11px] font-mono text-[#888] uppercase tracking-wider">
+                      Class Probabilities
                     </span>
                     {explainLoading && (
-                      <span className="text-[11px] font-mono text-cyan-400 flex items-center gap-1">
-                        <RefreshCw className="w-3 h-3 animate-spin" /> Evaluating features...
+                      <span className="text-[11px] font-mono text-[#888] flex items-center gap-1">
+                        <RefreshCw className="w-3 h-3 animate-spin text-white" /> Evaluating...
                       </span>
                     )}
                   </div>
 
                   {explainData?.class_probabilities ? (
-                    <div className="rounded-xl border border-[#1a1a1a] bg-[#000] p-4 space-y-2.5">
+                    <div className="rounded-lg border border-[#1e1e1e] bg-[#0c0c0c] p-3.5 space-y-2">
                       {Object.entries(explainData.class_probabilities)
                         .sort((a, b) => b[1] - a[1])
                         .map(([category, prob]) => {
@@ -699,7 +696,7 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                                     {category}
                                   </span>
                                   {isTop && (
-                                    <span className="text-[10px] text-amber-400">
+                                    <span className="text-[10px] text-white">
                                       ★ top prediction
                                     </span>
                                   )}
@@ -708,10 +705,10 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                                   {pct}%
                                 </span>
                               </div>
-                              <div className="w-full bg-[#161616] rounded-full h-1.5 overflow-hidden">
+                              <div className="w-full bg-[#161616] rounded-full h-1 overflow-hidden">
                                 <div
                                   className={`h-full rounded-full transition-all ${
-                                    isTop ? 'bg-amber-400' : 'bg-[#444]'
+                                    isTop ? 'bg-white' : 'bg-[#333]'
                                   }`}
                                   style={{ width: `${Math.max(2, pct)}%` }}
                                 />
@@ -721,7 +718,7 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                         })}
                     </div>
                   ) : (
-                    <div className="p-6 text-center text-[#555] text-xs font-mono border border-[#1a1a1a] rounded-xl">
+                    <div className="p-6 text-center text-[#555] text-xs font-mono border border-[#1e1e1e] rounded-lg bg-[#0c0c0c]">
                       Select an item to run feature evaluation
                     </div>
                   )}
@@ -729,12 +726,11 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
 
                 {/* 3. Feature Signals & File Structure Breakdown */}
                 {selectedTorrent.files && Array.isArray(selectedTorrent.files) && selectedTorrent.files.length > 0 && (
-                  <div className="space-y-2.5">
-                    <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                      <FileCode className="w-3.5 h-3.5 text-blue-400" />
-                      Payload File Tree ({selectedTorrent.files.length} items)
+                  <div className="space-y-2">
+                    <span className="text-[11px] font-mono text-[#888] uppercase tracking-wider">
+                      Payload Files ({selectedTorrent.files.length})
                     </span>
-                    <div className="rounded-xl border border-[#1a1a1a] bg-[#050505] p-3 max-h-48 overflow-y-auto space-y-1 font-mono text-xs text-[#999]">
+                    <div className="rounded-lg border border-[#1e1e1e] bg-[#0c0c0c] p-3 max-h-48 overflow-y-auto space-y-1 font-mono text-xs text-[#888]">
                       {selectedTorrent.files.slice(0, 30).map((file, idx) => {
                         const path = typeof file === 'string' ? file : file.path || file.name || 'unnamed';
                         const sz = typeof file === 'object' && file.length ? formatBytes(file.length) : '';
@@ -757,7 +753,7 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
             </div>
           ) : (
             <div className="p-16 text-center text-[#666] flex flex-col items-center justify-center flex-1 space-y-3">
-              <Tag className="w-12 h-12 text-[#333]" />
+              <Tag className="w-10 h-10 text-[#2a2a2a]" />
               <div className="text-sm font-medium text-[#888]">No Torrent Selected</div>
               <p className="text-xs text-[#555] max-w-sm">
                 Pick a release from the left review queue to inspect model explanations and submit active learning corrections.

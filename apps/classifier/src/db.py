@@ -1,4 +1,5 @@
 import os
+import time
 import json
 from typing import List, Dict, Any, Optional
 import psycopg2
@@ -68,7 +69,7 @@ def get_torrents(
                     ih_bytes = hex_to_bytea(search)
                     cur.execute(
                         """
-                        SELECT infohash, name, total_size, file_count, files, first_seen, last_seen, verified_at,
+                        SELECT infohash, name, total_size, file_count, (files IS NOT NULL) AS has_manifest, first_seen, last_seen, verified_at,
                                category, category_confidence, needs_review, classified_at
                         FROM torrents
                         WHERE infohash = %s;
@@ -86,7 +87,7 @@ def get_torrents(
 
                 cur.execute(
                     """
-                    SELECT infohash, name, total_size, file_count, files, first_seen, last_seen, verified_at,
+                    SELECT infohash, name, total_size, file_count, (files IS NOT NULL) AS has_manifest, first_seen, last_seen, verified_at,
                            category, category_confidence, needs_review, classified_at
                     FROM torrents
                     WHERE needs_review = TRUE
@@ -108,7 +109,7 @@ def get_torrents(
 
                 cur.execute(
                     """
-                    SELECT infohash, name, total_size, file_count, files, first_seen, last_seen, verified_at,
+                    SELECT infohash, name, total_size, file_count, (files IS NOT NULL) AS has_manifest, first_seen, last_seen, verified_at,
                            category, category_confidence, needs_review, classified_at
                     FROM torrents
                     WHERE name ILIKE %s
@@ -125,7 +126,7 @@ def get_torrents(
 
                 cur.execute(
                     """
-                    SELECT infohash, name, total_size, file_count, files, first_seen, last_seen, verified_at,
+                    SELECT infohash, name, total_size, file_count, (files IS NOT NULL) AS has_manifest, first_seen, last_seen, verified_at,
                            category, category_confidence, needs_review, classified_at
                     FROM torrents
                     ORDER BY verified_at DESC NULLS LAST
@@ -141,7 +142,7 @@ def get_torrents(
                 name = r[1]
                 total_size = r[2] or 0
                 file_count = r[3] or 1
-                files = r[4]
+                has_manifest = bool(r[4])
                 first_seen = r[5].isoformat() if r[5] else None
                 last_seen = r[6].isoformat() if r[6] else None
                 verified_at = r[7].isoformat() if r[7] else None
@@ -159,7 +160,7 @@ def get_torrents(
                     "first_seen": first_seen,
                     "last_seen": last_seen,
                     "verified_at": verified_at,
-                    "has_files_manifest": bool(files),
+                    "has_files_manifest": has_manifest,
                     "category": category,
                     "category_confidence": confidence,
                     "needs_review": n_review,
@@ -482,8 +483,16 @@ def upsert_label(
     finally:
         p.putconn(conn)
 
+_metrics_cache: Optional[Dict[str, Any]] = None
+_metrics_cache_ts: float = 0.0
+
 def get_queue_metrics() -> Dict[str, Any]:
-    """Return live review queue and classification metrics."""
+    """Return live review queue and classification metrics with a 10s TTL cache."""
+    global _metrics_cache, _metrics_cache_ts
+    now = time.time()
+    if _metrics_cache is not None and (now - _metrics_cache_ts) < 10.0:
+        return _metrics_cache
+
     p = get_pool()
     conn = p.getconn()
     try:
@@ -510,12 +519,15 @@ def get_queue_metrics() -> Dict[str, Any]:
             cur.execute("SELECT count(*) FROM labeled_results;")
             total_labels = cur.fetchone()[0]
 
-            return {
+            res = {
                 "total_torrents": total,
                 "unclassified_torrents": unclassified,
                 "review_queue_depth": review_queue,
                 "total_labeled_results": total_labels,
                 "migration_applied": cols_exist
             }
+            _metrics_cache = res
+            _metrics_cache_ts = now
+            return res
     finally:
         p.putconn(conn)

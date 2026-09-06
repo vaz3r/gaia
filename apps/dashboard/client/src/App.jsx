@@ -84,6 +84,8 @@ export default function App() {
   // Navigation & Primary Views: 'overview' | 'browser' | 'classifier' | 'analysis' | 'routing' | 'diagnostics'
   const [activeTab, setActiveTab] = useState('overview');
   const [classifierReviewCount, setClassifierReviewCount] = useState(null);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const moreMenuRef = useRef(null);
   const [scaleMode, setScaleMode] = useState('log'); // 'linear' | 'log'
   const [hoveredIdx, setHoveredIdx] = useState(null);
   const [hoveredBarIdx, setHoveredBarIdx] = useState(null);
@@ -229,12 +231,36 @@ export default function App() {
           if (res?.logs) setLogsList(res.logs);
         })
         .catch(() => {});
+
+      // 5. Classifier metrics for badge count
+      api('/api/classifier/metrics')
+        .then((res) => {
+          if (res?.review_queue_depth != null) {
+            setClassifierReviewCount(res.review_queue_depth);
+          }
+        })
+        .catch(() => {});
     };
 
     fetchTelemetry();
     const interval = setInterval(fetchTelemetry, 10000);
     return () => clearInterval(interval);
   }, [logFilter]);
+
+  // Click-outside listener for More menu dropdown
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (moreMenuRef.current && !moreMenuRef.current.contains(e.target)) {
+        setMoreMenuOpen(false);
+      }
+    };
+    if (moreMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [moreMenuOpen]);
 
   // Fetch 60-minute history for chart telemetry
   useEffect(() => {
@@ -633,22 +659,20 @@ export default function App() {
             <nav className="flex items-center gap-1">
               {[
                 { id: 'overview', label: 'Overview' },
-                { id: 'browser', label: 'Torrent Browser', badge: `${metrics.totalVerified}` },
+                { id: 'browser', label: 'Explorer', badge: `${metrics.totalVerified}` },
                 {
                   id: 'classifier',
-                  label: 'Classifier Studio',
-                  badge: classifierReviewCount != null && classifierReviewCount > 0 ? `${classifierReviewCount}` : null,
-                  badgeColor: 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                  label: 'Classifier',
+                  badge: classifierReviewCount != null && classifierReviewCount > 0 ? `${classifierReviewCount.toLocaleString()}` : null,
                 },
                 { id: 'analysis', label: 'Analysis' },
-                { id: 'routing', label: 'DHT Routing' },
-                { id: 'diagnostics', label: 'Diagnostics' },
               ].map((tab) => (
                 <button
                   key={tab.id}
                   onClick={() => {
                     setActiveTab(tab.id);
                     setSelectedTorrent(null);
+                    setMoreMenuOpen(false);
                   }}
                   className={`px-2.5 py-1 text-xs rounded-md transition-colors flex items-center gap-1.5 ${
                     activeTab === tab.id
@@ -658,12 +682,54 @@ export default function App() {
                 >
                   <span>{tab.label}</span>
                   {tab.badge && (
-                    <span className={`text-[10px] font-mono px-1 py-0.2 rounded ${tab.badgeColor || 'bg-[#242424] text-[#aaa]'}`}>
+                    <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-[#242424] text-[#aaa]">
                       {tab.badge}
                     </span>
                   )}
                 </button>
               ))}
+
+              {/* More Dropdown */}
+              <div className="relative" ref={moreMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setMoreMenuOpen((prev) => !prev)}
+                  className={`px-2.5 py-1 text-xs rounded-md transition-colors flex items-center gap-1 ${
+                    ['routing', 'diagnostics'].includes(activeTab)
+                      ? 'bg-[#1a1a1a] text-white font-medium border border-[#333]'
+                      : 'text-[#888] hover:text-[#ededed] hover:bg-[#111]'
+                  }`}
+                >
+                  <span>More</span>
+                  <ChevronDown className={`w-3.5 h-3.5 text-[#666] transition-transform ${moreMenuOpen ? 'rotate-180 text-white' : ''}`} />
+                </button>
+
+                {moreMenuOpen && (
+                  <div className="absolute left-0 mt-1.5 w-36 rounded-lg bg-[#0d0d0d] border border-[#222] shadow-xl py-1 z-50 text-xs animate-in fade-in zoom-in-95 duration-100">
+                    {[
+                      { id: 'routing', label: 'DHT Routing' },
+                      { id: 'diagnostics', label: 'Diagnostics' },
+                    ].map((item) => (
+                      <button
+                        key={item.id}
+                        onClick={() => {
+                          setActiveTab(item.id);
+                          setSelectedTorrent(null);
+                          setMoreMenuOpen(false);
+                        }}
+                        className={`w-full text-left px-3 py-1.5 transition-colors flex items-center justify-between ${
+                          activeTab === item.id
+                            ? 'bg-[#1a1a1a] text-white font-medium'
+                            : 'text-[#888] hover:text-[#ededed] hover:bg-[#141414]'
+                        }`}
+                      >
+                        <span>{item.label}</span>
+                        {activeTab === item.id && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </nav>
           </div>
 
