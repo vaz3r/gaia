@@ -38,6 +38,7 @@ const CATEGORY_COLORS = {
   Music: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
   Television: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
   Other: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/30',
+  Unclassified: 'bg-zinc-800/40 text-zinc-400 border-zinc-700/50',
 };
 
 const ALL_CATEGORIES = [
@@ -472,7 +473,8 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
             ) : (
               torrents.map((t) => {
                 const isSelected = selectedTorrent?.infohash === t.infohash;
-                const cat = t.category || 'Other';
+                const isUnclassified = !t.category && !t.classified_at;
+                const cat = t.category || (isUnclassified ? 'Unclassified' : 'Other');
                 const colorClass = CATEGORY_COLORS[cat] || CATEGORY_COLORS.Other;
                 const confPct = t.category_confidence ? Math.round(t.category_confidence * 100) : null;
 

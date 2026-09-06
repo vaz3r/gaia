@@ -120,15 +120,16 @@ def get_torrents(
                 )
                 rows = cur.fetchall()
             else:
-                cur.execute("SELECT reltuples::bigint FROM pg_class WHERE relname = 'torrents';")
-                approx_count = cur.fetchone()[0]
-                total = max(approx_count, 0)
+                # Query classified torrents (avoid displaying unclassified backlog in 'All Classified')
+                cur.execute("SELECT count(*) FROM torrents WHERE classified_at IS NOT NULL;")
+                total = cur.fetchone()[0]
 
                 cur.execute(
                     """
                     SELECT infohash, name, total_size, file_count, (files IS NOT NULL) AS has_manifest, first_seen, last_seen, verified_at,
                            category, category_confidence, needs_review, classified_at
                     FROM torrents
+                    WHERE classified_at IS NOT NULL
                     ORDER BY verified_at DESC NULLS LAST
                     OFFSET %s LIMIT %s;
                     """,
