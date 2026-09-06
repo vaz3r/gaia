@@ -56,20 +56,27 @@ async function query(text, params) {
   }
 }
 
-// GET /api/torrents?search=&sort=verified_at|size|files|name|health|popularity&order=asc|desc&page=&limit=
+// GET /api/torrents?search=&category=&sort=verified_at|size|files|name|health|popularity&order=asc|desc&page=&limit=
 app.get('/api/torrents', async (req, res) => {
   try {
     const search = (req.query.search || '').trim();
+    const category = (req.query.category || '').trim();
     const sort = SORTS[req.query.sort] || null;
     const orderDir = req.query.order === 'asc' ? 'ASC' : 'DESC';
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25));
     const offset = (page - 1) * limit;
     const hasSearch = search.length > 0;
+    const hasCategory = category.length > 0;
 
     const params = [];
-    let where = '';
+    const whereClauses = [];
     let orderBy = sort ? `ORDER BY ${sort} ${orderDir}` : 'ORDER BY verified_at DESC';
+
+    if (hasCategory) {
+      params.push(category);
+      whereClauses.push(`category = $${params.length}`);
+    }
 
     if (hasSearch) {
       // Split search into alphanumeric search tokens (ignore single chars unless digit)
@@ -94,7 +101,7 @@ app.get('/api/torrents', async (req, res) => {
         params.push(search);
         const simParam = `$${params.length}`;
 
-        where = `WHERE ((${tokenClauses.join(' AND ')}) OR name ILIKE ${fullPhraseParam} ESCAPE '\\' OR name % ${simParam})`;
+        whereClauses.push(`((${tokenClauses.join(' AND ')}) OR name ILIKE ${fullPhraseParam} ESCAPE '\\' OR name % ${simParam})`);
 
         if (!sort) {
           orderBy = `ORDER BY 
@@ -108,21 +115,28 @@ app.get('/api/torrents', async (req, res) => {
         }
       } else {
         // Single word or short search
-        params.push(`%${escapeLike(search)}%`, search);
-        where = `WHERE (name ILIKE $1 ESCAPE '\\' OR name % $2)`;
+        params.push(`%${escapeLike(search)}%`);
+        const likeParam = `$${params.length}`;
+        params.push(search);
+        const simParam = `$${params.length}`;
+
+        whereClauses.push(`(name ILIKE ${likeParam} ESCAPE '\\' OR name % ${simParam})`);
         if (!sort) {
           orderBy = `ORDER BY 
-            CASE WHEN name ILIKE $1 ESCAPE '\\' THEN 100 ELSE 50 END DESC,
-            similarity(name, $2) DESC,
+            CASE WHEN name ILIKE ${likeParam} ESCAPE '\\' THEN 100 ELSE 50 END DESC,
+            similarity(name, ${simParam}) DESC,
             verified_at DESC`;
         }
       }
     }
 
+    const where = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
     const rowsRes = await query(
       `SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
               first_seen, last_seen, total_seen,
-              health_score, popularity_score, swarm_peers, seed_confirmed, last_health_check
+              health_score, popularity_score, swarm_peers, seed_confirmed, last_health_check,
+              category, category_confidence, needs_review, classified_at
        FROM torrents ${where} ${orderBy}
        LIMIT ${limit} OFFSET ${offset}`,
       params
@@ -152,7 +166,8 @@ app.get('/api/torrents/:infohash', async (req, res) => {
       `SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.piece_length, t.total_size,
               t.file_count, t.files, t.fetch_attempts, t.verified_at,
               t.first_seen, t.last_seen, t.total_seen,
-              t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed, t.last_health_check
+              t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed, t.last_health_check,
+              t.category, t.category_confidence, t.needs_review, t.classified_at, t.classification_meta
        FROM torrents t
        WHERE t.infohash = decode($1, 'hex')`,
       [ih]
@@ -787,6 +802,48 @@ app.get('/api/analytics', async (req, res) => {
   } catch (err) {
     console.error('Failed to compute analytics:', err);
     res.json({ clients: [], sources: null, slowQueries: [] });
+  }
+// ============================================================
+// CLASSIFIER API REVERSE PROXY
+// Routes /api/classifier/* to the Python headless ML daemon (default port 8080)
+// ============================================================
+const CLASSIFIER_API_URL = process.env.CLASSIFIER_API_URL || 'http://127.0.0.1:8080';
+
+app.use('/api/classifier', async (req, res) => {
+  const targetPath = req.url; // e.g. /metrics, /torrents, /classify
+  const targetUrl = `${CLASSIFIER_API_URL}/api${targetPath}`;
+
+  try {
+    const fetchOptions = {
+      method: req.method,
+      headers: {
+        'Accept': 'application/json',
+      },
+    };
+
+    if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+      fetchOptions.headers['Content-Type'] = 'application/json';
+      fetchOptions.body = JSON.stringify(req.body);
+    }
+
+    const resp = await fetch(targetUrl, fetchOptions);
+    const contentType = resp.headers.get('content-type') || '';
+
+    res.status(resp.status);
+    if (contentType.includes('application/json')) {
+      const data = await resp.json();
+      return res.json(data);
+    } else {
+      const text = await resp.text();
+      return res.send(text);
+    }
+  } catch (err) {
+    console.error(`Error proxying classifier request to ${targetUrl}:`, err.message);
+    res.status(502).json({
+      error: 'Classifier API daemon unreachable',
+      details: err.message,
+      target: targetUrl
+    });
   }
 });
 

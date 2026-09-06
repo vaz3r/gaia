@@ -18,8 +18,8 @@ from classifier_service import TorrentClassifierService
 import model_manager
 
 app = FastAPI(
-    title="Gaia Torrent Classifier Studio",
-    description="Interactive exploration, classification, and active learning loop for DHT torrents in PostgreSQL",
+    title="Gaia Torrent Classifier API",
+    description="High-performance headless inference and active learning API daemon for DHT torrents in PostgreSQL",
     version="2.1.0"
 )
 
@@ -32,7 +32,6 @@ app.add_middleware(
 )
 
 classifier_service = TorrentClassifierService.get_instance()
-INDEX_HTML_PATH = Path(__file__).parent / "templates" / "index.html"
 
 # Global state for background retraining runs
 _retrain_lock = threading.Lock()
@@ -65,11 +64,13 @@ class RollbackRequest(BaseModel):
 
 @app.get("/")
 @app.head("/")
-def get_index():
-    """Serve the interactive web UI."""
-    if not INDEX_HTML_PATH.exists():
-        raise HTTPException(status_code=404, detail="Frontend template not found")
-    return FileResponse(INDEX_HTML_PATH)
+def get_root():
+    """Health check endpoint for headless classifier API daemon."""
+    return {
+        "status": "online",
+        "service": "gaia-classifier-api",
+        "version": "2.1.0"
+    }
 
 
 @app.get("/api/status")

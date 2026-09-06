@@ -45,15 +45,18 @@ import {
   ChevronsRight,
   ArrowUpDown,
   Flame,
-  BarChart3
+  BarChart3,
+  Tag
 } from 'lucide-react';
 import { api, loadTrackers, magnetFrom } from './api.js';
 import { formatBytes, formatNum, formatTime, formatUptime, formatDubaiDate, formatDubaiTimeHM } from './utils.js';
 import AnalysisView from './components/AnalysisView.jsx';
+import ClassifierView from './components/ClassifierView.jsx';
 
 export default function App() {
-  // Navigation & Primary Views: 'overview' | 'browser' | 'analysis' | 'routing' | 'diagnostics'
+  // Navigation & Primary Views: 'overview' | 'browser' | 'classifier' | 'analysis' | 'routing' | 'diagnostics'
   const [activeTab, setActiveTab] = useState('overview');
+  const [classifierReviewCount, setClassifierReviewCount] = useState(null);
   const [scaleMode, setScaleMode] = useState('log'); // 'linear' | 'log'
   const [hoveredIdx, setHoveredIdx] = useState(null);
   const [hoveredBarIdx, setHoveredBarIdx] = useState(null);
@@ -72,6 +75,7 @@ export default function App() {
   const [sortOrder, setSortOrder] = useState('desc'); // 'asc' | 'desc'
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
   const [torrentsData, setTorrentsData] = useState({ data: [], total: 0, pages: 1, page: 1 });
   const [torrentsLoading, setTorrentsLoading] = useState(false);
 
@@ -258,6 +262,21 @@ export default function App() {
     return () => clearInterval(histInterval);
   }, []);
 
+  // Poll classifier review queue depth for navigation badge
+  useEffect(() => {
+    const fetchReviewBadge = async () => {
+      try {
+        const m = await api('/api/classifier/metrics');
+        if (m && m.review_queue_depth != null) {
+          setClassifierReviewCount(m.review_queue_depth);
+        }
+      } catch {}
+    };
+    fetchReviewBadge();
+    const interval = setInterval(fetchReviewBadge, 20000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Server-side Torrent Browser data fetch
   useEffect(() => {
     let active = true;
@@ -272,6 +291,7 @@ export default function App() {
       params.set('order', sortOrder);
     }
     if (searchQuery) params.set('search', searchQuery);
+    if (categoryFilter) params.set('category', categoryFilter);
 
     api(`/api/torrents?${params.toString()}`)
       .then((res) => {
@@ -288,7 +308,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [torrentsPage, torrentsLimit, sortField, sortOrder, searchQuery]);
+  }, [torrentsPage, torrentsLimit, sortField, sortOrder, searchQuery, categoryFilter]);
 
   // Server-side Stable Peers data fetch
   useEffect(() => {
@@ -587,6 +607,12 @@ export default function App() {
               {[
                 { id: 'overview', label: 'Overview' },
                 { id: 'browser', label: 'Torrent Browser', badge: `${metrics.totalVerified}` },
+                {
+                  id: 'classifier',
+                  label: 'Classifier Studio',
+                  badge: classifierReviewCount != null && classifierReviewCount > 0 ? `${classifierReviewCount}` : null,
+                  badgeColor: 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                },
                 { id: 'analysis', label: 'Analysis' },
                 { id: 'routing', label: 'DHT Routing' },
                 { id: 'diagnostics', label: 'Diagnostics' },
@@ -605,7 +631,7 @@ export default function App() {
                 >
                   <span>{tab.label}</span>
                   {tab.badge && (
-                    <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-[#242424] text-[#aaa]">
+                    <span className={`text-[10px] font-mono px-1 py-0.2 rounded ${tab.badgeColor || 'bg-[#242424] text-[#aaa]'}`}>
                       {tab.badge}
                     </span>
                   )}
@@ -1131,6 +1157,30 @@ export default function App() {
 
               {/* Sorting & Page Size Controls */}
               <div className="flex items-center gap-3 w-full sm:w-auto justify-end text-xs">
+                {/* Category Filter */}
+                <div className="flex items-center gap-1.5 font-mono text-xs">
+                  <span className="text-[#666]">Category:</span>
+                  <select
+                    value={categoryFilter}
+                    onChange={(e) => {
+                      setCategoryFilter(e.target.value);
+                      setTorrentsPage(1);
+                    }}
+                    className="bg-[#000] border border-[#222] rounded-lg px-2.5 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+                  >
+                    <option value="">All Categories</option>
+                    <option value="Movies">Movies</option>
+                    <option value="TV">TV</option>
+                    <option value="Anime">Anime</option>
+                    <option value="Games">Games</option>
+                    <option value="Software">Software</option>
+                    <option value="Music">Music</option>
+                    <option value="Books">Books</option>
+                    <option value="Adult">Adult</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+
                 {/* Sort Order Selector */}
                 <div className="flex items-center gap-1.5 font-mono text-xs">
                   <span className="text-[#666]">Sort:</span>
@@ -1207,6 +1257,7 @@ export default function App() {
                         </div>
                       </th>
                       <th className="py-3 px-4 font-normal">Infohash (Hex)</th>
+                      <th className="py-3 px-4 font-normal">Category</th>
                       <th
                         onClick={() => handleSortToggle('size')}
                         className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
@@ -1271,6 +1322,19 @@ export default function App() {
                       const isMultiFile = (t.file_count || 1) > 1;
                       const sizeFormatted = formatBytes(t.total_size);
                       const timeAgo = t.verified_at ? formatTime(t.verified_at) : '—';
+                      const cat = t.category;
+                      const CATEGORY_COLORS = {
+                        Movies: 'bg-blue-500/10 text-blue-400 border-blue-500/30',
+                        TV: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
+                        Anime: 'bg-pink-500/10 text-pink-400 border-pink-500/30',
+                        Games: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
+                        Software: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
+                        Music: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
+                        Books: 'bg-teal-500/10 text-teal-400 border-teal-500/30',
+                        Adult: 'bg-rose-500/10 text-rose-400 border-rose-500/30',
+                        Other: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/30',
+                      };
+                      const catColor = cat ? (CATEGORY_COLORS[cat] || CATEGORY_COLORS.Other) : null;
 
                       return (
                         <tr
@@ -1294,6 +1358,21 @@ export default function App() {
                             <span className="text-[#888] group-hover:text-[#ccc] transition-colors">
                               {t.infohash.slice(0, 10)}...{t.infohash.slice(-8)}
                             </span>
+                          </td>
+
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {cat ? (
+                              <span className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded border ${catColor}`}>
+                                {cat}
+                                {t.category_confidence ? (
+                                  <span className="opacity-60 ml-1">
+                                    {Math.round(t.category_confidence * 100)}%
+                                  </span>
+                                ) : null}
+                              </span>
+                            ) : (
+                              <span className="text-[#444] text-[10px] font-mono">—</span>
+                            )}
                           </td>
 
                           <td className="py-3 px-4 text-[#aaa] whitespace-nowrap">
@@ -2164,6 +2243,19 @@ export default function App() {
           </div>
         )}
 
+        {/* ============================================================ */}
+        {/* TAB: CLASSIFIER STUDIO                                         */}
+        {/* ============================================================ */}
+        {activeTab === 'classifier' && (
+          <ClassifierView
+            copyToClipboard={copyToClipboard}
+            onInspectTorrent={(t) => {
+              setSelectedTorrent(t);
+              setActiveTab('browser');
+            }}
+          />
+        )}
+
         {/* Global Torrent Details Drawer / Inspector Modal */}
         {selectedTorrent && (
           <div
@@ -2343,6 +2435,48 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              {/* Classification Card */}
+              {selectedTorrent.category && (
+                <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span className="text-[#888] flex items-center gap-1.5">
+                      <Tag className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Category Classification</span>
+                    </span>
+                    <span className="text-purple-400 font-bold font-mono">
+                      {selectedTorrent.category}
+                    </span>
+                  </div>
+                  {selectedTorrent.category_confidence && (
+                    <>
+                      <div className="w-full bg-[#161616] rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-purple-400 transition-all"
+                          style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.category_confidence * 100))}%` }}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1 border-t border-[#141414]">
+                        <span>Model Confidence: {Math.round(selectedTorrent.category_confidence * 100)}%</span>
+                        <button
+                          onClick={() => {
+                            setSelectedTorrent(null);
+                            setActiveTab('classifier');
+                          }}
+                          className="text-purple-400 hover:text-purple-300 flex items-center gap-1"
+                        >
+                          <span>Inspect in Classifier Studio →</span>
+                        </button>
+                      </div>
+                    </>
+                  )}
+                  {selectedTorrent.needs_review && (
+                    <div className="text-[10px] font-mono px-2 py-1 rounded bg-amber-950/30 border border-amber-800/40 text-amber-300">
+                      ⚠ Flagged for human review — visit Classifier Studio
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Swarm Recency Alert if stale */}
               {(selectedTorrent.health_score ?? 0) < 30 && (
