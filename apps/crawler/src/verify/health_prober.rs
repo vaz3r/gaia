@@ -18,10 +18,10 @@ pub struct HealthProberConfig {
 impl Default for HealthProberConfig {
     fn default() -> Self {
         HealthProberConfig {
-            interval: Duration::from_secs(10),
-            batch_size: 30,
+            interval: Duration::from_secs(5),
+            batch_size: 60,
             query_timeout: Duration::from_secs(3),
-            concurrency: 8,
+            concurrency: 24,
         }
     }
 }
@@ -113,13 +113,13 @@ impl HealthProber {
                 let res = source_peers(
                     router,
                     ih,
-                    8,
+                    24,
                     metrics,
                     query_timeout * 2,
-                    8,
+                    16,
                     3,
                     query_timeout,
-                    16,
+                    24,
                     &cache,
                     false,
                 )
@@ -144,7 +144,8 @@ impl HealthProber {
                 let health_score = ((100.0 * (0.6 * s + 0.4 * p_sat) * decay).round() as i16)
                     .clamp(0, 100);
 
-                let pop_base = ((total_seen.max(1) as f64 + 1.0).log10() / 50001.0f64.log10()).min(1.0);
+                // Normalization calibrated to network sightings: 500 max baseline provides high dynamic range
+                let pop_base = ((total_seen.max(1) as f64 + 1.0).log10() / 501.0f64.log10()).min(1.0);
                 let vel = (-hours_decay / 168.0).exp(); // 7-day velocity window
                 let pop_score = ((100.0 * (0.40 * pop_base + 0.35 * vel + 0.25 * p_sat)).round() as i16)
                     .clamp(0, 100);

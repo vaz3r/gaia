@@ -190,11 +190,16 @@ app.post('/api/torrents/:infohash/refresh-health', async (req, res) => {
     const newHealth = Math.min(100, Math.max(0, Math.round(100 * (0.6 * s + 0.4 * pSat) * decay)));
     const seedConfirmed = peersCount > 0 && hoursDecay <= 48.0;
 
+    const totalSeen = Number(row.total_seen || 1);
+    const popBase = Math.min(1.0, Math.log10(Math.max(1, totalSeen) + 1.0) / Math.log10(501.0));
+    const vel = Math.exp(-hoursDecay / 168.0);
+    const newPop = Math.min(100, Math.max(0, Math.round(100 * (0.40 * popBase + 0.35 * vel + 0.25 * pSat))));
+
     await query(
       `UPDATE torrents 
-       SET health_score = $2, seed_confirmed = $3, last_health_check = now() 
+       SET health_score = $2, popularity_score = $3, seed_confirmed = $4, last_health_check = now() 
        WHERE infohash = decode($1, 'hex')`,
-      [ih, newHealth, seedConfirmed]
+      [ih, newHealth, newPop, seedConfirmed]
     );
 
     const updated = await query(
