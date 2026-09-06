@@ -221,9 +221,10 @@ export default function AnalysisView({ onInspectTorrent, copyToClipboard }) {
                 </tr>
               ) : (
                 currentList.map((t, idx) => {
-                  const firstSeenDate = t.first_seen ? new Date(t.first_seen) : null;
-                  const hoursAgo = firstSeenDate
-                    ? Math.max(0.1, (Date.now() - firstSeenDate.getTime()) / 3600000).toFixed(1)
+                  const dateVal = t.verified_at || t.first_seen;
+                  const dateObj = dateVal ? new Date(dateVal) : null;
+                  const hoursAgo = dateObj
+                    ? Math.max(0.1, (Date.now() - dateObj.getTime()) / 3600000).toFixed(1)
                     : null;
 
                   return (
