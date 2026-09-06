@@ -1,0 +1,40 @@
+name: gaia-classifier-local
+
+services:
+  classifier-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gaia-classifier:latest
+    container_name: gaia-classifier-web
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: ${DB_HOST:-workspace-production}
+      PG_PORT: ${PG_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-crawler}
+      POSTGRES_DB: ${POSTGRES_DB:-craw}
+      PG_PASSWORD: ${PG_PASSWORD:-83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b}
+    volumes:
+      - ./models:/app/models
+    command: ["uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  classifier-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gaia-classifier:latest
+    container_name: gaia-classifier-worker
+    restart: unless-stopped
+    environment:
+      DB_HOST: ${DB_HOST:-workspace-production}
+      PG_PORT: ${PG_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-crawler}
+      POSTGRES_DB: ${POSTGRES_DB:-craw}
+      PG_PASSWORD: ${PG_PASSWORD:-83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b}
+      WORKER_BATCH_SIZE: 2000
+      WORKER_POLL_INTERVAL: 15
+    volumes:
+      - ./models:/app/models
+    command: ["python", "scripts/worker.py"]

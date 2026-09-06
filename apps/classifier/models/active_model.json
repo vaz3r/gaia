@@ -1,0 +1,30 @@
+{
+  "version": "v2",
+  "filename": "torrent_classifier_v2.joblib",
+  "model_path": "/Users/omega/Documents/GitHub/gaia/apps/classifier/models/torrent_classifier_v2.joblib",
+  "activated_at": "2026-09-06T10:11:10Z",
+  "metrics": {
+    "macro_f1": 0.904,
+    "accuracy": 0.9073,
+    "per_class_f1": {
+      "Adult": 0.932,
+      "Anime": 0.966,
+      "Applications": 0.887,
+      "Audiobooks": 0.865,
+      "Books & Learning": 0.957,
+      "Documentaries": 0.835,
+      "Games": 0.923,
+      "Movies": 0.871,
+      "Music": 0.932,
+      "Television": 0.872
+    }
+  },
+  "history": [
+    {
+      "version": "v2",
+      "filename": "torrent_classifier_v2.joblib",
+      "activated_at": "2026-09-06T10:11:10Z",
+      "macro_f1": 0.904
+    }
+  ]
+}

@@ -80,3 +80,42 @@ services:
       - postgres
     volumes:
       - /home/${DEPLOY_USER:-ubuntu}/gaia-data/rclone:/root/.config/rclone
+
+  classifier-web:
+    build:
+      context: ../../../apps/classifier
+      dockerfile: Dockerfile
+    image: gaia-classifier:${GIT_COMMIT:-latest}
+    container_name: gaia-classifier-web
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      DB_HOST: localhost
+      PG_PORT: ${PG_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-crawler}
+      POSTGRES_DB: ${POSTGRES_DB:-craw}
+      PG_PASSWORD: ${PG_PASSWORD}
+      PORT: ${CLASSIFIER_PORT:-8080}
+    volumes:
+      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/classifier/models:/app/models
+    command: ["uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8080"]
+
+  classifier-worker:
+    build:
+      context: ../../../apps/classifier
+      dockerfile: Dockerfile
+    image: gaia-classifier:${GIT_COMMIT:-latest}
+    container_name: gaia-classifier-worker
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      DB_HOST: localhost
+      PG_PORT: ${PG_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-crawler}
+      POSTGRES_DB: ${POSTGRES_DB:-craw}
+      PG_PASSWORD: ${PG_PASSWORD}
+      WORKER_BATCH_SIZE: 2000
+      WORKER_POLL_INTERVAL: 15
+    volumes:
+      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/classifier/models:/app/models
+    command: ["python", "scripts/worker.py"]

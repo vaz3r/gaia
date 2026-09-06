@@ -6,27 +6,37 @@ import numpy as np
 
 sys.path.append(str(Path(__file__).parent))
 from feature_extractor import TorrentFeatureExtractor, explain_features
+from model_manager import get_active_model_path, get_active_model_info
 
-DEFAULT_MODEL_PATH = Path(__file__).parent.parent / "models" / "torrent_classifier_v2.joblib"
 
 class TorrentClassifierService:
     _instance: Optional["TorrentClassifierService"] = None
 
-    def __init__(self, model_path: Path = DEFAULT_MODEL_PATH):
-        if not model_path.exists():
-            raise FileNotFoundError(f"Model file not found at {model_path}")
-        
-        self.model_path = model_path
-        payload = joblib.load(model_path)
+    def __init__(self):
+        self.model_path = get_active_model_path()
+        self._load_model()
+
+    def _load_model(self):
+        payload = joblib.load(self.model_path)
         self.extractor: TorrentFeatureExtractor = payload["extractor"]
         self.classifier = payload["classifier"]
         self.classes = [str(c) for c in payload["classes"]]
         self.metadata = payload.get("metadata", {})
+        self.active_info = get_active_model_info()
+
+    def check_reload(self):
+        """Hot-reload if active model path or timestamp changed."""
+        latest_path = get_active_model_path()
+        if latest_path != self.model_path:
+            self.model_path = latest_path
+            self._load_model()
 
     @classmethod
     def get_instance(cls) -> "TorrentClassifierService":
         if cls._instance is None:
             cls._instance = TorrentClassifierService()
+        else:
+            cls._instance.check_reload()
         return cls._instance
 
     def classify_single(
@@ -36,6 +46,7 @@ class TorrentClassifierService:
         margin_threshold: float = 0.35
     ) -> Dict[str, Any]:
         """Classify a single torrent dict and provide comprehensive diagnostic breakdown."""
+        self.check_reload()
         X = self.extractor.transform([item])
         probas = self.classifier.predict_proba(X)[0]
 
@@ -80,6 +91,7 @@ class TorrentClassifierService:
             "review_type": "low_confidence" if is_low_conf else ("ambiguous" if is_ambiguous else "accepted"),
             "probabilities": ranked,
             "features": feature_info,
+            "model_version": self.active_info.get("version", "v2"),
             "model_classes": self.classes
         }
 
@@ -93,6 +105,7 @@ class TorrentClassifierService:
         if not items:
             return []
 
+        self.check_reload()
         X = self.extractor.transform(items)
         probas = self.classifier.predict_proba(X)
 
@@ -118,8 +131,16 @@ class TorrentClassifierService:
                 "predicted_category": top1_cat,
                 "confidence": round(top1_p, 4),
                 "margin": round(margin, 4),
+                "top2_category": top2_cat,
+                "top2_confidence": round(top2_p, 4),
                 "needs_review": bool(needs_review),
-                "review_type": "low_confidence" if is_low_conf else ("ambiguous" if is_ambiguous else "accepted")
+                "review_type": "low_confidence" if is_low_conf else ("ambiguous" if is_ambiguous else "accepted"),
+                "meta": {
+                    "margin": round(margin, 4),
+                    "review_type": "low_confidence" if is_low_conf else ("ambiguous" if is_ambiguous else "accepted"),
+                    "top2": {"category": top2_cat, "confidence": round(top2_p, 4)},
+                    "model_version": self.active_info.get("version", "v2")
+                }
             })
 
         return results

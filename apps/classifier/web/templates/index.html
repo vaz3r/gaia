@@ -34,7 +34,6 @@
   <style>
     [x-cloak] { display: none !important; }
     
-    /* Vercel/Linear custom scrollbar */
     ::-webkit-scrollbar {
       width: 5px;
       height: 5px;
@@ -51,7 +50,6 @@
     }
   </style>
 
-  <!-- Theme initialization -->
   <script>
     if (localStorage.theme === 'light') {
       document.documentElement.classList.remove('dark');
@@ -79,7 +77,27 @@
         classifiedCache: {},
         copiedHash: false,
 
+        // Review Queue filtering
+        filterNeedsReview: false,
+        queueMetrics: { review_queue_depth: 0 },
+
+        // Relabeling state (Anti-Bias: unselected by default)
+        selectedCustomCategory: '',
+        isSubmittingLabel: false,
+        labelSuccessMessage: null,
+
+        // Model management modal
+        showModelModal: false,
+        activeModelInfo: {},
+        availableModels: [],
+        isRetraining: false,
+        retrainStatusText: '',
+
         quickTags: ['S01E01', 'FitGirl', 'Audiobook', 'FLAC', '1080p BluRay', 'Erai-raws', 'Crack', 'pdf'],
+        allCategories: [
+          'Adult', 'Anime', 'Applications', 'Audiobooks', 'Books & Learning',
+          'Documentaries', 'Games', 'Movies', 'Music', 'Television'
+        ],
 
         get totalPages() {
           return Math.max(1, Math.ceil(this.totalCount / this.limit));
@@ -118,6 +136,8 @@
 
         initApp() {
           this.fetchTorrents();
+          this.fetchModelInfo();
+          this.fetchMetrics();
           window.addEventListener('keydown', (e) => {
             if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
               e.preventDefault();
@@ -137,10 +157,24 @@
           }
         },
 
+        async fetchMetrics() {
+          try {
+            const res = await fetch('/api/metrics');
+            if (res.ok) {
+              this.queueMetrics = await res.json();
+            }
+          } catch (e) {
+            console.error("Error fetching metrics:", e);
+          }
+        },
+
         async fetchTorrents() {
           this.loadingTorrents = true;
           try {
             let url = `/api/torrents?offset=${this.offset}&limit=${this.limit}`;
+            if (this.filterNeedsReview) {
+              url += `&needs_review=true`;
+            }
             if (this.searchQuery && this.searchQuery.trim()) {
               url += `&search=${encodeURIComponent(this.searchQuery.trim())}`;
             }
@@ -186,8 +220,9 @@
         async selectAndClassify(item) {
           this.selectedInfohash = item.infohash;
           this.activeTorrent = item;
+          this.labelSuccessMessage = null;
+          this.selectedCustomCategory = '';
 
-          // If result cached with full files, restore instantly
           if (this.classifiedCache[item.infohash]) {
             const cached = this.classifiedCache[item.infohash];
             this.activeTorrent = cached.torrent;
@@ -217,6 +252,83 @@
             alert("Classification Error: " + e.message);
           } finally {
             this.isClassifying = false;
+          }
+        },
+
+        // Anti-bias explicit labeling methods
+        async submitLabel(chosenCategory, reason) {
+          if (!this.activeTorrent || !chosenCategory) return;
+          this.isSubmittingLabel = true;
+          this.labelSuccessMessage = null;
+
+          try {
+            const res = await fetch('/api/labels', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                infohash: this.activeTorrent.infohash,
+                category: chosenCategory,
+                reason: reason || "Verified via Web Studio"
+              })
+            });
+            if (!res.ok) {
+              const err = await res.json();
+              throw new Error(err.detail || "Failed to save label");
+            }
+
+            this.labelSuccessMessage = `Labeled as '${chosenCategory}' and recorded in labeled_results (source: manual_web)`;
+            this.fetchMetrics();
+            this.fetchTorrents();
+            
+            // Update in-memory state
+            if (this.classificationResult) {
+              this.classificationResult.predicted_category = chosenCategory;
+              this.classificationResult.confidence = 1.0;
+              this.classificationResult.needs_review = false;
+              this.classificationResult.review_type = "accepted";
+            }
+            if (this.classifiedCache[this.activeTorrent.infohash]) {
+              this.classifiedCache[this.activeTorrent.infohash].classification.predicted_category = chosenCategory;
+              this.classifiedCache[this.activeTorrent.infohash].classification.needs_review = false;
+            }
+          } catch (e) {
+            alert("Label Error: " + e.message);
+          } finally {
+            this.isSubmittingLabel = false;
+          }
+        },
+
+        async fetchModelInfo() {
+          try {
+            const res = await fetch('/api/models');
+            if (res.ok) {
+              const data = await res.json();
+              this.activeModelInfo = data.active || {};
+              this.availableModels = data.available || [];
+            }
+          } catch (e) {
+            console.error("Failed to load models:", e);
+          }
+        },
+
+        async triggerRollback(version) {
+          if (!confirm(`Are you sure you want to rollback active model to version ${version}?`)) return;
+          try {
+            const res = await fetch('/api/models/rollback', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ version: version })
+            });
+            if (!res.ok) {
+              const err = await res.json();
+              throw new Error(err.detail || "Rollback failed");
+            }
+            const data = await res.json();
+            this.activeModelInfo = data.active;
+            await this.fetchModelInfo();
+            alert(`Rollback successful! Active model is now ${version}.`);
+          } catch (e) {
+            alert("Rollback Error: " + e.message);
           }
         },
 
@@ -258,7 +370,8 @@
             'Games': '🎮',
             'Movies': '🎬',
             'Music': '🎵',
-            'Television': '📺'
+            'Television': '📺',
+            'Other': '📁'
           };
           return icons[cat] || '📁';
         },
@@ -282,13 +395,12 @@
   x-data="classifierApp()" 
   x-init="initApp()">
 
-  <!-- Minimal Vercel Header -->
+  <!-- Minimal Header -->
   <header class="border-b border-zinc-200 dark:border-zinc-800/80 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md sticky top-0 z-30">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
       
       <!-- Brand & Project -->
       <div class="flex items-center space-x-3">
-        <!-- Minimal Vercel triangle / logo -->
         <div class="w-6 h-6 rounded bg-zinc-900 dark:bg-white flex items-center justify-center text-white dark:text-zinc-950">
           <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
             <path d="M12 2L2 22h20L12 2z"/>
@@ -298,7 +410,12 @@
           <span class="font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">gaia</span>
           <span class="text-zinc-300 dark:text-zinc-700">/</span>
           <span class="text-zinc-600 dark:text-zinc-400 font-medium">classifier</span>
-          <span class="px-1.5 py-0.5 text-[10px] font-mono rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400">v2.0</span>
+          <button 
+            @click="showModelModal = true; fetchModelInfo()"
+            class="px-2 py-0.5 text-[10px] font-mono rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition flex items-center space-x-1">
+            <span x-text="activeModelInfo.version || 'v2'"></span>
+            <span class="text-zinc-400">▾</span>
+          </button>
         </div>
       </div>
 
@@ -306,24 +423,27 @@
       <div class="hidden sm:flex items-center space-x-3 text-xs">
         <div class="flex items-center space-x-1.5 px-2.5 py-1 rounded-full border border-emerald-500/20 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 font-mono text-[11px]">
           <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span>POSTGRES READ_ONLY</span>
+          <span>POSTGRES LIVE</span>
         </div>
         <div class="px-2.5 py-1 rounded-full border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 font-mono text-[11px]">
           <span class="text-zinc-900 dark:text-zinc-200 font-medium" x-text="totalCount ? totalCount.toLocaleString() : '~2.3M'"></span> torrents
         </div>
       </div>
 
-      <!-- Right Controls (Theme Toggle) -->
+      <!-- Right Controls -->
       <div class="flex items-center space-x-2">
         <button 
+          @click="showModelModal = true; fetchModelInfo()"
+          class="px-2.5 py-1 rounded-md border border-zinc-200 dark:border-zinc-800 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition flex items-center space-x-1">
+          <span>Models</span>
+        </button>
+        
+        <button 
           @click="toggleTheme()" 
-          class="p-1.5 rounded-md border border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition"
-          :title="isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'">
-          <!-- Sun Icon (shown in dark mode) -->
+          class="p-1.5 rounded-md border border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition">
           <svg x-show="isDark" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
           </svg>
-          <!-- Moon Icon (shown in light mode) -->
           <svg x-show="!isDark" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" x-cloak>
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
           </svg>
@@ -341,6 +461,32 @@
       
       <!-- Search & Quick Filters -->
       <div class="border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 bg-white dark:bg-zinc-900/50 space-y-2.5">
+        <!-- View Switcher: All Torrents vs Review Queue -->
+        <div class="flex items-center justify-between pb-2 border-b border-zinc-100 dark:border-zinc-800">
+          <div class="flex items-center space-x-1.5">
+            <button 
+              type="button" 
+              @click="filterNeedsReview = false; offset = 0; currentPage = 1; fetchTorrents()"
+              :class="!filterNeedsReview ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100'"
+              class="px-2.5 py-1 rounded text-xs font-medium transition">
+              All Torrents
+            </button>
+            <button 
+              type="button" 
+              @click="filterNeedsReview = true; offset = 0; currentPage = 1; fetchTorrents()"
+              :class="filterNeedsReview ? 'bg-amber-600 text-white shadow-sm' : 'text-zinc-500 hover:text-amber-600 dark:hover:text-amber-400'"
+              class="flex items-center space-x-1.5 px-2.5 py-1 rounded text-xs font-medium transition">
+              <span>Review Queue</span>
+              <span 
+                x-text="queueMetrics.review_queue_depth || 0" 
+                :class="filterNeedsReview ? 'bg-amber-700/60 text-white' : 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400'"
+                class="px-1.5 py-0.2 text-[10px] rounded-full font-mono font-semibold">
+              </span>
+            </button>
+          </div>
+          <span class="text-[11px] text-zinc-400 font-mono" x-text="totalCount.toLocaleString() + ' records'"></span>
+        </div>
+
         <form @submit.prevent="searchTorrents()" class="flex items-center space-x-2">
           <div class="relative flex-1">
             <svg class="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -369,7 +515,6 @@
           </button>
         </form>
 
-        <!-- Minimal Quick Filter Pills -->
         <div class="flex flex-wrap items-center gap-1 text-xs">
           <span class="text-zinc-400 dark:text-zinc-500 font-mono text-[11px] mr-1">Filter:</span>
           <template x-for="tag in quickTags" :key="tag">
@@ -382,10 +527,9 @@
         </div>
       </div>
 
-      <!-- Torrents Explorer Table Card -->
+      <!-- Torrents Table -->
       <div class="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden bg-white dark:bg-zinc-900/30 flex-1 flex flex-col">
         
-        <!-- Table Top Bar -->
         <div class="px-3.5 py-2.5 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
           <div class="font-mono text-[11px]">
             <span>Showing </span>
@@ -399,12 +543,11 @@
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
               </svg>
-              <span>Querying PostgreSQL...</span>
+              <span>Querying...</span>
             </span>
           </div>
         </div>
 
-        <!-- Table Rows -->
         <div class="overflow-x-auto flex-1 custom-scrollbar">
           <table class="w-full text-left border-collapse">
             <thead>
@@ -424,10 +567,8 @@
                   }"
                   class="transition cursor-pointer group">
                   
-                  <!-- Title & Metadata -->
                   <td class="py-2.5 px-3.5">
                     <div class="flex items-start space-x-2.5">
-                      <!-- Active selection bullet -->
                       <div class="mt-1 shrink-0">
                         <div 
                           class="w-2.5 h-2.5 rounded-full transition border"
@@ -445,7 +586,6 @@
                           <span>•</span>
                           <span x-text="item.file_count + ' file' + (item.file_count > 1 ? 's' : '')"></span>
 
-                          <!-- Inline cached badge -->
                           <template x-if="classifiedCache[item.infohash]">
                             <span 
                               class="px-1.5 py-0.2 rounded text-[10px] font-sans font-medium flex items-center space-x-1 border"
@@ -464,12 +604,10 @@
                     </div>
                   </td>
 
-                  <!-- Size -->
                   <td class="py-2.5 px-3 text-right">
                     <div class="font-mono font-medium text-zinc-900 dark:text-zinc-200" x-text="item.total_size_formatted"></div>
                   </td>
 
-                  <!-- Action Button -->
                   <td class="py-2.5 px-3 text-center" @click.stop>
                     <button 
                       @click="selectAndClassify(item)"
@@ -497,17 +635,10 @@
 
                 </tr>
               </template>
-              
-              <tr x-show="!loadingTorrents && torrents.length === 0">
-                <td colspan="3" class="py-12 text-center text-zinc-400 dark:text-zinc-500 font-mono text-xs">
-                  No torrents found in workspace pool.
-                </td>
-              </tr>
             </tbody>
           </table>
         </div>
 
-        <!-- Pagination Controls -->
         <div class="px-3 py-2 border-t border-zinc-200 dark:border-zinc-800/80 bg-zinc-50/50 dark:bg-zinc-950/40 flex items-center justify-between text-xs">
           <button 
             @click="prevPage()" 
@@ -535,17 +666,14 @@
       
       <div class="border border-zinc-200 dark:border-zinc-800 rounded-lg p-4 bg-white dark:bg-zinc-900/40 shadow-xs flex-1 flex flex-col">
         
-        <!-- Header -->
         <div class="flex items-center justify-between pb-3 border-b border-zinc-200 dark:border-zinc-800">
           <div class="flex items-center space-x-2">
-            <span class="font-semibold text-zinc-900 dark:text-zinc-100 text-sm tracking-tight">Diagnostics & Metadata</span>
+            <span class="font-semibold text-zinc-900 dark:text-zinc-100 text-sm tracking-tight">Diagnostics & Verification</span>
           </div>
-          <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-500">
-            Realtime
+          <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-500" x-text="activeModelInfo.version || 'v2'">
           </span>
         </div>
 
-        <!-- Empty State -->
         <div x-show="!classificationResult && !isClassifying" class="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-2.5">
           <div class="w-10 h-10 rounded-lg border border-zinc-200 dark:border-zinc-800 flex items-center justify-center text-zinc-400">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -554,23 +682,22 @@
           </div>
           <div>
             <p class="font-medium text-zinc-700 dark:text-zinc-300 text-xs">No torrent selected</p>
-            <p class="text-[11px] text-zinc-400 dark:text-zinc-500 max-w-xs mt-0.5">Click any torrent from the database table to evaluate classification and inspect its metadata and file manifest.</p>
+            <p class="text-[11px] text-zinc-400 dark:text-zinc-500 max-w-xs mt-0.5">Click any torrent to evaluate classification, inspect metadata, and review labels.</p>
           </div>
         </div>
 
-        <!-- Loading State -->
         <div x-show="isClassifying" class="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-2.5" x-cloak>
           <svg class="w-6 h-6 text-zinc-600 dark:text-zinc-400 animate-spin" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
           </svg>
-          <p class="text-xs font-mono text-zinc-500">Querying manifest & running model inference...</p>
+          <p class="text-xs font-mono text-zinc-500">Querying manifest & evaluating model...</p>
         </div>
 
-        <!-- Populated Results & Metadata View -->
+        <!-- Populated Results -->
         <div x-show="classificationResult && !isClassifying" class="space-y-4 pt-3 flex-1 flex flex-col" x-cloak>
           
-          <!-- Primary Prediction Card (Linear/Vercel Style) -->
+          <!-- Prediction Card -->
           <div class="border rounded-lg p-3.5 space-y-3"
             :class="{
               'border-emerald-500/30 bg-emerald-500/[0.03] dark:bg-emerald-500/[0.05]': reviewType === 'accepted',
@@ -579,9 +706,8 @@
             }">
             
             <div class="flex items-center justify-between">
-              <span class="text-[11px] font-mono uppercase tracking-wider text-zinc-500">Predicted Category</span>
+              <span class="text-[11px] font-mono uppercase tracking-wider text-zinc-500">Model Inference</span>
               
-              <!-- Review Tag -->
               <span 
                 class="px-2 py-0.5 rounded text-[10px] font-mono font-medium flex items-center space-x-1 border"
                 :class="{
@@ -589,7 +715,7 @@
                   'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20': reviewType === 'ambiguous',
                   'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20': reviewType === 'low_confidence',
                 }">
-                <span x-text="reviewType === 'accepted' ? '✓ Accepted' : '⚠ Flagged for Review'"></span>
+                <span x-text="reviewType === 'accepted' ? '✓ Accepted' : '⚠ Needs Review'"></span>
               </span>
             </div>
 
@@ -605,19 +731,77 @@
               </div>
             </div>
 
-            <!-- Review Diagnostic Reason -->
             <div x-show="needsReview" class="p-2.5 rounded border border-amber-500/20 bg-amber-500/5 text-[11px] text-amber-700 dark:text-amber-300 flex items-start space-x-2 font-mono">
               <span class="shrink-0 text-amber-500 mt-0.5">ℹ</span>
               <div class="leading-relaxed" x-text="reviewReason"></div>
             </div>
-
           </div>
 
-          <!-- Probability Distribution (10 target classes) -->
+          <!-- ANTI-BIAS ACTIVE LEARNING VERIFICATION CARD -->
+          <div class="border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 space-y-3 bg-zinc-50/50 dark:bg-zinc-950/40">
+            <div class="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800/80 pb-2">
+              <span class="text-[11px] font-mono text-zinc-500 uppercase font-semibold">Human Review & Ground Truth</span>
+              <span class="text-[10px] font-mono text-zinc-400">source: manual_web</span>
+            </div>
+
+            <div x-show="labelSuccessMessage" class="p-2 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-mono" x-text="labelSuccessMessage"></div>
+
+            <div class="space-y-2">
+              <span class="text-xs text-zinc-600 dark:text-zinc-400 block leading-tight">
+                Review this prediction independently to prevent rubber-stamping:
+              </span>
+
+              <!-- Option 1: Deliberate confirmation of model's guess -->
+              <button 
+                type="button"
+                @click="submitLabel(predictedCategory, 'Human confirmed model prediction')"
+                :disabled="isSubmittingLabel"
+                class="w-full py-1.5 px-3 rounded text-xs font-medium bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 hover:bg-zinc-800 dark:hover:bg-zinc-100 transition flex items-center justify-center space-x-1.5 shadow-xs">
+                <span>Confirm Model:</span>
+                <strong x-text="predictedCategory"></strong>
+              </button>
+
+              <div class="flex items-center space-x-2 pt-1">
+                <span class="text-[11px] text-zinc-400 shrink-0 font-mono">Or assign:</span>
+                
+                <!-- Option 2: Choose different category (unselected by default) -->
+                <select 
+                  x-model="selectedCustomCategory" 
+                  class="flex-1 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1 text-xs text-zinc-900 dark:text-zinc-100 font-mono focus:outline-none focus:ring-1 focus:ring-zinc-900">
+                  <option value="">Select custom category...</option>
+                  <template x-for="cat in allCategories" :key="cat">
+                    <option :value="cat" x-text="cat"></option>
+                  </template>
+                </select>
+
+                <button 
+                  type="button"
+                  @click="submitLabel(selectedCustomCategory, 'Human correction via web UI')"
+                  :disabled="isSubmittingLabel || !selectedCustomCategory"
+                  class="px-3 py-1 rounded bg-zinc-200 dark:bg-zinc-800 hover:bg-zinc-300 dark:hover:bg-zinc-700 disabled:opacity-40 text-zinc-900 dark:text-zinc-100 text-xs font-medium transition">
+                  Save
+                </button>
+              </div>
+
+              <!-- Option 3: Terminal 'Other' Exit Path to drain junk from review queue -->
+              <div class="pt-1 border-t border-zinc-200 dark:border-zinc-800/80 flex items-center justify-between">
+                <span class="text-[11px] text-zinc-400">Junk / Non-media content?</span>
+                <button 
+                  type="button"
+                  @click="submitLabel('Other', 'Marked as unclassifiable Other/Junk')"
+                  :disabled="isSubmittingLabel"
+                  class="text-[11px] font-mono text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 underline transition">
+                  Mark as 'Other' (Drain Queue)
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Probability Distribution (10 classes) -->
           <div class="border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 space-y-2">
             <div class="flex items-center justify-between text-[11px] font-mono text-zinc-500">
               <span>PROBABILITY DISTRIBUTION</span>
-              <span>CALIBRATED (SGD)</span>
+              <span>CALIBRATED SGD</span>
             </div>
 
             <div class="space-y-1.5 pt-0.5">
@@ -642,24 +826,22 @@
             </div>
           </div>
 
-          <!-- Triggered Feature Attribution -->
+          <!-- Feature Attribution Breakdown -->
           <div class="border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 space-y-2.5">
             <span class="text-[11px] font-mono text-zinc-500 uppercase block">Triggered Feature Attribution</span>
 
-            <!-- Matched Rules -->
             <div>
-              <span class="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono block mb-1">Scene & Regex Rules:</span>
+              <span class="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono block mb-1">Scene Rules:</span>
               <div class="flex flex-wrap gap-1">
                 <template x-for="rule in matchedRules" :key="rule">
                   <span class="px-1.5 py-0.5 rounded border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 text-[11px] font-mono" x-text="rule"></span>
                 </template>
-                <span x-show="!matchedRules.length" class="text-xs text-zinc-400 dark:text-zinc-500 italic">None triggered (fell back to TF-IDF n-grams)</span>
+                <span x-show="!matchedRules.length" class="text-xs text-zinc-400 dark:text-zinc-500 italic">None triggered</span>
               </div>
             </div>
 
-            <!-- Detected Extensions -->
             <div>
-              <span class="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono block mb-1">Detected File Extensions:</span>
+              <span class="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono block mb-1">Detected Extensions:</span>
               <div class="flex flex-wrap gap-1">
                 <template x-for="ext in detectedExtensions" :key="ext">
                   <span class="px-1.5 py-0.5 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 text-[11px] font-mono" x-text="ext"></span>
@@ -669,14 +851,13 @@
             </div>
           </div>
 
-          <!-- Complete Torrent Metadata & Files Manifest -->
+          <!-- Files Tree Manifest -->
           <div class="border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 space-y-3 bg-zinc-50/50 dark:bg-zinc-950/40">
             <div class="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800/80 pb-2">
               <span class="text-[11px] font-mono text-zinc-500 uppercase font-semibold">Metadata & Files Manifest</span>
               <span class="text-[11px] font-mono text-zinc-400" x-text="filesList.length + ' item(s)'"></span>
             </div>
 
-            <!-- Torrent Details Grid -->
             <div class="space-y-1.5 text-xs font-mono">
               <div>
                 <span class="text-zinc-400 text-[11px]">Title: </span>
@@ -697,28 +878,17 @@
                 <div>
                   <span class="text-zinc-400">Total Size: </span>
                   <span class="font-medium text-zinc-800 dark:text-zinc-200" x-text="activeTorrent ? activeTorrent.total_size_formatted : ''"></span>
-                  <span class="text-zinc-400 dark:text-zinc-600" x-text="' (' + (activeTorrent ? (activeTorrent.total_size || 0).toLocaleString() : 0) + ' B)'"></span>
                 </div>
                 <div>
                   <span class="text-zinc-400">File Count: </span>
                   <span class="font-medium text-zinc-800 dark:text-zinc-200" x-text="activeTorrent ? activeTorrent.file_count : 0"></span>
                 </div>
-                <div x-show="activeTorrent?.first_seen">
-                  <span class="text-zinc-400">First Seen: </span>
-                  <span class="text-zinc-700 dark:text-zinc-300" x-text="formatDate(activeTorrent?.first_seen)"></span>
-                </div>
-                <div x-show="activeTorrent?.last_seen">
-                  <span class="text-zinc-400">Last Seen: </span>
-                  <span class="text-zinc-700 dark:text-zinc-300" x-text="formatDate(activeTorrent?.last_seen)"></span>
-                </div>
               </div>
             </div>
 
-            <!-- Scrollable Files Manifest -->
             <div class="pt-1">
-              <span class="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono block mb-1.5">File Tree (from torrent manifest):</span>
-              
-              <div class="max-h-56 overflow-y-auto border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-900 custom-scrollbar divide-y divide-zinc-100 dark:divide-zinc-800/60 font-mono text-[11px]">
+              <span class="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono block mb-1.5">File Tree:</span>
+              <div class="max-h-48 overflow-y-auto border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-900 custom-scrollbar divide-y divide-zinc-100 dark:divide-zinc-800/60 font-mono text-[11px]">
                 <template x-for="(file, idx) in filesList" :key="idx">
                   <div class="p-2 flex items-start justify-between space-x-2 hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition">
                     <div class="text-zinc-700 dark:text-zinc-300 break-all leading-tight">
@@ -728,9 +898,8 @@
                     <div class="shrink-0 text-zinc-500 dark:text-zinc-400 text-[10px]" x-text="formatBytes(file.length)"></div>
                   </div>
                 </template>
-
-                <div x-show="filesList.length === 0" class="p-4 text-center text-zinc-400 text-xs italic font-mono">
-                  No individual files manifest in database record (single file torrent).
+                <div x-show="filesList.length === 0" class="p-3 text-center text-zinc-400 text-xs italic font-mono">
+                  Single file torrent.
                 </div>
               </div>
             </div>
@@ -744,5 +913,65 @@
     </section>
 
   </main>
+
+  <!-- MODEL MANAGEMENT & ROLLBACK MODAL -->
+  <div x-show="showModelModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/60 backdrop-blur-xs" x-cloak>
+    <div @click.away="showModelModal = false" class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl max-w-lg w-full p-5 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 pb-3">
+        <h3 class="font-semibold text-zinc-900 dark:text-zinc-100 text-base">Model Versions & Quality Gates</h3>
+        <button @click="showModelModal = false" class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200">✕</button>
+      </div>
+
+      <!-- Active Model Info -->
+      <div class="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-200 dark:border-zinc-800 space-y-2 text-xs font-mono">
+        <div class="flex items-center justify-between">
+          <span class="text-zinc-400">Active Version:</span>
+          <span class="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold" x-text="activeModelInfo.version || 'v2'"></span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-zinc-400">Macro F1:</span>
+          <span class="font-bold text-zinc-900 dark:text-zinc-100" x-text="activeModelInfo.metrics ? (activeModelInfo.metrics.macro_f1 * 100).toFixed(2) + '%' : '90.40%'"></span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-zinc-400">Activated At:</span>
+          <span class="text-zinc-600 dark:text-zinc-300" x-text="activeModelInfo.activated_at || '2026-09-06'"></span>
+        </div>
+      </div>
+
+      <!-- Available Models List with Rollback -->
+      <div>
+        <span class="text-xs font-mono text-zinc-500 uppercase block mb-2">Available Artifacts:</span>
+        <div class="space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
+          <template x-for="m in availableModels" :key="m.filename">
+            <div class="p-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800 flex items-center justify-between text-xs font-mono">
+              <div>
+                <div class="font-bold text-zinc-900 dark:text-zinc-100" x-text="m.version"></div>
+                <div class="text-[10px] text-zinc-400" x-text="m.filename + ' (' + m.size_mb + ' MB)'"></div>
+              </div>
+              <div class="flex items-center space-x-2">
+                <span x-show="m.is_active" class="text-[11px] text-emerald-500 font-bold">Active</span>
+                <button 
+                  x-show="!m.is_active"
+                  @click="triggerRollback(m.version)"
+                  class="px-2.5 py-1 rounded bg-zinc-200 dark:bg-zinc-800 hover:bg-zinc-300 dark:hover:bg-zinc-700 text-zinc-900 dark:text-zinc-100 transition">
+                  Rollback
+                </button>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <div class="pt-2 border-t border-zinc-200 dark:border-zinc-800 flex justify-end">
+        <button 
+          type="button" 
+          @click="showModelModal = false" 
+          class="px-4 py-1.5 bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 rounded text-xs font-medium">
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>
