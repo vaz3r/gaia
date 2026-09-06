@@ -102,23 +102,14 @@ def list_available_models() -> List[Dict[str, Any]]:
                 macro_f1 = hm.get("macro_f1", macro_f1)
                 accuracy = hm.get("accuracy", accuracy)
 
-        # If still missing sample count or metrics, inspect joblib metadata safely
-        try:
-            import joblib
-            header = joblib.load(p)
-            if isinstance(header, dict) and "metadata" in header:
-                meta = header["metadata"]
-                num_samples = meta.get("num_samples") or meta.get("num_training_samples")
-                if meta.get("trained_at"):
-                    trained_at = meta["trained_at"]
-        except Exception:
-            pass
-
-        # Defaults for default baseline v2
-        if v_name == "v2" and macro_f1 is None:
-            macro_f1 = 0.9040
-            accuracy = 0.9073
-            num_samples = 30869
+        # Use cached metadata from active_model.json or baseline defaults (avoiding 17MB joblib.load on each HTTP call)
+        if v_name == "v2":
+            if macro_f1 is None:
+                macro_f1 = 0.9040
+            if accuracy is None:
+                accuracy = 0.9073
+            if num_samples is None:
+                num_samples = 30869
 
         models.append({
             "version": v_name,
