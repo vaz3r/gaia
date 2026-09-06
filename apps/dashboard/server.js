@@ -517,59 +517,91 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-// GET /api/analysis - Swarm activity, velocity, trending, and telemetry insights
+// GET /api/analysis - Swarm activity, velocity, trending, and category intelligence insights
 app.get('/api/analysis', async (req, res) => {
+  const selectedCategory = req.query.category && req.query.category !== 'All' ? req.query.category : null;
   const now = Date.now();
-  if (analysisCache.ts && now - analysisCache.ts < ANALYSIS_CACHE_MS) {
+
+  // Only use cache when no specific category filter is requested
+  if (!selectedCategory && analysisCache.ts && now - analysisCache.ts < ANALYSIS_CACHE_MS) {
     return res.json(analysisCache.data);
   }
 
   try {
-    const [trendingRes, velocityRes, topSwarmsRes, summaryRes] = await Promise.all([
+    const catFilterSql = selectedCategory ? `AND category = $1` : '';
+    const catParams = selectedCategory ? [selectedCategory] : [];
+
+    const [trendingRes, velocityRes, topSwarmsRes, summaryRes, categoryStatsRes] = await Promise.all([
       // 1. Trending Swarms: high popularity score balancing swarm activity & velocity
       query(`
         SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
                first_seen, last_seen, total_seen, health_score, popularity_score, swarm_peers,
+               category, category_confidence, needs_review,
                popularity_score as trend_score,
                round(total_seen / GREATEST(0.25, EXTRACT(epoch FROM (now() - verified_at)) / 3600.0), 2) as velocity
         FROM torrents
-        WHERE popularity_score > 0
+        WHERE popularity_score > 0 ${catFilterSql}
         ORDER BY popularity_score DESC
-        LIMIT 20
-      `),
+        LIMIT 25
+      `, catParams),
 
       // 2. Release Velocity: New verified releases spreading fastest (<48h old, ordered by velocity)
       query(`
         SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
                first_seen, last_seen, total_seen, health_score, popularity_score, swarm_peers,
+               category, category_confidence, needs_review,
                round(total_seen / GREATEST(0.25, EXTRACT(epoch FROM (now() - verified_at)) / 3600.0), 2) as velocity,
                round(EXTRACT(epoch FROM (now() - verified_at)) / 3600.0, 1) as age_hours
         FROM torrents
-        WHERE verified_at >= now() - interval '48 hours'
+        WHERE verified_at >= now() - interval '48 hours' ${catFilterSql}
         ORDER BY velocity DESC, verified_at DESC
-        LIMIT 20
-      `),
+        LIMIT 25
+      `, catParams),
 
       // 3. Top Swarms All-Time (Cumulative sightings)
       query(`
         SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
                first_seen, last_seen, total_seen, health_score, popularity_score, swarm_peers,
+               category, category_confidence, needs_review,
                round(total_seen / GREATEST(0.5, EXTRACT(epoch FROM (now() - first_seen)) / 3600.0), 2) as velocity
         FROM torrents
+        WHERE 1=1 ${catFilterSql}
         ORDER BY total_seen DESC
-        LIMIT 20
-      `),
+        LIMIT 25
+      `, catParams),
 
-      // 4. Global Swarm Telemetry Summary
+      // 4. Global Swarm & Classification Summary
       query(`
         SELECT 
           count(*) as total_torrents,
+          count(category) as classified_torrents,
+          count(*) - count(category) as unclassified_torrents,
+          count(*) filter (where needs_review = true) as review_needed_torrents,
           round(avg(total_seen), 1) as avg_sightings,
           max(total_seen) as max_sightings,
           count(*) filter (where total_seen >= 10) as high_activity_swarms,
           count(*) filter (where first_seen >= now() - interval '48 hours') as fresh_swarms_48h,
-          count(*) filter (where last_seen >= now() - interval '24 hours') as active_swarms_24h
+          count(*) filter (where last_seen >= now() - interval '24 hours') as active_swarms_24h,
+          round(sum(total_size / (1024*1024*1024)::numeric) / 1024, 2) as total_size_tb
         FROM torrents
+      `),
+
+      // 5. Category Distribution Matrix & Metrics
+      query(`
+        SELECT 
+          category,
+          count(*)::bigint as count,
+          round(count(*)::numeric * 100.0 / nullif(sum(count(*)) over (), 0), 2) as pct,
+          round(avg(category_confidence)::numeric, 3) as avg_confidence,
+          round(avg(total_size / (1024*1024*1024)::numeric), 2) as avg_size_gb,
+          round(sum(total_size / (1024*1024*1024)::numeric) / 1024, 2) as total_size_tb,
+          round(avg(swarm_peers::numeric), 1) as avg_peers,
+          round(avg(health_score::numeric), 1) as avg_health,
+          count(*) filter (where needs_review = true) as review_needed
+        FROM torrents
+        WHERE category IS NOT NULL
+        GROUP BY category
+        ORDER BY count DESC
       `)
     ]);
 
@@ -577,19 +609,37 @@ app.get('/api/analysis', async (req, res) => {
     const data = {
       summary: {
         total_torrents: parseInt(summary.total_torrents || 0, 10),
+        classified_torrents: parseInt(summary.classified_torrents || 0, 10),
+        unclassified_torrents: parseInt(summary.unclassified_torrents || 0, 10),
+        review_needed_torrents: parseInt(summary.review_needed_torrents || 0, 10),
+        total_size_tb: parseFloat(summary.total_size_tb || 0),
         avg_sightings: parseFloat(summary.avg_sightings || 0),
         max_sightings: parseInt(summary.max_sightings || 0, 10),
         high_activity_swarms: parseInt(summary.high_activity_swarms || 0, 10),
         fresh_swarms_48h: parseInt(summary.fresh_swarms_48h || 0, 10),
         active_swarms_24h: parseInt(summary.active_swarms_24h || 0, 10),
       },
+      categories: categoryStatsRes.rows.map(r => ({
+        category: r.category,
+        count: parseInt(r.count, 10),
+        pct: parseFloat(r.pct),
+        avg_confidence: parseFloat(r.avg_confidence || 0),
+        avg_size_gb: parseFloat(r.avg_size_gb || 0),
+        total_size_tb: parseFloat(r.total_size_tb || 0),
+        avg_peers: parseFloat(r.avg_peers || 0),
+        avg_health: parseFloat(r.avg_health || 0),
+        review_needed: parseInt(r.review_needed || 0, 10)
+      })),
+      selected_category: selectedCategory || 'All',
       trending: trendingRes.rows,
       fastest_growing: velocityRes.rows,
       top_swarms: topSwarmsRes.rows,
       cached_at: new Date().toISOString()
     };
 
-    analysisCache = { ts: now, data };
+    if (!selectedCategory) {
+      analysisCache = { ts: now, data };
+    }
     res.json(data);
   } catch (err) {
     console.error('Failed to compute analysis telemetry:', err);
