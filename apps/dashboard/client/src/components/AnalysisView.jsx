@@ -282,6 +282,42 @@ export default function AnalysisView({ onInspectTorrent, copyToClipboard }) {
               </button>
 
               <button
+                onClick={() => setActiveSubTab('trends')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                  activeSubTab === 'trends'
+                    ? 'bg-[#1f1f1f] text-white border border-[#383838]'
+                    : 'text-[#888] hover:text-[#eee] hover:bg-[#141414]'
+                }`}
+              >
+                <BarChart3 className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Temporal Trends (7d)</span>
+              </button>
+
+              <button
+                onClick={() => setActiveSubTab('peer_geo')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                  activeSubTab === 'peer_geo'
+                    ? 'bg-[#1f1f1f] text-white border border-[#383838]'
+                    : 'text-[#888] hover:text-[#eee] hover:bg-[#141414]'
+                }`}
+              >
+                <Users className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Peer Geography</span>
+              </button>
+
+              <button
+                onClick={() => setActiveSubTab('survivability')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                  activeSubTab === 'survivability'
+                    ? 'bg-[#1f1f1f] text-white border border-[#383838]'
+                    : 'text-[#888] hover:text-[#eee] hover:bg-[#141414]'
+                }`}
+              >
+                <Shield className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Swarm Survivability</span>
+              </button>
+
+              <button
                 onClick={() => setActiveSubTab('top_swarms')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
                   activeSubTab === 'top_swarms'
@@ -345,8 +381,234 @@ export default function AnalysisView({ onInspectTorrent, copyToClipboard }) {
           </div>
         </div>
 
-        {/* Table Content */}
-        <div className="overflow-x-auto">
+        {/* SUBTAB: TEMPORAL INGESTION TRENDS (7D) */}
+        {activeSubTab === 'trends' && (
+          <div className="p-5 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-[#1c1c1c]">
+              <div>
+                <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-cyan-400" />
+                  Category Ingestion Velocity (Past 7 Days)
+                </h4>
+                <p className="text-xs text-[#777] mt-0.5">
+                  Daily indexed torrent volume segmented across media categories.
+                </p>
+              </div>
+              <div className="flex items-center gap-3 text-[11px] font-mono text-[#888]">
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-xs bg-rose-500" /> Adult</span>
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-xs bg-purple-500" /> Television</span>
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-xs bg-blue-500" /> Movies</span>
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-xs bg-cyan-500" /> Music</span>
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-xs bg-pink-500" /> Anime</span>
+              </div>
+            </div>
+
+            {/* Ingestion Timeline Chart Representation */}
+            {(() => {
+              const trends = data?.trends_7d || [];
+              // Group by day
+              const daysMap = {};
+              trends.forEach((t) => {
+                const dayKey = t.day ? new Date(t.day).toISOString().split('T')[0] : 'Unknown';
+                if (!daysMap[dayKey]) daysMap[dayKey] = {};
+                daysMap[dayKey][t.category] = t.count;
+              });
+
+              const days = Object.keys(daysMap).sort();
+              if (days.length === 0) {
+                return (
+                  <div className="p-8 text-center text-[#666] font-mono text-xs">
+                    No ingestion trend points recorded in the last 7 days.
+                  </div>
+                );
+              }
+
+              // Compute max daily count
+              let maxDayTotal = 1;
+              days.forEach(d => {
+                const total = Object.values(daysMap[d]).reduce((a, b) => a + b, 0);
+                if (total > maxDayTotal) maxDayTotal = total;
+              });
+
+              return (
+                <div className="space-y-3 font-mono text-xs">
+                  {days.map((d) => {
+                    const catObj = daysMap[d];
+                    const dayTotal = Object.values(catObj).reduce((a, b) => a + b, 0);
+
+                    return (
+                      <div key={d} className="p-3 rounded-lg border border-[#181818] bg-[#070707] space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-white font-semibold flex items-center gap-2">
+                            <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                            {d}
+                          </span>
+                          <span className="text-[#aaa] font-bold">
+                            {dayTotal.toLocaleString()} releases verified
+                          </span>
+                        </div>
+
+                        {/* Stacked Proportional Bar */}
+                        <div className="h-3 w-full bg-[#141414] rounded overflow-hidden flex">
+                          {Object.entries(catObj).map(([cat, cnt]) => {
+                            const pct = ((cnt / dayTotal) * 100).toFixed(1);
+                            const theme = CATEGORY_THEMES[cat] || CATEGORY_THEMES.Other;
+                            return (
+                              <div
+                                key={cat}
+                                className={`h-full ${theme.bar} transition-all hover:opacity-80`}
+                                style={{ width: `${pct}%` }}
+                                title={`${cat}: ${cnt.toLocaleString()} (${pct}%)`}
+                              />
+                            );
+                          })}
+                        </div>
+
+                        {/* Category Badges for Day */}
+                        <div className="flex flex-wrap gap-2 text-[10px] pt-1">
+                          {Object.entries(catObj)
+                            .sort((a, b) => b[1] - a[1])
+                            .slice(0, 6)
+                            .map(([cat, cnt]) => {
+                              const theme = CATEGORY_THEMES[cat] || CATEGORY_THEMES.Other;
+                              return (
+                                <span key={cat} className={`px-2 py-0.5 rounded border ${theme.badge} flex items-center gap-1`}>
+                                  <span>{cat}:</span>
+                                  <span className="font-semibold text-white">{cnt.toLocaleString()}</span>
+                                </span>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
+        {/* SUBTAB: SWARM PEER GEOGRAPHY & ASNS */}
+        {activeSubTab === 'peer_geo' && (
+          <div className="p-5 space-y-4 font-mono text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-[#1c1c1c]">
+              <div>
+                <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                  <Users className="w-4 h-4 text-indigo-400" />
+                  Swarm Peer Topology & Autonomous Systems (ASNs)
+                </h4>
+                <p className="text-xs text-[#777] mt-0.5">
+                  Top seeding clusters and datacenter networks verified through BitTorrent BEP 9/10 metadata handshakes.
+                </p>
+              </div>
+              <div className="text-[11px] text-[#888]">
+                Cluster source: <code className="text-cyan-400">stable_peers</code>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {(data?.peer_geography || []).map((peer, idx) => {
+                const totalPeers = (data?.peer_geography || []).reduce((a, b) => a + b.peer_count, 0) || 1;
+                const pct = ((peer.peer_count / totalPeers) * 100).toFixed(1);
+
+                return (
+                  <div key={peer.prefix} className="p-3.5 rounded-lg border border-[#1c1c1c] bg-[#070707] space-y-2 hover:border-[#282828] transition-colors">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-base">{peer.flag}</span>
+                        <div>
+                          <span className="font-bold text-white text-xs">{peer.country}</span>
+                          <span className="text-[10px] text-[#666] ml-1.5 font-mono">({peer.country_code})</span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className="font-bold text-emerald-400 text-xs">{peer.peer_count.toLocaleString()}</span>
+                        <span className="text-[10px] text-[#777] ml-1">peers</span>
+                      </div>
+                    </div>
+
+                    <div className="text-[10px] text-[#aaa] truncate" title={peer.asn}>
+                      {peer.asn}
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] text-[#666]">
+                        <span>Subnet Prefix: {peer.prefix}.0.0.0/8</span>
+                        <span>{pct}% share</span>
+                      </div>
+                      <div className="h-1.5 w-full bg-[#161616] rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-indigo-500 rounded-full"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* SUBTAB: SWARM HALF-LIFE & SURVIVABILITY */}
+        {activeSubTab === 'survivability' && (
+          <div className="p-5 space-y-4 font-mono text-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-[#1c1c1c]">
+              <div>
+                <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-emerald-400" />
+                  Category Swarm Half-Life & Seed Retention
+                </h4>
+                <p className="text-xs text-[#777] mt-0.5">
+                  Percentage of torrent releases retaining active seeding nodes across catalog longevity.
+                </p>
+              </div>
+              <div className="text-[11px] text-emerald-400 bg-emerald-950/40 px-2.5 py-1 rounded border border-emerald-800/40">
+                Retention Benchmark: &gt; 80% Healthy
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {(data?.survivability || []).map((s) => {
+                const theme = CATEGORY_THEMES[s.category] || CATEGORY_THEMES.Other;
+                return (
+                  <div key={s.category} className="p-3.5 rounded-lg border border-[#1b1b1b] bg-[#070707] space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${theme.badge}`}>
+                        {s.category}
+                      </span>
+                      <span className="text-sm font-bold text-emerald-400">
+                        {s.survivability_pct}% Active
+                      </span>
+                    </div>
+
+                    <div className="h-1.5 w-full bg-[#181818] rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-500 rounded-full"
+                        style={{ width: `${s.survivability_pct}%` }}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-[10px] pt-1 text-[#888] border-t border-[#141414]">
+                      <div>
+                        <span>Seeded Torrents:</span>
+                        <div className="font-semibold text-white mt-0.5">{s.active_seed_torrents.toLocaleString()}</div>
+                      </div>
+                      <div>
+                        <span>Total Catalog:</span>
+                        <div className="font-semibold text-white mt-0.5">{s.total_torrents.toLocaleString()}</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Table Content (for trending, velocity, and top_swarms) */}
+        {['trending', 'velocity', 'top_swarms'].includes(activeSubTab) && (
+          <div className="overflow-x-auto">
           <table className="w-full text-left text-xs font-mono">
             <thead className="border-b border-[#1c1c1c] bg-[#070707] text-[#666]">
               <tr>
@@ -512,6 +774,7 @@ export default function AnalysisView({ onInspectTorrent, copyToClipboard }) {
             </tbody>
           </table>
         </div>
+        )}
       </div>
     </div>
   );
