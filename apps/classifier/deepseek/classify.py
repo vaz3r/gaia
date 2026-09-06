@@ -28,6 +28,7 @@ import psycopg2.extras
 # Add parent dir so we can import the deepseek package
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from deepseek import DeepSeekClient, RateLimitError
+from deepseek.pow_obscura import ObscuraSolver
 
 # --- Logging ---
 logging.basicConfig(
@@ -51,21 +52,23 @@ DB_CONFIG = {
 }
 
 CATEGORY_LABELS = [
-    "Adult", "Anime", "Applications", "Documentaries",
-    "Games", "Movies", "Music", "Television", "Other",
+    "Adult", "Anime", "Applications", "Audiobooks",
+    "Books & Learning", "Documentaries", "Games", "Movies",
+    "Music", "Television", "Other",
 ]
 
-# Regex patterns for balanced extraction — bias batches toward underrepresented categories
+# Simple string matching patterns for stratified sampling — bias batches toward underrepresented categories
 CATEGORY_PATTERNS = {
-    "Adult": r"(porn|xxx|adult|hentai|jav|onlyfans|brazzers|bangbros|nubile|naughty|teamSkeet|realitykings|mofos|caribbeancom|heyzo|1pondo|fc2|uncensored|fc2-ppv|erotic|massage|nude|naked)",
-    "Anime": r"\[(Erai-raws|SubsPlease|HorribleSubs|Judas|DKB|ASW|Commie|FFF|Coalgirls|Anime\s*Time|NeoAE|Baha|ANi|VCB-Studio|Kawaiika-Raws|Golumpa|EMBER|SweetSub|Lilith-Raws|NC-Raws|LoliHouse|Moozzi2|ReinForce|Kametsu|Yameii|ToonsHub|Nekomoe|Tenshi)\]|(AT-X|Tokyo\s*MX|BS11|MBS|TBS|TV\s*Tokyo|KBS|Animax|Crunchyroll|Funimation|HIDIVE)",
-    "Applications": r"(Adobe|Autodesk|JetBrains|Microsoft\s*Office|Windows\s*(10|11|Server)|VMware|MATLAB|Ableton|FL\s*Studio|Cubase|CorelDRAW|SolidWorks|Photoshop|Illustrator|Premiere|Acrobat|Kaspersky|Bitdefender|CCleaner|Acronis|EaseUS|Tenorshare|Office\s*20\d{2})",
-    "Documentaries": r"(documentary|docuseries|frontline|NOVA|National\s*Geographic|Nat\s*Geo|Discovery\s*Channel|CuriosityStream|NHK|History\s*Channel|Panorama|Horizon|David\s*Attenborough|DW\s*Documentary|Storyville|Disneynature|Louis\s*Theroux|BBC\s*Earth|Planet\s*Earth|Blue\s*Planet|Frozen\s*Planet|Life\s*on\s*Earth|Cosmos|Nature\s*of\s*Things|W5|The\s*National|Enquête|Envoyé|Vice|Vox)",
-    "Games": r"(FitGirl|CODEX|PLAZA|DODI|SKIDROW|RUNE|EMPRESS|TENOKE|Razor1911|PROPHET|GOG|ElAmigos|KaOs|TinyISO|TiNYiSO|CPY|HOODLUM|RELOADED|DARKSiDERS|Goldberg|SteamRip|Steam-Rip|NSP|XCI|NSZ|CIA|VPK|WBFS|CSO|NDS|GBA)",
-    "Movies": r"(BRRip|BDRip|BluRay|WEBRip|WEB-DL|HDRip|DVDRip|HDTV|1080p|720p|480p|x264|x265|HEVC|AAC|AC3|DTS|YIFY|YTS|RARBG|1337x|YTS\.MX)",
-    "Music": r"(discography|album|soundtrack|OST|FLAC|lossless|320kbps|remastered|greatest\s*hits|compilation)",
-    "Television": r"(S\d{1,2}E\d{1,3}|Season\s+\d+|Complete\s*Series|Episode\s+\d+)",
-    "Other": r"(ebook|pdf|epub|mobi|udemy|coursera|tutorial|course|lecture|textbook|manual|guide|cookbook|recipes|self-help|self-help|meditation|yoga|fitness|workout|training|how-to|masterclass|skillshare|pluralsight|linux|ubuntu|debian|archlinux|centos|docker|kubernetes|aws|azure|gcp|github|gitlab|ansible|terraform|jenkins|ci/cd|devops)",
+    "Adult": ["xxx", "hentai", "jav", "onlyfans", "brazzers", "bangbros", "nubile", "naughty", "teamskeet", "realitykings", "mofos", "caribbeancom", "heyzo", "1pondo", "fc2", "uncensored", "erotic", "massage", "nude", "naked", "porn"],
+    "Anime": ["[eri-raws]", "[subsplease]", "[horriblesubs]", "[judas]", "[dkb]", "[asw]", "[commie]", "[fff]", "[coalgirls]", "[anime time]", "[neoa]", "[baha]", "[ani]", "[vcb-studio]", "[kawaiika-raws]", "[golumpa]", "[ember]", "[sweetsub]", "[lilith-raws]", "[nc-raws]", "[lolihouse]", "[moozzi2]", "[reinforce]", "[kametsu]", "[yameii]", "[toonshub]", "[nekomoe]", "[tenshi]"],
+    "Applications": [".exe", ".msi", ".dmg", ".apk", "adobe", "autodesk", "jetbrains", "microsoft office", "windows 10", "windows 11", "vmware", "matlab", "ableton", "fl studio", "cubase", "coreldraw", "solidworks", "photoshop", "illustrator", "premiere", "acrobat"],
+    "Audiobooks": [".m4b", "audiobook", "audio book", "narrated by", "unabridged", "abridged"],
+    "Books & Learning": [".epub", ".pdf", ".mobi", ".cbr", ".cbz", ".azw3", "course", "tutorial", "lecture", "textbook", "manual", "guide", "udemy", "coursera", "masterclass", "skillshare", "pluralsight"],
+    "Documentaries": ["documentary", "docuseries", "frontline", "nova", "national geographic", "nat geo", "discovery channel", "curiositystream", "nhk", "history channel", "panorama", "horizon", "david attenborough", "bbc earth", "planet earth", "blue planet", "frozen planet", "cosmos"],
+    "Games": ["fitgirl", "codex", "plaza", "dodi", "skidrow", "rune", "empress", "tenoke", "razor1911", "prophet", "gog", "elamigos", "kaos", "tinyiso", "nsp", "xci", "nsz", "cia", "vpk", "wbfs", "cso", "nds", "gba"],
+    "Movies": ["bluray", "bdrip", "brrip", "webrip", "web-dl", "hdrip", "dvdrip", "hdtv", "yify", "yts", "rarbg"],
+    "Music": ["discography", "album", "soundtrack", "ost", "flac", "lossless", "320kbps", "remastered", "greatest hits", "compilation"],
+    "Television": ["s01e", "s02e", "s03e", "s04e", "s05e", "s06e", "s07e", "s08e", "s09e", "s10e", "season", "complete series", "episode"],
 }
 
 SCHEMA_SQL = """
@@ -82,26 +85,45 @@ CREATE TABLE IF NOT EXISTS labeled_results (
 CLASSIFICATION_PROMPT = """\
 You are a BitTorrent metadata classifier. Label each torrent with exactly one category.
 
-## Categories
+## Category Taxonomy (in order of precedence — highest first)
 
-- **Adult** — Pornographic or sexual content (hentai, JAV, OnlyFans, explicit material)
-- **Anime** — Japanese animation (fansub releases, anime series, OVAs)
-- **Applications** — Software, tools, installers (Adobe, JetBrains, Office, etc.)
-- **Documentaries** — Factual content (BBC, PBS, NatGeo, Discovery, etc.)
-- **Games** — Video games (scene releases, console ROMs, Steam rips)
-- **Movies** — Feature films (single file, title + year)
-- **Music** — Audio content (albums, discographies, FLAC/MP3 releases)
-- **Television** — Episodic TV series (seasons, episodes, talk shows)
-- **Other** — Everything else (books, courses, spam, ambiguous content)
+1. **Adult** — Any sexually explicit, pornographic, or NSFW material (JAV, eromanga/doujinshi, hentai, OnlyFans, webcam archives). Overrides all other categories.
+2. **Anime** — Japanese animation (series, movies, OVAs, fansubs). Non-adult only.
+3. **Games** — Video games (PC, console rips, ROMs, emulators, mods, game updates/DLC).
+4. **Applications** — Software programs, operating system images, installers, utilities, plugins.
+5. **Audiobooks** — Spoken-word books (M4B, chaptered MP3, narrated content). Overrides Music.
+6. **Books & Learning** — E-books (EPUB, PDF, CBR/CBZ comics), courses, tutorials, lectures, educational content.
+7. **Music** — Musical releases, albums, discographies, soundtracks, production sample packs. Excludes spoken-word/audiobooks.
+8. **Television** — Episodic TV series, broadcast specials, sports events, talk shows. Excludes anime and educational courses.
+9. **Movies** — Feature-length non-animated cinema releases and telefilms. Excludes adult films and anime features.
+10. **Documentaries** — Non-fiction factual, historical, science, or nature films and docuseries.
+11. **Other** — Corrupted text/mojibake, raw torrent collections/dumps, spam, archives of mixed unrelated files, and entries too ambiguous to categorize.
 
-## Rules
+## Boundary Rules
 
-1. Return ONLY a valid JSON array, no markdown fences, no explanation.
-2. Each item must have exactly these keys: infohash, label_category, confidence, reason.
-3. infohash must be the exact hex string from the input.
-4. label_category must be one of: Adult, Anime, Applications, Documentaries, Games, Movies, Music, Television, Other
-5. confidence must be one of: high, medium, low
-6. reason must be 1 sentence, under 15 words.
+- **Adult overrides all:** If content is sexually explicit, label Adult regardless of other features.
+- **Anime vs Television:** Japanese animation = Anime. Live-action episodic = Television.
+- **Audiobooks vs Music:** Spoken narration/novels = Audiobooks. Musical albums/songs = Music.
+- **Books & Learning vs Other:** E-books, courses, tutorials = Books & Learning. Unreadable/ambiguous = Other.
+- **Movies vs Television:** Single feature film = Movies. Episodic series = Television.
+- **Documentaries vs Television:** Factual/nature films = Documentaries. Episodic TV shows = Television.
+
+## Classification Guidelines
+
+- **Audio Separation:** Spoken text (novels, language courses) → Audiobooks. Pure music → Music.
+- **Corrupted Encodings:** Titles with broken characters (mojibake) → Other with low confidence.
+- **Format Cues:** Pay attention to file extensions (.epub, .pdf, .exe, .iso, .mkv, .mp3, .m4b) and file-to-size ratios.
+- **Size Heuristics:** E-books < 50MB, Audiobooks 200MB-3GB, Music 50MB-1GB, Movies 1-15GB.
+
+## Output Format
+
+Return ONLY a valid JSON array. No markdown fences, no explanation.
+
+Each object must have exactly these keys:
+- `"infohash"`: The exact hex string from input.
+- `"label_category"`: One of: Adult, Anime, Applications, Audiobooks, Books & Learning, Documentaries, Games, Movies, Music, Television, Other.
+- `"confidence"`: One of: high, medium, low.
+- `"reason"`: One concise sentence (under 15 words) justifying the label.
 
 ## Torrents to classify
 
@@ -161,10 +183,14 @@ def fetch_unclassified_batch(limit: int, target_override: str = None) -> tuple[l
                 target_category = target_override
             else:
                 target_category = _pick_target_category(cat_counts)
-            target_pattern = CATEGORY_PATTERNS.get(target_category)
+            
+            # Build LIKE conditions for target category
+            target_patterns = CATEGORY_PATTERNS.get(target_category, [])
+            like_conditions = " OR ".join([f"lower(t.name) LIKE %s" for _ in target_patterns])
+            like_params = [f"%{p}%" for p in target_patterns]
 
-            # Build query: bias toward target category if pattern exists
-            if target_pattern:
+            # Build query: bias toward target category if patterns exist
+            if target_patterns:
                 sql = f"""
                 WITH unclassified AS (
                     SELECT
@@ -224,7 +250,7 @@ def fetch_unclassified_batch(limit: int, target_override: str = None) -> tuple[l
                                 )
                             ELSE NULL
                         END AS largest_files,
-                        t.name ~* %s AS matches_target
+                        ({like_conditions}) AS matches_target
                     FROM torrents t
                     WHERE NOT EXISTS (
                         SELECT 1 FROM labeled_results lr
@@ -236,7 +262,7 @@ def fetch_unclassified_batch(limit: int, target_override: str = None) -> tuple[l
                 ORDER BY matches_target DESC, random()
                 LIMIT %s
                 """
-                cur.execute(sql, (target_pattern, limit))
+                cur.execute(sql, (*like_params, limit))
             else:
                 sql = """
                 SELECT
@@ -505,9 +531,25 @@ def main():
     conn.close()
     logger.info(f"Total classified before starting: {total_before}")
 
-    # Initialize DeepSeek client
-    logger.info("Initializing DeepSeek client...")
-    client = DeepSeekClient()
+    # Initialize DeepSeek client with Obscura PoW solver
+    logger.info("Initializing DeepSeek client with Obscura PoW solver...")
+    import subprocess, signal
+    # Start Obscura if not running
+    obscura_proc = None
+    try:
+        import httpx as _httpx
+        _httpx.get("http://127.0.0.1:9222/json/version", timeout=2)
+        logger.info("Obscura already running on port 9222")
+    except Exception:
+        logger.info("Starting Obscura stealth browser...")
+        obscura_proc = subprocess.Popen(
+            ["obscura", "serve", "--stealth", "--port", "9222"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(3)
+
+    pow_solver = ObscuraSolver(port=9222)
+    client = DeepSeekClient(pow_solver=pow_solver)
 
     # Rate tracking
     request_times = []
@@ -574,10 +616,8 @@ def main():
             logger.info("No more unclassified torrents. Done.")
             break
 
-        # Build prompt with target category hint
+        # Build prompt
         prompt = build_prompt(torrents)
-        prompt += f"\nNote: This batch is biased toward **{target_category}** torrents. "
-        prompt += "Pay extra attention to identifying torrents that match this category.\n"
         logger.info(f"Sending {len(torrents)} torrents to DeepSeek (target: {target_category})...")
 
         # Exponential backoff retry loop with jitter
@@ -659,6 +699,10 @@ def main():
             time.sleep(jittered_delay)
 
     client.close()
+    pow_solver.close()
+    if obscura_proc:
+        obscura_proc.terminate()
+        obscura_proc.wait(timeout=5)
 
     # Final count
     conn = get_db()

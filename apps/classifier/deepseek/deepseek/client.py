@@ -96,12 +96,13 @@ class DeepSeekClient:
         self,
         session: Optional[Session] = None,
         allow_interactive: bool = True,
+        pow_solver=None,
     ):
         # `allow_interactive=False` makes session resolution non-blocking: it
         # uses a cached/headless session and raises LoginRequired instead of
         # opening a browser window. The server passes False (see server/api.py).
         self.session = session or get_session(allow_interactive=allow_interactive)
-        self._pow = DeepSeekPow()
+        self._pow = pow_solver or DeepSeekPow()
         # The wasmtime Store behind the PoW solver is not reentrant; serialise
         # access so concurrent server requests don't corrupt it.
         self._pow_lock = threading.Lock()
@@ -134,7 +135,10 @@ class DeepSeekClient:
         r = self._http.post("/api/v0/chat_session/create", json={})
         self._check_rate_limit(r)
         r.raise_for_status()
-        return _biz(r.json())["chat_session"]["id"]
+        biz = _biz(r.json())
+        # API v2 returns session fields directly in biz_data;
+        # older API wrapped them in biz_data.chat_session.
+        return biz.get("id") or biz["chat_session"]["id"]
 
     def _pow_header(self, target_path: str = COMPLETION_PATH) -> str:
         r = self._http.post(
@@ -144,7 +148,26 @@ class DeepSeekClient:
         r.raise_for_status()
         challenge = _biz(r.json())["challenge"]
         with self._pow_lock:
-            return self._pow.make_header(challenge)
+            # New solvers (ObscuraSolver) have .solve() returning int;
+            # old DeepSeekPow has .make_header() returning base64 string.
+            if hasattr(self._pow, "make_header"):
+                return self._pow.make_header(challenge)
+            elif hasattr(self._pow, "solve"):
+                answer = self._pow.solve(challenge)
+                if answer is None:
+                    raise RuntimeError("PoW solve failed")
+                payload = json.dumps({
+                    "algorithm": challenge["algorithm"],
+                    "challenge": challenge["challenge"],
+                    "salt": challenge["salt"],
+                    "answer": answer,
+                    "signature": challenge["signature"],
+                    "target_path": challenge.get("target_path", target_path),
+                })
+                import base64
+                return base64.b64encode(payload.encode()).decode()
+            else:
+                raise RuntimeError("PoW solver has no solve() or make_header() method")
 
     def _check_rate_limit(self, r: httpx.Response) -> None:
         """Check for rate limit headers and raise with Retry-After if needed."""
@@ -266,30 +289,71 @@ class _Stream:
 def _parse_sse(lines, meta: Optional[dict] = None) -> Iterator[str]:
     """Turn DeepSeek's SSE completion stream into reply-text deltas.
 
-    The stream sends an initial snapshot frame whose `v` is the full response
-    object (with `fragments[].content`), then a series of append frames:
-      * {"p":"response/fragments/-1/content","o":"APPEND","v":" what"}  (sets path)
-      * {"v":"'s"}                                                       (appends to it)
-    We track the active append path and emit only RESPONSE-fragment text.
+    Handles both old and new SSE formats:
 
-    If `meta` is given, the assistant's `message_id` is recorded into it (used to
-    build the resumable conversation_id). The exact field location can vary, so
-    we look in a few plausible spots defensively.
+    Old format:
+      Snapshot frame with {"v": {"response": {"fragments": [...]}}}
+      Append frames with {"p": "path", "o": "APPEND", "v": "text"}
+
+    New format (event-based):
+      event: ready  -> {"request_message_id": N, "response_message_id": M}
+      event: hint   -> {"type": "content", "content": "text"} or {"type": "error", ...}
+      event: close  -> stream end
+
+    If `meta` is given, the assistant's `message_id` is recorded into it.
     """
     active_path: Optional[str] = None
     emitted_initial = False
+    current_event: Optional[str] = None
+    rate_limit_error: Optional[str] = None
 
     for line in lines:
-        if not line or not line.startswith("data:"):
+        if not line:
+            continue
+
+        # Track SSE event type
+        if line.startswith("event:"):
+            current_event = line[len("event:"):].strip()
+            continue
+
+        if not line.startswith("data:"):
             continue
         payload = line[len("data:"):].strip()
         if not payload or payload == "[DONE]":
             continue
+
         try:
             obj = json.loads(payload)
         except json.JSONDecodeError:
             continue
 
+        # --- New event-based format ---
+        if current_event == "ready":
+            # Capture message IDs for conversation resumption
+            if meta is not None:
+                mid = obj.get("response_message_id")
+                if isinstance(mid, int):
+                    meta["message_id"] = mid
+            current_event = None
+            continue
+
+        if current_event == "hint":
+            hint_type = obj.get("type", "")
+            if hint_type == "content":
+                content = obj.get("content", "")
+                if content:
+                    yield content
+            elif hint_type == "error":
+                rate_limit_error = obj.get("content", "Rate limited")
+            current_event = None
+            continue
+
+        if current_event == "close":
+            # Stream closing — nothing to yield
+            current_event = None
+            continue
+
+        # --- Old v-field format (backward compatible) ---
         v = obj.get("v")
 
         # Snapshot frame: full response object.
@@ -318,6 +382,10 @@ def _parse_sse(lines, meta: Optional[dict] = None) -> Iterator[str]:
         # Bare append to the current path.
         if isinstance(v, str) and active_path and active_path.endswith("content"):
             yield v
+
+    # If we hit a rate limit error, raise it after the stream ends
+    if rate_limit_error:
+        raise RateLimitError(rate_limit_error, retry_after=60)
 
 
 def _capture_message_id(meta: dict, snapshot: dict) -> None:

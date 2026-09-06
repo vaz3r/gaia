@@ -182,7 +182,7 @@ def login(
         existing = None
         if not assume_logged_out:
             _safe_goto(page, CHAT_URL)
-            existing = page.evaluate(_READ_TOKEN_JS)
+            existing = _safe_evaluate(page, _READ_TOKEN_JS)
 
         if not existing:
             _safe_goto(page, SIGNIN_URL)
