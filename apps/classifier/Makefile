@@ -1,46 +1,32 @@
-.PHONY: train-mlp train-transformers evaluate-mlp evaluate-transformers export-mlp export-transformers pseudo-label-mlp pseudo-label-transformers export-labeled-mlp export-labeled-transformers test clean
+.PHONY: help install serve train shard clean test
 
-# ── Infrastructure ───────────────────────────────────────────────────────────
+PYTHON ?= venv/bin/python
+UVICORN ?= venv/bin/uvicorn
 
-test:
-	python -m pytest transformers/tests/ mlp/tests/ -v
+help:
+	@echo "Gaia Torrent Classifier Commands:"
+	@echo "  make serve                Start Web Studio API & UI (http://localhost:8000)"
+	@echo "  make train                Retrain 10-class calibrated model on labeled data"
+	@echo "  make shard START=00 END=3f Run high-throughput streaming classifier on infohash shard"
+	@echo "  make install              Install dependencies in virtual environment"
+	@echo "  make clean                Clean temporary cache files"
+
+install:
+	$(PYTHON) -m pip install -r requirements.txt -r requirements-dev.txt
+
+serve:
+	$(UVICORN) web.app:app --host 0.0.0.0 --port 8000 --reload
+
+train:
+	$(PYTHON) src/train.py
+
+shard:
+	$(PYTHON) scripts/stream_classifier.py --start-hex $(or $(START),00) --end-hex $(or $(END),ff)
 
 clean:
-	rm -rf transformers/data/models/mlp_* mlp/data/models/*
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+	find . -type d -name ".pytest_cache" -exec rm -rf {} +
+	find . -type f -name "*.pyc" -delete
 
-# ── MLP ──────────────────────────────────────────────────────────────────────
-
-train-mlp:
-	cd mlp && $(MAKE) train
-
-evaluate-mlp:
-	cd mlp && $(MAKE) evaluate
-
-export-mlp:
-	cd mlp && $(MAKE) export
-
-pseudo-label-mlp:
-	cd mlp && $(MAKE) pseudo-label
-
-export-labeled-mlp:
-	cd mlp && $(MAKE) export-labeled
-
-# ── Transformers ─────────────────────────────────────────────────────────────
-
-train-transformers:
-	cd transformers && $(MAKE) train
-
-evaluate-transformers:
-	cd transformers && $(MAKE) evaluate
-
-export-transformers:
-	cd transformers && $(MAKE) export
-
-pseudo-label-transformers:
-	cd transformers && $(MAKE) pseudo-label
-
-export-labeled-transformers:
-	cd transformers && $(MAKE) export-labeled
-
-train-transformers-pseudo:
-	cd transformers && $(MAKE) train-pseudo
+test:
+	$(PYTHON) -m pytest tests/ -v

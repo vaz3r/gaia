@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gaia Classifier — Production DHT Torrent Studio</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Geist:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Geist', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+            mono: ['Geist Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+          },
+          colors: {
+            zinc: {
+              925: '#111113',
+              950: '#09090b',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    [x-cloak] { display: none !important; }
+    
+    /* Vercel/Linear custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(150, 150, 150, 0.2);
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(150, 150, 150, 0.35);
+    }
+  </style>
+
+  <!-- Theme initialization -->
+  <script>
+    if (localStorage.theme === 'light') {
+      document.documentElement.classList.remove('dark');
+    } else {
+      document.documentElement.classList.add('dark');
+    }
+  </script>
+
+  <!-- Alpine Data Registration -->
+  <script>
+    document.addEventListener('alpine:init', () => {
+      Alpine.data('classifierApp', () => ({
+        isDark: document.documentElement.classList.contains('dark'),
+        torrents: [],
+        totalCount: 0,
+        offset: 0,
+        limit: 20,
+        currentPage: 1,
+        searchQuery: '',
+        loadingTorrents: false,
+        selectedInfohash: null,
+        activeTorrent: null,
+        isClassifying: false,
+        classificationResult: null,
+        classifiedCache: {},
+        copiedHash: false,
+
+        quickTags: ['S01E01', 'FitGirl', 'Audiobook', 'FLAC', '1080p BluRay', 'Erai-raws', 'Crack', 'pdf'],
+
+        get totalPages() {
+          return Math.max(1, Math.ceil(this.totalCount / this.limit));
+        },
+        get reviewType() {
+          return this.classificationResult ? this.classificationResult.review_type : '';
+        },
+        get predictedCategory() {
+          return this.classificationResult ? this.classificationResult.predicted_category : '';
+        },
+        get confidenceFormatted() {
+          return this.classificationResult ? (this.classificationResult.confidence * 100).toFixed(1) + '%' : '0%';
+        },
+        get marginFormatted() {
+          return this.classificationResult ? '+' + (this.classificationResult.margin * 100).toFixed(1) + '%' : '+0%';
+        },
+        get reviewReason() {
+          return this.classificationResult ? this.classificationResult.review_reason : '';
+        },
+        get needsReview() {
+          return this.classificationResult ? Boolean(this.classificationResult.needs_review) : false;
+        },
+        get probabilitiesList() {
+          return (this.classificationResult && this.classificationResult.probabilities) ? this.classificationResult.probabilities : [];
+        },
+        get matchedRules() {
+          return (this.classificationResult && this.classificationResult.features && this.classificationResult.features.matched_rules) ? this.classificationResult.features.matched_rules : [];
+        },
+        get detectedExtensions() {
+          return (this.classificationResult && this.classificationResult.features && this.classificationResult.features.detected_extensions) ? this.classificationResult.features.detected_extensions : [];
+        },
+        get filesList() {
+          if (!this.activeTorrent || !this.activeTorrent.files) return [];
+          return Array.isArray(this.activeTorrent.files) ? this.activeTorrent.files : [];
+        },
+
+        initApp() {
+          this.fetchTorrents();
+          window.addEventListener('keydown', (e) => {
+            if (e.key === '/' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+              e.preventDefault();
+              this.$refs.searchInput?.focus();
+            }
+          });
+        },
+
+        toggleTheme() {
+          this.isDark = !this.isDark;
+          if (this.isDark) {
+            document.documentElement.classList.add('dark');
+            localStorage.theme = 'dark';
+          } else {
+            document.documentElement.classList.remove('dark');
+            localStorage.theme = 'light';
+          }
+        },
+
+        async fetchTorrents() {
+          this.loadingTorrents = true;
+          try {
+            let url = `/api/torrents?offset=${this.offset}&limit=${this.limit}`;
+            if (this.searchQuery && this.searchQuery.trim()) {
+              url += `&search=${encodeURIComponent(this.searchQuery.trim())}`;
+            }
+            const res = await fetch(url);
+            if (!res.ok) throw new Error("Failed to fetch torrents");
+            const data = await res.json();
+            this.torrents = data.torrents || [];
+            this.totalCount = data.total || 0;
+          } catch (e) {
+            console.error("Error fetching torrents:", e);
+          } finally {
+            this.loadingTorrents = false;
+          }
+        },
+
+        searchTorrents() {
+          this.offset = 0;
+          this.currentPage = 1;
+          this.fetchTorrents();
+        },
+
+        applyQuickFilter(tag) {
+          this.searchQuery = tag;
+          this.searchTorrents();
+        },
+
+        prevPage() {
+          if (this.currentPage > 1) {
+            this.currentPage--;
+            this.offset = (this.currentPage - 1) * this.limit;
+            this.fetchTorrents();
+          }
+        },
+
+        nextPage() {
+          if (this.currentPage < this.totalPages) {
+            this.currentPage++;
+            this.offset = (this.currentPage - 1) * this.limit;
+            this.fetchTorrents();
+          }
+        },
+
+        async selectAndClassify(item) {
+          this.selectedInfohash = item.infohash;
+          this.activeTorrent = item;
+
+          // If result cached with full files, restore instantly
+          if (this.classifiedCache[item.infohash]) {
+            const cached = this.classifiedCache[item.infohash];
+            this.activeTorrent = cached.torrent;
+            this.classificationResult = cached.classification;
+            return;
+          }
+
+          this.isClassifying = true;
+          try {
+            const res = await fetch('/api/classify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ infohash: item.infohash })
+            });
+            if (!res.ok) {
+              const err = await res.json();
+              throw new Error(err.detail || "Classification failed");
+            }
+            const data = await res.json();
+            this.activeTorrent = data.torrent;
+            this.classificationResult = data.classification;
+            this.classifiedCache[item.infohash] = {
+              torrent: data.torrent,
+              classification: data.classification
+            };
+          } catch (e) {
+            alert("Classification Error: " + e.message);
+          } finally {
+            this.isClassifying = false;
+          }
+        },
+
+        copyInfohash(hash) {
+          if (!hash) return;
+          navigator.clipboard.writeText(hash);
+          this.copiedHash = true;
+          setTimeout(() => { this.copiedHash = false; }, 2000);
+        },
+
+        formatFilePath(f) {
+          if (!f) return '';
+          if (Array.isArray(f.path)) return f.path.join('/');
+          if (typeof f.path === 'string') return f.path;
+          if (f.name) return f.name;
+          return '(unnamed file)';
+        },
+
+        formatBytes(bytes) {
+          if (!bytes || bytes <= 0) return '0 B';
+          const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+          let val = bytes;
+          let idx = 0;
+          while (val >= 1024 && idx < units.length - 1) {
+            val /= 1024;
+            idx++;
+          }
+          return `${val.toFixed(2)} ${units[idx]}`;
+        },
+
+        getCategoryIcon(cat) {
+          const icons = {
+            'Adult': '🔞',
+            'Anime': '🌸',
+            'Applications': '💻',
+            'Audiobooks': '🎧',
+            'Books & Learning': '📚',
+            'Documentaries': '🌍',
+            'Games': '🎮',
+            'Movies': '🎬',
+            'Music': '🎵',
+            'Television': '📺'
+          };
+          return icons[cat] || '📁';
+        },
+
+        formatDate(isoStr) {
+          if (!isoStr) return '';
+          try {
+            const d = new Date(isoStr);
+            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+          } catch (e) {
+            return isoStr;
+          }
+        }
+      }));
+    });
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body 
+  class="bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 min-h-screen font-sans antialiased flex flex-col selection:bg-zinc-200 dark:selection:bg-zinc-800 transition-colors duration-150"
+  x-data="classifierApp()" 
+  x-init="initApp()">
+
+  <!-- Minimal Vercel Header -->
+  <header class="border-b border-zinc-200 dark:border-zinc-800/80 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-md sticky top-0 z-30">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
+      
+      <!-- Brand & Project -->
+      <div class="flex items-center space-x-3">
+        <!-- Minimal Vercel triangle / logo -->
+        <div class="w-6 h-6 rounded bg-zinc-900 dark:bg-white flex items-center justify-center text-white dark:text-zinc-950">
+          <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
+            <path d="M12 2L2 22h20L12 2z"/>
+          </svg>
+        </div>
+        <div class="flex items-center space-x-2 text-sm">
+          <span class="font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">gaia</span>
+          <span class="text-zinc-300 dark:text-zinc-700">/</span>
+          <span class="text-zinc-600 dark:text-zinc-400 font-medium">classifier</span>
+          <span class="px-1.5 py-0.5 text-[10px] font-mono rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400">v2.0</span>
+        </div>
+      </div>
+
+      <!-- Center Status / Metric Badges -->
+      <div class="hidden sm:flex items-center space-x-3 text-xs">
+        <div class="flex items-center space-x-1.5 px-2.5 py-1 rounded-full border border-emerald-500/20 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 font-mono text-[11px]">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span>POSTGRES READ_ONLY</span>
+        </div>
+        <div class="px-2.5 py-1 rounded-full border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-500 dark:text-zinc-400 font-mono text-[11px]">
+          <span class="text-zinc-900 dark:text-zinc-200 font-medium" x-text="totalCount ? totalCount.toLocaleString() : '~2.3M'"></span> torrents
+        </div>
+      </div>
+
+      <!-- Right Controls (Theme Toggle) -->
+      <div class="flex items-center space-x-2">
+        <button 
+          @click="toggleTheme()" 
+          class="p-1.5 rounded-md border border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-900 transition"
+          :title="isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'">
+          <!-- Sun Icon (shown in dark mode) -->
+          <svg x-show="isDark" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+          </svg>
+          <!-- Moon Icon (shown in light mode) -->
+          <svg x-show="!isDark" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" x-cloak>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+          </svg>
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- Workspace Content -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-5 grid grid-cols-1 lg:grid-cols-12 gap-5">
+
+    <!-- Left Column: Database Explorer (7 cols) -->
+    <section class="lg:col-span-7 flex flex-col space-y-3">
+      
+      <!-- Search & Quick Filters -->
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 bg-white dark:bg-zinc-900/50 space-y-2.5">
+        <form @submit.prevent="searchTorrents()" class="flex items-center space-x-2">
+          <div class="relative flex-1">
+            <svg class="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+            <input 
+              type="text" 
+              x-ref="searchInput"
+              x-model="searchQuery" 
+              placeholder="Search title, scene tag, or 40-char infohash... (Press '/' to focus)" 
+              class="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-md pl-9 pr-8 py-1.5 text-xs text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:focus:ring-zinc-400 font-mono transition">
+            <button 
+              x-show="searchQuery" 
+              type="button" 
+              @click="searchQuery = ''; searchTorrents()" 
+              class="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <button 
+            type="submit" 
+            class="px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 rounded-md text-xs font-medium transition shadow-sm">
+            Search
+          </button>
+        </form>
+
+        <!-- Minimal Quick Filter Pills -->
+        <div class="flex flex-wrap items-center gap-1 text-xs">
+          <span class="text-zinc-400 dark:text-zinc-500 font-mono text-[11px] mr-1">Filter:</span>
+          <template x-for="tag in quickTags" :key="tag">
+            <button 
+              @click="applyQuickFilter(tag)" 
+              class="px-2 py-0.5 rounded border border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 transition font-mono text-[11px]">
+              <span x-text="tag"></span>
+            </button>
+          </template>
+        </div>
+      </div>
+
+      <!-- Torrents Explorer Table Card -->
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-lg overflow-hidden bg-white dark:bg-zinc-900/30 flex-1 flex flex-col">
+        
+        <!-- Table Top Bar -->
+        <div class="px-3.5 py-2.5 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
+          <div class="font-mono text-[11px]">
+            <span>Showing </span>
+            <strong class="text-zinc-900 dark:text-zinc-200 font-semibold" x-text="torrents.length"></strong>
+            <span> of </span>
+            <strong class="text-zinc-900 dark:text-zinc-200 font-semibold" x-text="totalCount.toLocaleString()"></strong>
+          </div>
+          <div class="flex items-center space-x-2">
+            <span x-show="loadingTorrents" class="flex items-center space-x-1.5 text-zinc-500 font-mono text-[11px]">
+              <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+              </svg>
+              <span>Querying PostgreSQL...</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- Table Rows -->
+        <div class="overflow-x-auto flex-1 custom-scrollbar">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="border-b border-zinc-200 dark:border-zinc-800/80 bg-zinc-50/50 dark:bg-zinc-950/40 text-[11px] font-medium text-zinc-500 uppercase tracking-wider font-mono">
+                <th class="py-2 px-3.5">Torrent Name</th>
+                <th class="py-2 px-3 w-28 text-right">Size</th>
+                <th class="py-2 px-3 w-24 text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-zinc-100 dark:divide-zinc-800/50 text-xs">
+              <template x-for="item in torrents" :key="item.infohash">
+                <tr 
+                  @click="selectAndClassify(item)"
+                  :class="{
+                    'bg-zinc-100 dark:bg-zinc-800/60 border-l-2 border-zinc-900 dark:border-white': selectedInfohash === item.infohash,
+                    'hover:bg-zinc-50 dark:hover:bg-zinc-900/40': selectedInfohash !== item.infohash
+                  }"
+                  class="transition cursor-pointer group">
+                  
+                  <!-- Title & Metadata -->
+                  <td class="py-2.5 px-3.5">
+                    <div class="flex items-start space-x-2.5">
+                      <!-- Active selection bullet -->
+                      <div class="mt-1 shrink-0">
+                        <div 
+                          class="w-2.5 h-2.5 rounded-full transition border"
+                          :class="selectedInfohash === item.infohash ? 'bg-zinc-900 dark:bg-white border-zinc-900 dark:border-white' : 'border-zinc-300 dark:border-zinc-700 group-hover:border-zinc-400'">
+                        </div>
+                      </div>
+
+                      <div class="flex-1 min-w-0">
+                        <div class="font-medium text-zinc-900 dark:text-zinc-100 leading-snug line-clamp-2" :title="item.name" x-text="item.name || '(unnamed torrent)'"></div>
+                        
+                        <div class="flex flex-wrap items-center gap-2 mt-1 text-[11px] text-zinc-500 font-mono">
+                          <span x-text="item.infohash.substring(0, 10) + '...'"></span>
+                          <span x-show="item.first_seen">•</span>
+                          <span x-show="item.first_seen" x-text="formatDate(item.first_seen)"></span>
+                          <span>•</span>
+                          <span x-text="item.file_count + ' file' + (item.file_count > 1 ? 's' : '')"></span>
+
+                          <!-- Inline cached badge -->
+                          <template x-if="classifiedCache[item.infohash]">
+                            <span 
+                              class="px-1.5 py-0.2 rounded text-[10px] font-sans font-medium flex items-center space-x-1 border"
+                              :class="{
+                                'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20': classifiedCache[item.infohash].classification.review_type === 'accepted',
+                                'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20': classifiedCache[item.infohash].classification.review_type === 'ambiguous',
+                                'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20': classifiedCache[item.infohash].classification.review_type === 'low_confidence'
+                              }">
+                              <span x-text="getCategoryIcon(classifiedCache[item.infohash].classification.predicted_category)"></span>
+                              <span x-text="classifiedCache[item.infohash].classification.predicted_category"></span>
+                              <span x-text="'(' + (classifiedCache[item.infohash].classification.confidence * 100).toFixed(0) + '%)'"></span>
+                            </span>
+                          </template>
+                        </div>
+                      </div>
+                    </div>
+                  </td>
+
+                  <!-- Size -->
+                  <td class="py-2.5 px-3 text-right">
+                    <div class="font-mono font-medium text-zinc-900 dark:text-zinc-200" x-text="item.total_size_formatted"></div>
+                  </td>
+
+                  <!-- Action Button -->
+                  <td class="py-2.5 px-3 text-center" @click.stop>
+                    <button 
+                      @click="selectAndClassify(item)"
+                      :disabled="isClassifying && selectedInfohash === item.infohash"
+                      class="px-2.5 py-1 rounded text-xs font-medium transition border w-full flex items-center justify-center space-x-1"
+                      :class="selectedInfohash === item.infohash 
+                        ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-950 border-transparent shadow-xs' 
+                        : 'border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800'">
+                      
+                      <template x-if="isClassifying && selectedInfohash === item.infohash">
+                        <span class="flex items-center space-x-1 font-mono text-[11px]">
+                          <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                          </svg>
+                          <span>Inferring</span>
+                        </span>
+                      </template>
+
+                      <template x-if="!(isClassifying && selectedInfohash === item.infohash)">
+                        <span x-text="classifiedCache[item.infohash] ? 'Selected' : 'Classify'"></span>
+                      </template>
+                    </button>
+                  </td>
+
+                </tr>
+              </template>
+              
+              <tr x-show="!loadingTorrents && torrents.length === 0">
+                <td colspan="3" class="py-12 text-center text-zinc-400 dark:text-zinc-500 font-mono text-xs">
+                  No torrents found in workspace pool.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div class="px-3 py-2 border-t border-zinc-200 dark:border-zinc-800/80 bg-zinc-50/50 dark:bg-zinc-950/40 flex items-center justify-between text-xs">
+          <button 
+            @click="prevPage()" 
+            :disabled="currentPage <= 1 || loadingTorrents" 
+            class="px-2.5 py-1 rounded border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-700 dark:text-zinc-300 transition font-mono text-[11px]">
+            ← Prev
+          </button>
+          <span class="text-zinc-500 font-mono text-[11px]">
+            <span class="text-zinc-900 dark:text-zinc-200 font-medium" x-text="currentPage"></span> / <span x-text="totalPages"></span>
+          </span>
+          <button 
+            @click="nextPage()" 
+            :disabled="currentPage >= totalPages || loadingTorrents" 
+            class="px-2.5 py-1 rounded border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-700 dark:text-zinc-300 transition font-mono text-[11px]">
+            Next →
+          </button>
+        </div>
+
+      </div>
+
+    </section>
+
+    <!-- Right Column: Inspector & Classification Diagnostics (5 cols) -->
+    <section class="lg:col-span-5 flex flex-col space-y-3" id="diagnostics-panel">
+      
+      <div class="border border-zinc-200 dark:border-zinc-800 rounded-lg p-4 bg-white dark:bg-zinc-900/40 shadow-xs flex-1 flex flex-col">
+        
+        <!-- Header -->
+        <div class="flex items-center justify-between pb-3 border-b border-zinc-200 dark:border-zinc-800">
+          <div class="flex items-center space-x-2">
+            <span class="font-semibold text-zinc-900 dark:text-zinc-100 text-sm tracking-tight">Diagnostics & Metadata</span>
+          </div>
+          <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-500">
+            Realtime
+          </span>
+        </div>
+
+        <!-- Empty State -->
+        <div x-show="!classificationResult && !isClassifying" class="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-2.5">
+          <div class="w-10 h-10 rounded-lg border border-zinc-200 dark:border-zinc-800 flex items-center justify-center text-zinc-400">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122"/>
+            </svg>
+          </div>
+          <div>
+            <p class="font-medium text-zinc-700 dark:text-zinc-300 text-xs">No torrent selected</p>
+            <p class="text-[11px] text-zinc-400 dark:text-zinc-500 max-w-xs mt-0.5">Click any torrent from the database table to evaluate classification and inspect its metadata and file manifest.</p>
+          </div>
+        </div>
+
+        <!-- Loading State -->
+        <div x-show="isClassifying" class="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-2.5" x-cloak>
+          <svg class="w-6 h-6 text-zinc-600 dark:text-zinc-400 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+          </svg>
+          <p class="text-xs font-mono text-zinc-500">Querying manifest & running model inference...</p>
+        </div>
+
+        <!-- Populated Results & Metadata View -->
+        <div x-show="classificationResult && !isClassifying" class="space-y-4 pt-3 flex-1 flex flex-col" x-cloak>
+          
+          <!-- Primary Prediction Card (Linear/Vercel Style) -->
+          <div class="border rounded-lg p-3.5 space-y-3"
+            :class="{
+              'border-emerald-500/30 bg-emerald-500/[0.03] dark:bg-emerald-500/[0.05]': reviewType === 'accepted',
+              'border-amber-500/30 bg-amber-500/[0.03] dark:bg-amber-500/[0.05]': reviewType === 'ambiguous',
+              'border-red-500/30 bg-red-500/[0.03] dark:bg-red-500/[0.05]': reviewType === 'low_confidence',
+            }">
+            
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] font-mono uppercase tracking-wider text-zinc-500">Predicted Category</span>
+              
+              <!-- Review Tag -->
+              <span 
+                class="px-2 py-0.5 rounded text-[10px] font-mono font-medium flex items-center space-x-1 border"
+                :class="{
+                  'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20': reviewType === 'accepted',
+                  'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20': reviewType === 'ambiguous',
+                  'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20': reviewType === 'low_confidence',
+                }">
+                <span x-text="reviewType === 'accepted' ? '✓ Accepted' : '⚠ Flagged for Review'"></span>
+              </span>
+            </div>
+
+            <div class="flex items-baseline justify-between">
+              <div class="flex items-center space-x-2.5">
+                <span class="text-2xl" x-text="getCategoryIcon(predictedCategory)"></span>
+                <h3 class="text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50" x-text="predictedCategory"></h3>
+              </div>
+              
+              <div class="text-right font-mono text-xs">
+                <div class="text-zinc-900 dark:text-zinc-100 font-semibold" x-text="confidenceFormatted"></div>
+                <div class="text-zinc-500 text-[10px]" x-text="'margin ' + marginFormatted"></div>
+              </div>
+            </div>
+
+            <!-- Review Diagnostic Reason -->
+            <div x-show="needsReview" class="p-2.5 rounded border border-amber-500/20 bg-amber-500/5 text-[11px] text-amber-700 dark:text-amber-300 flex items-start space-x-2 font-mono">
+              <span class="shrink-0 text-amber-500 mt-0.5">ℹ</span>
+              <div class="leading-relaxed" x-text="reviewReason"></div>
+            </div>
+
+          </div>
+
+          <!-- Probability Distribution (10 target classes) -->
+          <div class="border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 space-y-2">
+            <div class="flex items-center justify-between text-[11px] font-mono text-zinc-500">
+              <span>PROBABILITY DISTRIBUTION</span>
+              <span>CALIBRATED (SGD)</span>
+            </div>
+
+            <div class="space-y-1.5 pt-0.5">
+              <template x-for="p in probabilitiesList" :key="p.category">
+                <div class="space-y-0.5">
+                  <div class="flex items-center justify-between text-xs font-mono">
+                    <span class="flex items-center space-x-1.5 text-zinc-700 dark:text-zinc-300">
+                      <span class="text-xs" x-text="getCategoryIcon(p.category)"></span>
+                      <span :class="p.category === predictedCategory ? 'font-semibold text-zinc-900 dark:text-white' : ''" x-text="p.category"></span>
+                    </span>
+                    <span :class="p.category === predictedCategory ? 'font-semibold text-zinc-900 dark:text-white' : 'text-zinc-400 dark:text-zinc-500'" x-text="(p.probability * 100).toFixed(1) + '%'"></span>
+                  </div>
+                  <div class="w-full h-1 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+                    <div 
+                      class="h-full rounded-full transition-all duration-300"
+                      :class="p.category === predictedCategory ? 'bg-zinc-900 dark:bg-white' : 'bg-zinc-300 dark:bg-zinc-600'"
+                      :style="`width: ${Math.max(p.probability * 100, 0.5)}%`">
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Triggered Feature Attribution -->
+          <div class="border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 space-y-2.5">
+            <span class="text-[11px] font-mono text-zinc-500 uppercase block">Triggered Feature Attribution</span>
+
+            <!-- Matched Rules -->
+            <div>
+              <span class="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono block mb-1">Scene & Regex Rules:</span>
+              <div class="flex flex-wrap gap-1">
+                <template x-for="rule in matchedRules" :key="rule">
+                  <span class="px-1.5 py-0.5 rounded border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 text-[11px] font-mono" x-text="rule"></span>
+                </template>
+                <span x-show="!matchedRules.length" class="text-xs text-zinc-400 dark:text-zinc-500 italic">None triggered (fell back to TF-IDF n-grams)</span>
+              </div>
+            </div>
+
+            <!-- Detected Extensions -->
+            <div>
+              <span class="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono block mb-1">Detected File Extensions:</span>
+              <div class="flex flex-wrap gap-1">
+                <template x-for="ext in detectedExtensions" :key="ext">
+                  <span class="px-1.5 py-0.5 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 text-[11px] font-mono" x-text="ext"></span>
+                </template>
+                <span x-show="!detectedExtensions.length" class="text-xs text-zinc-400 dark:text-zinc-500 italic">No extensions found</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Complete Torrent Metadata & Files Manifest -->
+          <div class="border border-zinc-200 dark:border-zinc-800 rounded-lg p-3 space-y-3 bg-zinc-50/50 dark:bg-zinc-950/40">
+            <div class="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800/80 pb-2">
+              <span class="text-[11px] font-mono text-zinc-500 uppercase font-semibold">Metadata & Files Manifest</span>
+              <span class="text-[11px] font-mono text-zinc-400" x-text="filesList.length + ' item(s)'"></span>
+            </div>
+
+            <!-- Torrent Details Grid -->
+            <div class="space-y-1.5 text-xs font-mono">
+              <div>
+                <span class="text-zinc-400 text-[11px]">Title: </span>
+                <span class="font-medium text-zinc-900 dark:text-zinc-100 break-words" x-text="activeTorrent ? activeTorrent.name : ''"></span>
+              </div>
+
+              <div class="flex items-center space-x-2">
+                <span class="text-zinc-400 text-[11px]">Infohash: </span>
+                <span class="text-zinc-700 dark:text-zinc-300 text-[11px]" x-text="activeTorrent ? activeTorrent.infohash : ''"></span>
+                <button 
+                  @click="copyInfohash(activeTorrent?.infohash)" 
+                  class="px-1.5 py-0.5 rounded text-[10px] border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition">
+                  <span x-text="copiedHash ? 'Copied!' : 'Copy'"></span>
+                </button>
+              </div>
+
+              <div class="grid grid-cols-2 gap-2 pt-1 text-[11px]">
+                <div>
+                  <span class="text-zinc-400">Total Size: </span>
+                  <span class="font-medium text-zinc-800 dark:text-zinc-200" x-text="activeTorrent ? activeTorrent.total_size_formatted : ''"></span>
+                  <span class="text-zinc-400 dark:text-zinc-600" x-text="' (' + (activeTorrent ? (activeTorrent.total_size || 0).toLocaleString() : 0) + ' B)'"></span>
+                </div>
+                <div>
+                  <span class="text-zinc-400">File Count: </span>
+                  <span class="font-medium text-zinc-800 dark:text-zinc-200" x-text="activeTorrent ? activeTorrent.file_count : 0"></span>
+                </div>
+                <div x-show="activeTorrent?.first_seen">
+                  <span class="text-zinc-400">First Seen: </span>
+                  <span class="text-zinc-700 dark:text-zinc-300" x-text="formatDate(activeTorrent?.first_seen)"></span>
+                </div>
+                <div x-show="activeTorrent?.last_seen">
+                  <span class="text-zinc-400">Last Seen: </span>
+                  <span class="text-zinc-700 dark:text-zinc-300" x-text="formatDate(activeTorrent?.last_seen)"></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Scrollable Files Manifest -->
+            <div class="pt-1">
+              <span class="text-[11px] text-zinc-400 dark:text-zinc-500 font-mono block mb-1.5">File Tree (from torrent manifest):</span>
+              
+              <div class="max-h-56 overflow-y-auto border border-zinc-200 dark:border-zinc-800 rounded bg-white dark:bg-zinc-900 custom-scrollbar divide-y divide-zinc-100 dark:divide-zinc-800/60 font-mono text-[11px]">
+                <template x-for="(file, idx) in filesList" :key="idx">
+                  <div class="p-2 flex items-start justify-between space-x-2 hover:bg-zinc-50 dark:hover:bg-zinc-800/40 transition">
+                    <div class="text-zinc-700 dark:text-zinc-300 break-all leading-tight">
+                      <span class="text-zinc-400 mr-1 select-none" x-text="(idx + 1) + '.'"></span>
+                      <span x-text="formatFilePath(file)"></span>
+                    </div>
+                    <div class="shrink-0 text-zinc-500 dark:text-zinc-400 text-[10px]" x-text="formatBytes(file.length)"></div>
+                  </div>
+                </template>
+
+                <div x-show="filesList.length === 0" class="p-4 text-center text-zinc-400 text-xs italic font-mono">
+                  No individual files manifest in database record (single file torrent).
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </section>
+
+  </main>
+</body>
+</html>

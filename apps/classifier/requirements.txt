@@ -1,9 +1,8 @@
-fastembed>=0.4.0
-scikit-learn
-joblib
-pyyaml
-numpy
-onnxruntime
-transformers
-sentencepiece
-optimum[exporters]
+fastapi>=0.110.0
+uvicorn>=0.28.0
+scikit-learn>=1.4.0
+scipy>=1.12.0
+numpy>=1.26.0
+joblib>=1.3.0
+psycopg2-binary>=2.9.9
+pydantic>=2.6.0
