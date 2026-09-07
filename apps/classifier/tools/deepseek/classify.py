@@ -39,7 +39,7 @@ logger = logging.getLogger("classify")
 
 # --- Database ---
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "100.82.6.108"),
+    "host": os.getenv("DB_HOST", "workspace-production"),
     "port": int(os.getenv("DB_PORT", "5432")),
     "user": os.getenv("DB_USER", "crawler"),
     "dbname": os.getenv("DB_NAME", "craw"),
@@ -50,7 +50,7 @@ DB_CONFIG = {
     "connect_timeout": 5,
 }
 
-FALLBACK_HOSTS = ["100.82.6.108", "192.168.10.221", "127.0.0.1"]
+FALLBACK_HOSTS = ["workspace-production", "100.87.194.112", "127.0.0.1"]
 
 CATEGORY_LABELS = [
     "Adult", "Anime", "Applications", "Audiobooks",

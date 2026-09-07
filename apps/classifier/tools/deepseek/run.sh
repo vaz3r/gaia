@@ -44,15 +44,10 @@ if [ ! -d "$HOME/Library/Caches/ms-playwright" ] && [ ! -d "$HOME/.cache/ms-play
     playwright install chromium
 fi
 
-# 5. Database Host Resolution (Auto-detect Tailscale -> LAN -> Local)
+# 5. Database Host Resolution (Canonical: workspace-production)
 if [ -z "$DB_HOST" ]; then
     echo "[*] Resolving PostgreSQL connection..."
-    # On macOS, remote Tailscale / LAN are preferred. Only probe 127.0.0.1 on Linux by default.
-    if [ "$(uname -s)" = "Darwin" ]; then
-        TEST_HOSTS=("100.82.6.108" "192.168.10.221")
-    else
-        TEST_HOSTS=("100.82.6.108" "192.168.10.221" "127.0.0.1")
-    fi
+    TEST_HOSTS=("workspace-production" "100.87.194.112" "127.0.0.1")
     FOUND_HOST=""
 
     for h in "${TEST_HOSTS[@]}"; do
@@ -66,9 +61,9 @@ if [ -z "$DB_HOST" ]; then
         export DB_HOST="$FOUND_HOST"
         echo "[+] Successfully connected to PostgreSQL at: $DB_HOST:5432"
     else
-        echo "[!] Notice: Remote PostgreSQL (100.82.6.108 / 192.168.10.221) not reachable via ping."
-        echo "    Using 100.82.6.108 by default. If using Tailscale, verify Tailscale is connected."
-        export DB_HOST="100.82.6.108"
+        echo "[!] Notice: Could not ping PostgreSQL at workspace-production / 100.87.194.112."
+        echo "    Using workspace-production by default. Ensure Tailscale is connected."
+        export DB_HOST="workspace-production"
     fi
 else
     echo "[+] Using explicit DB_HOST=$DB_HOST"
