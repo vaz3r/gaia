@@ -27,8 +27,7 @@ import psycopg2.extras
 
 # Add parent dir so we can import the deepseek package
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from deepseek import DeepSeekClient, RateLimitError
-from deepseek.pow_obscura import ObscuraSolver
+from deepseek import DeepSeekClient, RateLimitError, DeepSeekPow
 
 # --- Logging ---
 logging.basicConfig(
@@ -40,7 +39,7 @@ logger = logging.getLogger("classify")
 
 # --- Database ---
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "workspace-production"),
+    "host": os.getenv("DB_HOST", "100.82.6.108"),
     "port": int(os.getenv("DB_PORT", "5432")),
     "user": os.getenv("DB_USER", "crawler"),
     "dbname": os.getenv("DB_NAME", "craw"),
@@ -48,8 +47,10 @@ DB_CONFIG = {
         "DB_PASSWORD",
         "83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b",
     ),
-    "connect_timeout": 10,
+    "connect_timeout": 5,
 }
+
+FALLBACK_HOSTS = ["100.82.6.108", "192.168.10.221", "127.0.0.1", "workspace-production"]
 
 CATEGORY_LABELS = [
     "Adult", "Anime", "Applications", "Audiobooks",
@@ -131,7 +132,22 @@ Each object must have exactly these keys:
 
 
 def get_db():
-    return psycopg2.connect(**DB_CONFIG)
+    try:
+        return psycopg2.connect(**DB_CONFIG)
+    except psycopg2.OperationalError as primary_err:
+        orig = DB_CONFIG.get("host")
+        for alt_host in FALLBACK_HOSTS:
+            if alt_host == orig:
+                continue
+            try:
+                cfg = dict(DB_CONFIG, host=alt_host)
+                conn = psycopg2.connect(**cfg)
+                DB_CONFIG["host"] = alt_host
+                logger.info(f"Connected to database fallback host: {alt_host}")
+                return conn
+            except Exception:
+                continue
+        raise primary_err
 
 
 def ensure_schema():
@@ -162,36 +178,105 @@ def _pick_target_category(cat_counts: dict) -> str:
     return target
 
 
-def fetch_unclassified_batch(limit: int, target_override: str = None) -> tuple[list[dict], str]:
-    """Fetch unclassified torrents from PostgreSQL, biased toward target category.
+def fetch_unclassified_batch(limit: int, target_override: str = None, mode: str = "unclassified") -> tuple[list[dict], str]:
+    """Fetch torrents from PostgreSQL.
     
     Args:
         limit: Number of torrents to fetch
         target_override: If set, force this category instead of auto-selecting
+        mode: 'review_queue' (torrents where needs_review=true) or 'unclassified'
     """
     conn = get_db()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(SCHEMA_SQL)
 
-            # Get current category distribution
-            cur.execute("SELECT label_category, COUNT(*) AS cnt FROM labeled_results GROUP BY label_category")
-            cat_counts = {row["label_category"]: row["cnt"] for row in cur.fetchall()}
-
-            # Use override if provided, otherwise auto-select
-            if target_override and target_override in CATEGORY_PATTERNS:
-                target_category = target_override
+            # Review queue mode: fetch torrents flagged for review
+            if mode == "review_queue":
+                sql = """
+                SELECT
+                    encode(t.infohash, 'hex') AS infohash,
+                    t.name,
+                    t.file_count,
+                    t.total_size,
+                    CASE
+                        WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                            (
+                                SELECT array_agg(DISTINCT ext)
+                                FROM (
+                                    SELECT
+                                        CASE
+                                            WHEN jsonb_array_length(elem->'path') > 0 THEN
+                                                lower(split_part(elem->'path'->>-1, '.', -1))
+                                            ELSE NULL
+                                        END AS ext
+                                    FROM jsonb_array_elements(t.files) AS elem
+                                ) sub
+                                WHERE ext IS NOT NULL AND ext != ''
+                                LIMIT 10
+                            )
+                        ELSE NULL
+                    END AS extensions,
+                    CASE
+                        WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                            (
+                                SELECT array_agg(DISTINCT folder)
+                                FROM (
+                                    SELECT
+                                        CASE
+                                            WHEN jsonb_array_length(elem->'path') > 1 THEN
+                                                elem->'path'->>0
+                                            ELSE NULL
+                                        END AS folder
+                                    FROM jsonb_array_elements(t.files) AS elem
+                                ) sub
+                                WHERE folder IS NOT NULL
+                                LIMIT 10
+                            )
+                        ELSE NULL
+                    END AS top_folders,
+                    CASE
+                        WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                            (
+                                SELECT jsonb_agg(jsonb_build_object(
+                                    'name', sub.elem->'path'->>-1,
+                                    'size', sub.elem->'length'
+                                ))
+                                FROM (
+                                    SELECT elem
+                                    FROM jsonb_array_elements(t.files) AS elem
+                                    ORDER BY (elem->'length')::bigint DESC
+                                    LIMIT 3
+                                ) sub
+                            )
+                        ELSE NULL
+                    END AS largest_files
+                FROM torrents t
+                WHERE t.needs_review = true
+                ORDER BY random()
+                LIMIT %s
+                """
+                cur.execute(sql, (limit,))
+                target_category = "review_queue"
             else:
-                target_category = _pick_target_category(cat_counts)
-            
-            # Build LIKE conditions for target category
-            target_patterns = CATEGORY_PATTERNS.get(target_category, [])
-            like_conditions = " OR ".join([f"lower(t.name) LIKE %s" for _ in target_patterns])
-            like_params = [f"%{p}%" for p in target_patterns]
+                # Get current category distribution
+                cur.execute("SELECT label_category, COUNT(*) AS cnt FROM labeled_results GROUP BY label_category")
+                cat_counts = {row["label_category"]: row["cnt"] for row in cur.fetchall()}
 
-            # Build query: bias toward target category if patterns exist
-            if target_patterns:
-                sql = f"""
+                # Use override if provided, otherwise auto-select
+                if target_override and target_override in CATEGORY_PATTERNS:
+                    target_category = target_override
+                else:
+                    target_category = _pick_target_category(cat_counts)
+                
+                # Build LIKE conditions for target category
+                target_patterns = CATEGORY_PATTERNS.get(target_category, [])
+                like_conditions = " OR ".join([f"lower(t.name) LIKE %s" for _ in target_patterns])
+                like_params = [f"%{p}%" for p in target_patterns]
+
+                # Build query: bias toward target category if patterns exist
+                if target_patterns:
+                    sql = f"""
                 WITH unclassified AS (
                     SELECT
                         encode(t.infohash, 'hex') AS infohash,
@@ -262,75 +347,75 @@ def fetch_unclassified_batch(limit: int, target_override: str = None) -> tuple[l
                 ORDER BY matches_target DESC, random()
                 LIMIT %s
                 """
-                cur.execute(sql, (*like_params, limit))
-            else:
-                sql = """
-                SELECT
-                    encode(t.infohash, 'hex') AS infohash,
-                    t.name,
-                    t.file_count,
-                    t.total_size,
-                    CASE
-                        WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
-                            (
-                                SELECT array_agg(DISTINCT ext)
-                                FROM (
-                                    SELECT
-                                        CASE
-                                            WHEN jsonb_array_length(elem->'path') > 0 THEN
-                                                lower(split_part(elem->'path'->>-1, '.', -1))
-                                            ELSE NULL
-                                        END AS ext
-                                    FROM jsonb_array_elements(t.files) AS elem
-                                ) sub
-                                WHERE ext IS NOT NULL AND ext != ''
-                                LIMIT 10
-                            )
-                        ELSE NULL
-                    END AS extensions,
-                    CASE
-                        WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
-                            (
-                                SELECT array_agg(DISTINCT folder)
-                                FROM (
-                                    SELECT
-                                        CASE
-                                            WHEN jsonb_array_length(elem->'path') > 1 THEN
-                                                elem->'path'->>0
-                                            ELSE NULL
-                                        END AS folder
-                                    FROM jsonb_array_elements(t.files) AS elem
-                                ) sub
-                                WHERE folder IS NOT NULL
-                                LIMIT 10
-                            )
-                        ELSE NULL
-                    END AS top_folders,
-                    CASE
-                        WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
-                            (
-                                SELECT jsonb_agg(jsonb_build_object(
-                                    'name', sub.elem->'path'->>-1,
-                                    'size', sub.elem->'length'
-                                ))
-                                FROM (
-                                    SELECT elem
-                                    FROM jsonb_array_elements(t.files) AS elem
-                                    ORDER BY (elem->'length')::bigint DESC
-                                    LIMIT 3
-                                ) sub
-                            )
-                        ELSE NULL
-                    END AS largest_files
-                FROM torrents t
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM labeled_results lr
-                    WHERE lr.infohash = t.infohash
-                )
-                ORDER BY random()
-                LIMIT %s
-                """
-                cur.execute(sql, (limit,))
+                    cur.execute(sql, (*like_params, limit))
+                else:
+                    sql = """
+                    SELECT
+                        encode(t.infohash, 'hex') AS infohash,
+                        t.name,
+                        t.file_count,
+                        t.total_size,
+                        CASE
+                            WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                                (
+                                    SELECT array_agg(DISTINCT ext)
+                                    FROM (
+                                        SELECT
+                                            CASE
+                                                WHEN jsonb_array_length(elem->'path') > 0 THEN
+                                                    lower(split_part(elem->'path'->>-1, '.', -1))
+                                                ELSE NULL
+                                            END AS ext
+                                        FROM jsonb_array_elements(t.files) AS elem
+                                    ) sub
+                                    WHERE ext IS NOT NULL AND ext != ''
+                                    LIMIT 10
+                                )
+                            ELSE NULL
+                        END AS extensions,
+                        CASE
+                            WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                                (
+                                    SELECT array_agg(DISTINCT folder)
+                                    FROM (
+                                        SELECT
+                                            CASE
+                                                WHEN jsonb_array_length(elem->'path') > 1 THEN
+                                                    elem->'path'->>0
+                                                ELSE NULL
+                                            END AS folder
+                                        FROM jsonb_array_elements(t.files) AS elem
+                                    ) sub
+                                    WHERE folder IS NOT NULL
+                                    LIMIT 10
+                                )
+                            ELSE NULL
+                        END AS top_folders,
+                        CASE
+                            WHEN t.files IS NOT NULL AND jsonb_array_length(t.files) > 0 THEN
+                                (
+                                    SELECT jsonb_agg(jsonb_build_object(
+                                        'name', sub.elem->'path'->>-1,
+                                        'size', sub.elem->'length'
+                                    ))
+                                    FROM (
+                                        SELECT elem
+                                        FROM jsonb_array_elements(t.files) AS elem
+                                        ORDER BY (elem->'length')::bigint DESC
+                                        LIMIT 3
+                                    ) sub
+                                )
+                            ELSE NULL
+                        END AS largest_files
+                    FROM torrents t
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM labeled_results lr
+                        WHERE lr.infohash = t.infohash
+                    )
+                    ORDER BY random()
+                    LIMIT %s
+                    """
+                    cur.execute(sql, (limit,))
 
             rows = cur.fetchall()
 
@@ -499,8 +584,24 @@ def validate_and_record(torrents: list[dict], results: list[dict]) -> dict:
                 template="(%s, %s, %s, %s, now(), 'deepseek')",
             )
             saved = cur.rowcount
+
+            # Also update the primary torrents table: category, confidence, and clear needs_review flag
+            # valid contains (bytea_infohash, cat, conf, reason)
+            update_data = [(cat, 0.95, bytea_ih) for (bytea_ih, cat, _conf, _reason) in valid]
+            psycopg2.extras.execute_batch(
+                cur,
+                """
+                UPDATE torrents
+                SET category = %s,
+                    category_confidence = %s,
+                    needs_review = false
+                WHERE infohash = %s
+                """,
+                update_data,
+                page_size=100,
+            )
         conn.commit()
-        logger.info(f"Recorded {saved} classifications (skipped {skipped})")
+        logger.info(f"Recorded {saved} classifications and updated torrents (skipped {skipped})")
         return {"recorded": saved, "skipped": skipped}
     except Exception as e:
         conn.rollback()
@@ -519,6 +620,8 @@ def main():
     parser.add_argument("--file", type=str, default=None, help="File with infohashes to classify (one per line)")
     parser.add_argument("--target", type=str, default=None, choices=CATEGORY_LABELS,
                         help="Target specific category (e.g., Documentaries, Other, Anime)")
+    parser.add_argument("--mode", type=str, default="unclassified", choices=["unclassified", "review_queue"],
+                        help="Mode: unclassified (default) or review_queue (flagged needs_review=true)")
     args = parser.parse_args()
 
     ensure_schema()
@@ -531,24 +634,9 @@ def main():
     conn.close()
     logger.info(f"Total classified before starting: {total_before}")
 
-    # Initialize DeepSeek client with Obscura PoW solver
-    logger.info("Initializing DeepSeek client with Obscura PoW solver...")
-    import subprocess, signal
-    # Start Obscura if not running
-    obscura_proc = None
-    try:
-        import httpx as _httpx
-        _httpx.get("http://127.0.0.1:9222/json/version", timeout=2)
-        logger.info("Obscura already running on port 9222")
-    except Exception:
-        logger.info("Starting Obscura stealth browser...")
-        obscura_proc = subprocess.Popen(
-            ["obscura", "serve", "--stealth", "--port", "9222"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        time.sleep(3)
-
-    pow_solver = ObscuraSolver(port=9222)
+    # Initialize DeepSeek client with pure WASM PoW solver (cross-platform, zero dependencies)
+    logger.info("Initializing DeepSeek client with WASM PoW solver...")
+    pow_solver = DeepSeekPow()
     client = DeepSeekClient(pow_solver=pow_solver)
 
     # Rate tracking
@@ -611,9 +699,9 @@ def main():
             target_category = "file-based"
         else:
             target = args.target if args.target else None
-            torrents, target_category = fetch_unclassified_batch(args.batch, target_override=target)
+            torrents, target_category = fetch_unclassified_batch(args.batch, target_override=target, mode=args.mode)
         if not torrents:
-            logger.info("No more unclassified torrents. Done.")
+            logger.info("No more matching torrents. Done.")
             break
 
         # Build prompt
@@ -699,10 +787,6 @@ def main():
             time.sleep(jittered_delay)
 
     client.close()
-    pow_solver.close()
-    if obscura_proc:
-        obscura_proc.terminate()
-        obscura_proc.wait(timeout=5)
 
     # Final count
     conn = get_db()
