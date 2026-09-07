@@ -47,7 +47,12 @@ fi
 # 5. Database Host Resolution (Auto-detect Tailscale -> LAN -> Local)
 if [ -z "$DB_HOST" ]; then
     echo "[*] Resolving PostgreSQL connection..."
-    TEST_HOSTS=("100.82.6.108" "192.168.10.221" "127.0.0.1" "localhost")
+    # On macOS, remote Tailscale / LAN are preferred. Only probe 127.0.0.1 on Linux by default.
+    if [ "$(uname -s)" = "Darwin" ]; then
+        TEST_HOSTS=("100.82.6.108" "192.168.10.221")
+    else
+        TEST_HOSTS=("100.82.6.108" "192.168.10.221" "127.0.0.1")
+    fi
     FOUND_HOST=""
 
     for h in "${TEST_HOSTS[@]}"; do
@@ -61,8 +66,8 @@ if [ -z "$DB_HOST" ]; then
         export DB_HOST="$FOUND_HOST"
         echo "[+] Successfully connected to PostgreSQL at: $DB_HOST:5432"
     else
-        echo "[!] Warning: Could not ping PostgreSQL on default hosts (Tailscale 100.82.6.108 / LAN 192.168.10.221)."
-        echo "    Using 100.82.6.108 by default. If using Tailscale, ensure Tailscale is active on this machine."
+        echo "[!] Notice: Remote PostgreSQL (100.82.6.108 / 192.168.10.221) not reachable via ping."
+        echo "    Using 100.82.6.108 by default. If using Tailscale, verify Tailscale is connected."
         export DB_HOST="100.82.6.108"
     fi
 else

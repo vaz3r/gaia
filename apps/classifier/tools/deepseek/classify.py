@@ -50,7 +50,7 @@ DB_CONFIG = {
     "connect_timeout": 5,
 }
 
-FALLBACK_HOSTS = ["100.82.6.108", "192.168.10.221", "127.0.0.1", "workspace-production"]
+FALLBACK_HOSTS = ["100.82.6.108", "192.168.10.221", "127.0.0.1"]
 
 CATEGORY_LABELS = [
     "Adult", "Anime", "Applications", "Audiobooks",
@@ -277,7 +277,6 @@ def fetch_unclassified_batch(limit: int, target_override: str = None, mode: str 
                 # Build query: bias toward target category if patterns exist
                 if target_patterns:
                     sql = f"""
-                WITH unclassified AS (
                     SELECT
                         encode(t.infohash, 'hex') AS infohash,
                         t.name,
@@ -334,19 +333,15 @@ def fetch_unclassified_batch(limit: int, target_override: str = None, mode: str 
                                     ) sub
                                 )
                             ELSE NULL
-                        END AS largest_files,
-                        ({like_conditions}) AS matches_target
+                        END AS largest_files
                     FROM torrents t
-                    WHERE NOT EXISTS (
-                        SELECT 1 FROM labeled_results lr
-                        WHERE lr.infohash = t.infohash
-                    )
-                )
-                SELECT * FROM unclassified
-                WHERE matches_target OR random() < 0.3
-                ORDER BY matches_target DESC, random()
-                LIMIT %s
-                """
+                    WHERE ({like_conditions})
+                      AND NOT EXISTS (
+                          SELECT 1 FROM labeled_results lr
+                          WHERE lr.infohash = t.infohash
+                      )
+                    LIMIT %s
+                    """
                     cur.execute(sql, (*like_params, limit))
                 else:
                     sql = """
