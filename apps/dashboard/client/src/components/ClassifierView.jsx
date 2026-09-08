@@ -580,7 +580,7 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
               </button>
             </div>
             <div className="text-xl font-bold text-white tracking-tight font-mono">
-              {status?.model_version ? `LightGBM ${status.model_version}` : 'LightGBM v2'}
+              {status?.model_version ? `Classifier ${status.model_version}` : (models?.active?.version ? `Classifier ${models.active.version}` : 'Classifier v4')}
             </div>
             <p className="text-[11px] text-[#777] mt-1">
               {metrics?.total_labeled_results ? `${metrics.total_labeled_results.toLocaleString()} ground-truth` : '38.2k ground-truth'}
@@ -943,8 +943,13 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                     {/* Model Version & Date */}
                     <div className="bg-[#121212] border border-[#1f1f1f] rounded p-2.5 space-y-1">
                       <div className="text-[10px] text-[#666] uppercase">Model & Classified At</div>
-                      <div className="text-white text-[11px]">
-                        Model: <span className="font-semibold">{selectedTorrent.classification_meta?.model_version || 'v2'}</span>
+                      <div className="text-white text-[11px] flex items-center gap-1.5">
+                        Model: <span className="font-semibold">{selectedTorrent.classification_meta?.model_version || (selectedTorrent.classified_at ? 'v2' : '—')}</span>
+                        {selectedTorrent.classification_meta?.model_version === 'v4' ? (
+                          <span className="text-[9px] px-1 py-0.2 rounded bg-emerald-950 text-emerald-400 border border-emerald-800">active</span>
+                        ) : selectedTorrent.classification_meta?.model_version ? (
+                          <span className="text-[9px] px-1 py-0.2 rounded bg-amber-950 text-amber-400 border border-amber-800">legacy</span>
+                        ) : null}
                       </div>
                       <div className="text-[10px] text-[#666] truncate" title={selectedTorrent.classified_at || '—'}>
                         {selectedTorrent.classified_at ? formatDubaiDate(selectedTorrent.classified_at) : '—'}
