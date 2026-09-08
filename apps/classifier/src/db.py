@@ -272,7 +272,8 @@ def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = Non
                 t.name,
                 t.total_size,
                 t.file_count,
-                t.files
+                t.files,
+                l.labeled_at
             FROM labeled_results l
             JOIN torrents t ON l.infohash = t.infohash
             WHERE l.confidence = %s AND l.label_category != 'Other'
@@ -294,6 +295,7 @@ def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = Non
             size = r[5] or 0
             count_val = r[6] or 1
             files = r[7]
+            labeled_at = r[8].isoformat() if len(r) > 8 and r[8] else None
 
             if isinstance(files, str):
                 try:
@@ -311,7 +313,8 @@ def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = Non
                 "name": name,
                 "total_size": size,
                 "file_count": count_val,
-                "files": files or []
+                "files": files or [],
+                "labeled_at": labeled_at
             })
             if count % 10000 == 0:
                 print(f"      Loaded {count:,} records from database...", flush=True)
