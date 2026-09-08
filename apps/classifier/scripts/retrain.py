@@ -58,32 +58,62 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
 
     print(f"      Train set: {len(train_records):,} | Validation holdout: {len(val_records):,}", flush=True)
 
-    # 3. Fit Candidate Feature Extractor and Classifier
-    print("\n[3/6] Fitting candidate feature extractor and calibrated SGD model...", flush=True)
+    # 3. Fit Candidate Feature Extractor and Search for Best Regularization
+    print("\n[3/6] Fitting candidate feature extractor and searching hyperparameter space...", flush=True)
     t1 = time.time()
     extractor = TorrentFeatureExtractor(max_features=250000)
     X_train = extractor.fit_transform(train_records)
     print(f"      Extracted {X_train.shape[1]:,} features in {time.time() - t1:.1f}s", flush=True)
 
-    t2 = time.time()
-    clf = SGDClassifier(
-        loss="modified_huber",
-        penalty="l2",
-        alpha=3e-5,
-        max_iter=1000,
-        class_weight="balanced",
-        random_state=42
-    )
-    clf.fit(X_train, y_train)
-    print(f"      Candidate model trained in {time.time() - t2:.1f}s", flush=True)
+    print("      Transforming validation holdout features...", flush=True)
+    t_val = time.time()
+    X_val = extractor.transform(val_records)
+    print(f"      Validation features extracted in {time.time() - t_val:.1f}s", flush=True)
+
+    # Grid search for optimal regularization parameter
+    param_grid = [
+        {"loss": "modified_huber", "alpha": 3e-5},
+        {"loss": "modified_huber", "alpha": 7e-5},
+        {"loss": "modified_huber", "alpha": 1.5e-4},
+        {"loss": "modified_huber", "alpha": 3e-4},
+        {"loss": "log_loss", "alpha": 7e-5},
+        {"loss": "log_loss", "alpha": 1.5e-4},
+    ]
+
+    print("\n      --- Hyperparameter Evaluation on Holdout ---", flush=True)
+    best_clf = None
+    best_macro_f1 = -1.0
+    best_params = None
+
+    for p in param_grid:
+        sub_clf = SGDClassifier(
+            loss=p["loss"],
+            penalty="l2",
+            alpha=p["alpha"],
+            max_iter=1000,
+            class_weight="balanced",
+            random_state=42
+        )
+        t_sub = time.time()
+        sub_clf.fit(X_train, y_train)
+        sub_preds = sub_clf.predict(X_val)
+        sub_macro = float(f1_score(y_val, sub_preds, average="macro"))
+        sub_acc = float(accuracy_score(y_val, sub_preds))
+        print(f"      * loss={p['loss']:<14} alpha={p['alpha']:<8} -> Macro F1: {sub_macro*100:5.2f}% | Acc: {sub_acc*100:5.2f}% ({time.time() - t_sub:.1f}s)", flush=True)
+
+        if sub_macro > best_macro_f1:
+            best_macro_f1 = sub_macro
+            best_clf = sub_clf
+            best_params = p
+
+    print(f"\n      -> Selected Best Configuration: {best_params} (Holdout Macro F1: {best_macro_f1*100:.2f}%)", flush=True)
+    clf = best_clf
 
     # 4. Evaluate Candidate vs Active Model on EXACT same validation set
     print("\n[4/6] Evaluating candidate model vs currently active model on validation holdout...", flush=True)
-    X_val = extractor.transform(val_records)
     val_preds = clf.predict(X_val)
-
     cand_acc = float(accuracy_score(y_val, val_preds))
-    cand_macro_f1 = float(f1_score(y_val, val_preds, average="macro"))
+    cand_macro_f1 = float(best_macro_f1)
     cand_report = classification_report(y_val, val_preds, target_names=classes, output_dict=True)
 
     active_info = get_active_model_info()

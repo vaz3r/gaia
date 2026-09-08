@@ -259,58 +259,70 @@ def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = Non
     Excludes 'Other' to preserve the 10-class open-set boundary."""
     p = get_pool()
     conn = p.getconn()
+    cursor_name = f"train_cur_{int(time.time()*1000)}"
+    cur = conn.cursor(name=cursor_name)
+    cur.itersize = 2000
     try:
-        with conn.cursor() as cur:
-            query = """
-                SELECT 
-                    l.infohash,
-                    l.label_category,
-                    l.confidence,
-                    l.source,
-                    t.name,
-                    t.total_size,
-                    t.file_count,
-                    t.files
-                FROM labeled_results l
-                JOIN torrents t ON l.infohash = t.infohash
-                WHERE l.confidence = %s AND l.label_category != 'Other'
-            """
-            params = [min_confidence]
-            if limit:
-                query += " LIMIT %s"
-                params.append(limit)
-            cur.execute(query, tuple(params))
-            rows = cur.fetchall()
+        query = """
+            SELECT 
+                l.infohash,
+                l.label_category,
+                l.confidence,
+                l.source,
+                t.name,
+                t.total_size,
+                t.file_count,
+                t.files
+            FROM labeled_results l
+            JOIN torrents t ON l.infohash = t.infohash
+            WHERE l.confidence = %s AND l.label_category != 'Other'
+        """
+        params = [min_confidence]
+        if limit:
+            query += " LIMIT %s"
+            params.append(limit)
+        cur.execute(query, tuple(params))
+        records = []
+        count = 0
+        for r in cur:
+            count += 1
+            ih = bytea_to_hex(r[0])
+            label = r[1]
+            conf = r[2]
+            source = r[3]
+            name = r[4]
+            size = r[5] or 0
+            count_val = r[6] or 1
+            files = r[7]
 
-            records = []
-            for r in rows:
-                ih = bytea_to_hex(r[0])
-                label = r[1]
-                conf = r[2]
-                source = r[3]
-                name = r[4]
-                size = r[5] or 0
-                count = r[6] or 1
-                files = r[7]
+            if isinstance(files, str):
+                try:
+                    files = json.loads(files)
+                except Exception:
+                    files = []
+            if isinstance(files, list):
+                files = files[:40]
 
-                if isinstance(files, str):
-                    try:
-                        files = json.loads(files)
-                    except Exception:
-                        files = []
-
-                records.append({
-                    "infohash": ih,
-                    "label_category": label,
-                    "confidence": conf,
-                    "source": source,
-                    "name": name,
-                    "total_size": size,
-                    "file_count": count,
-                    "files": files or []
-                })
-            return records
+            records.append({
+                "infohash": ih,
+                "label_category": label,
+                "confidence": conf,
+                "source": source,
+                "name": name,
+                "total_size": size,
+                "file_count": count_val,
+                "files": files or []
+            })
+            if count % 10000 == 0:
+                print(f"      Loaded {count:,} records from database...", flush=True)
+        cur.close()
+        conn.commit()
+        return records
     finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
         p.putconn(conn)
 
 def fetch_recent_canary_slice(limit: int = 1000) -> List[Dict[str, Any]]:
@@ -337,6 +349,8 @@ def fetch_recent_canary_slice(limit: int = 1000) -> List[Dict[str, Any]]:
                         files = json.loads(files)
                     except Exception:
                         files = []
+                if isinstance(files, list):
+                    files = files[:40]
                 items.append({
                     "infohash": bytea_to_hex(r[0]),
                     "name": r[1] or "",
