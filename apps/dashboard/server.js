@@ -463,10 +463,12 @@ app.get('/api/stats', async (req, res) => {
     return res.json(statsCache.data);
   }
   try {
-    const [total, v1h, v24h, seen1h, new1h, jobs, heart, sessionUp, hourly24h] = await Promise.all([
+    const [total, v1h, v24h, newTorrents1h, newTorrents24h, seen1h, new1h, jobs, heart, sessionUp, hourly24h] = await Promise.all([
       query(`SELECT count(*) AS n FROM torrents`),
       query(`SELECT count(*) AS n FROM torrents WHERE verified_at > now() - interval '1 hour'`),
       query(`SELECT count(*) AS n FROM torrents WHERE verified_at > now() - interval '24 hours'`),
+      query(`SELECT count(*) AS n FROM torrents WHERE first_seen > now() - interval '1 hour'`),
+      query(`SELECT count(*) AS n FROM torrents WHERE first_seen > now() - interval '24 hours'`),
       query(`SELECT count(*) AS n FROM infohash_sightings WHERE last_seen > now() - interval '1 hour'`),
       query(`SELECT count(*) AS n FROM infohash_sightings WHERE first_seen > now() - interval '1 hour'`),
       query(
@@ -497,10 +499,16 @@ app.get('/api/stats', async (req, res) => {
     ]);
 
     const heartbeat = heart.rows[0].ts ? new Date(heart.rows[0].ts) : null;
+    const verified1hNum = parseInt(v1h.rows[0].n ?? 0, 10);
+    const newTorrents1hNum = parseInt(newTorrents1h.rows[0].n ?? 0, 10);
+    const refreshed1hNum = Math.max(0, verified1hNum - newTorrents1hNum);
     const data = {
       total_torrents: parseInt(total.rows[0].n, 10),
-      verified_last_1h: parseInt(v1h.rows[0].n ?? 0, 10),
+      verified_last_1h: verified1hNum,
       verified_last_24h: parseInt(v24h.rows[0].n ?? 0, 10),
+      new_torrents_last_1h: newTorrents1hNum,
+      new_torrents_last_24h: parseInt(newTorrents24h.rows[0].n ?? 0, 10),
+      refreshed_last_1h: refreshed1hNum,
       seen_last_1h: parseInt(seen1h.rows[0].n ?? 0, 10),
       new_last_1h: parseInt(new1h.rows[0].n ?? 0, 10),
       queue_backlog: parseInt(jobs.rows[0].backlog, 10),

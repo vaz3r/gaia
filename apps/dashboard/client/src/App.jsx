@@ -427,6 +427,9 @@ export default function App() {
       ? formatUptime(serverStats.session_uptime_s)
       : '15h 48m';
 
+    const newTorrents1hVal = serverStats?.new_torrents_last_1h ?? Math.round(verifiedRateVal * 0.21);
+    const refreshed1hVal = serverStats?.refreshed_last_1h ?? Math.max(0, verifiedRateVal - newTorrents1hVal);
+
     return {
       totalVerified: (totalVerifiedCount / 1000000).toFixed(2) + 'M',
       totalVerifiedRaw: totalVerifiedCount,
@@ -437,6 +440,10 @@ export default function App() {
       verified1h: serverStats?.verified_last_1h ?? 0,
       verifiedRateNum: verifiedRateVal,
       verifiedRate: (verifiedRateVal / 1000).toFixed(1) + 'k/hr',
+      newTorrentsRateNum: newTorrents1hVal,
+      newTorrentsRate: (newTorrents1hVal / 1000).toFixed(1) + 'k/hr',
+      refreshedRateNum: refreshed1hVal,
+      refreshedRate: (refreshed1hVal / 1000).toFixed(1) + 'k/hr',
       discoveredRateNum: discoveredRateVal,
       discoveredRate: (discoveredRateVal / 1000000).toFixed(2) + 'M/hr',
       fetchAttemptsNum: fetchAttemptsVal,
@@ -788,13 +795,15 @@ export default function App() {
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-white tracking-tight">Crawler throughput is optimal</span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/60 text-emerald-400 font-mono">
+                      +{metrics.newTorrentsRate} new/hr
+                    </span>
                     <span className="text-[11px] px-2 py-0.5 rounded-full bg-[#181818] border border-[#2b2b2b] text-[#888] font-mono">
-                      {metrics.verifiedRate}
+                      {metrics.refreshedRate} refreshed/hr
                     </span>
                   </div>
                   <p className="text-xs text-[#888] mt-0.5 leading-relaxed">
-                    {metrics.dropRate}% drop-rate reflects normal offline DHT peer churn. Verified discovery yield is holding steady at{' '}
-                    <strong className="text-white">{metrics.conversionRate}%</strong>.
+                    {metrics.newTorrentsRate} net-new unique torrents cataloged into PostgreSQL per hour ({metrics.verifiedRate} total verifications including active swarm updates).
                   </p>
                 </div>
               </div>
@@ -868,10 +877,12 @@ export default function App() {
               <div className="rounded-lg border border-[#2b2b2b] bg-[#0d0d0d] p-3.5 relative overflow-hidden">
                 <div className="flex items-center justify-between text-[#888] mb-2 text-xs">
                   <span className="font-mono text-[11px] text-[#ccc]">04 / Verified Store</span>
-                  <span className="text-emerald-400 font-mono">99.1%</span>
+                  <span className="text-emerald-400 font-mono">+{metrics.newTorrentsRate} new</span>
                 </div>
                 <div className="text-xl font-bold text-white tracking-tight font-mono">{metrics.verifiedRate}</div>
-                <p className="text-[11px] text-[#888] mt-1">{metrics.shaMismatch} bad SHA1 hash drops</p>
+                <p className="text-[11px] text-[#888] mt-1">
+                  <span className="text-emerald-400 font-semibold">{metrics.newTorrentsRate}</span> net-new · <span className="text-[#aaa]">{metrics.refreshedRate}</span> refreshed
+                </p>
                 <div className="mt-3 h-[2px] w-full bg-[#1f1f1f]">
                   <div className="h-full bg-emerald-400 w-full" />
                 </div>
