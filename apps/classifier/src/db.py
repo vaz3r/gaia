@@ -406,7 +406,11 @@ def fetch_unclassified_batch(limit: int = 2000) -> List[Dict[str, Any]]:
                     "file_count": r[3] or 1,
                     "files": files or []
                 })
-            return batch
+        conn.commit()
+        return batch
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         p.putconn(conn)
 

@@ -26,7 +26,9 @@ import {
   Filter,
   FileText,
   Folder,
-  Info
+  Info,
+  Play,
+  Square
 } from 'lucide-react';
 import { api, magnetFrom } from '../api.js';
 import { formatBytes, formatNum, formatTime, formatDubaiDate } from '../utils.js';
@@ -97,15 +99,26 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
   const [modelActionMsg, setModelActionMsg] = useState(null);
   const [modelModalTab, setModelModalTab] = useState('overview'); // 'overview' | 'versions' | 'logs'
 
+  // Background Reclassification State
+  const [reclassifyStatus, setReclassifyStatus] = useState(null);
+  const [reclassifyStarting, setReclassifyStarting] = useState(false);
+  const [reclassifyCancelling, setReclassifyCancelling] = useState(false);
+  const [showReclassifyModal, setShowReclassifyModal] = useState(false);
+  const [reclassifyBatchSize, setReclassifyBatchSize] = useState(2000);
+  const [reclassifyLimit, setReclassifyLimit] = useState('');
+  const [reclassifyDryRun, setReclassifyDryRun] = useState(false);
+
   // Fetch telemetry & status
   const fetchStatusAndMetrics = useCallback(async () => {
     try {
-      const [m, s] = await Promise.all([
+      const [m, s, r] = await Promise.all([
         api('/api/classifier/metrics'),
-        api('/api/classifier/status')
+        api('/api/classifier/status'),
+        api('/api/classifier/reclassify/status').catch(() => null)
       ]);
       setMetrics(m);
       setStatus(s);
+      if (r) setReclassifyStatus(r);
     } catch (err) {
       console.warn('Failed to load classifier metrics/status:', err.message);
     }
@@ -361,6 +374,46 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
     }
   };
 
+  const handleStartReclassify = async () => {
+    setReclassifyStarting(true);
+    try {
+      const payload = {
+        batch_size: Number(reclassifyBatchSize) || 2000,
+        limit: reclassifyLimit ? Number(reclassifyLimit) : null,
+        dry_run: Boolean(reclassifyDryRun)
+      };
+      const res = await fetch('/api/classifier/reclassify/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Failed to start reclassification');
+      }
+      setShowReclassifyModal(false);
+      await fetchStatusAndMetrics();
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    } finally {
+      setReclassifyStarting(false);
+    }
+  };
+
+  const handleCancelReclassify = async () => {
+    if (!confirm('Are you sure you want to stop the active reclassification worker?')) return;
+    setReclassifyCancelling(true);
+    try {
+      const res = await fetch('/api/classifier/reclassify/cancel', { method: 'POST' });
+      const data = await res.json();
+      await fetchStatusAndMetrics();
+    } catch (err) {
+      alert(`Error cancelling: ${err.message}`);
+    } finally {
+      setReclassifyCancelling(false);
+    }
+  };
+
   const totalPages = Math.max(1, Math.ceil(totalTorrents / limit));
 
   return (
@@ -434,26 +487,68 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
         </div>
 
         {/* Review Queue Depth */}
-        <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 hover:border-[#333] transition-colors">
-          <div className="flex items-center justify-between text-[#666] mb-2 text-xs">
-            <span className="font-mono text-[11px]">02 / Review Queue</span>
-            {(metrics?.review_queue_depth || 0) > 0 ? (
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#242424] text-[#aaa]">
-                Needs Attention
-              </span>
+        <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 hover:border-[#333] transition-colors flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between text-[#666] mb-2 text-xs">
+              <span className="font-mono text-[11px]">02 / Review Queue</span>
+              <div className="flex items-center gap-1.5">
+                {reclassifyStatus?.is_running ? (
+                  <button
+                    onClick={handleCancelReclassify}
+                    disabled={reclassifyCancelling}
+                    className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-rose-950/80 border border-rose-800/80 text-rose-300 hover:bg-rose-900 flex items-center gap-1 transition-colors"
+                    title="Stop active reclassification worker"
+                  >
+                    <Square className="w-2.5 h-2.5 fill-rose-300" />
+                    <span>Stop</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setShowReclassifyModal(true)}
+                    className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-950/80 border border-amber-800/80 text-amber-300 hover:bg-amber-900 flex items-center gap-1 transition-colors"
+                    title="Run batch reclassification on flagged items"
+                  >
+                    <Play className="w-2.5 h-2.5 fill-amber-300" />
+                    <span>Reclassify</span>
+                  </button>
+                )}
+                {(metrics?.review_queue_depth || 0) > 0 ? (
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#242424] text-[#aaa]">
+                    Needs Attention
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-mono text-[#666]">Optimal</span>
+                )}
+              </div>
+            </div>
+            <div className="text-xl font-bold text-white tracking-tight font-mono">
+              {metrics?.review_queue_depth != null ? metrics.review_queue_depth.toLocaleString() : '—'}
+            </div>
+            {reclassifyStatus?.is_running ? (
+              <p className="text-[11px] text-amber-400 mt-1 flex items-center gap-1 font-mono">
+                <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                <span>
+                  Draining: {reclassifyStatus.processed?.toLocaleString()}/{reclassifyStatus.total_target?.toLocaleString()} ({reclassifyStatus.items_per_second} /s)
+                </span>
+              </p>
             ) : (
-              <span className="text-[10px] font-mono text-[#666]">Optimal</span>
+              <p className="text-[11px] text-[#777] mt-1">Ambiguous or low confidence</p>
             )}
           </div>
-          <div className="text-xl font-bold text-white tracking-tight font-mono">
-            {metrics?.review_queue_depth != null ? metrics.review_queue_depth.toLocaleString() : '—'}
-          </div>
-          <p className="text-[11px] text-[#777] mt-1">Ambiguous or low confidence</p>
           <div className="mt-3 h-[2px] w-full bg-[#1a1a1a]">
-            <div
-              className="h-full bg-white transition-all"
-              style={{ width: `${Math.min(100, Math.max(5, ((metrics?.review_queue_depth || 0) / 10000) * 100))}%` }}
-            />
+            {reclassifyStatus?.is_running ? (
+              <div
+                className="h-full bg-amber-500 transition-all duration-300"
+                style={{
+                  width: `${Math.min(100, Math.max(2, (reclassifyStatus.processed / Math.max(reclassifyStatus.total_target, 1)) * 100))}%`
+                }}
+              />
+            ) : (
+              <div
+                className="h-full bg-white transition-all"
+                style={{ width: `${Math.min(100, Math.max(5, ((metrics?.review_queue_depth || 0) / 10000) * 100))}%` }}
+              />
+            )}
           </div>
         </div>
 
@@ -1662,6 +1757,226 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                         </pre>
                       </div>
                     )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Background Reclassification Configuration & Live Telemetry Modal */}
+      {showReclassifyModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShowReclassifyModal(false)}
+        >
+          <div
+            className="bg-[#0c0c0c] border border-[#222] rounded-xl w-full max-w-2xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="px-5 py-4 border-b border-[#1c1c1c] flex items-center justify-between bg-[#111]/80">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-amber-950/60 border border-amber-700/50 flex items-center justify-center text-amber-400">
+                  <Play className="w-4 h-4 fill-amber-400" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-semibold text-white font-mono">
+                      Background Review Queue Reclassification
+                    </h3>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-950/70 border border-amber-800/60 text-amber-300">
+                      Target: {metrics?.review_queue_depth != null ? `${metrics.review_queue_depth.toLocaleString()} items` : '144k items'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[#777] mt-0.5">
+                    Drain items flagged for review using the active production model without blocking crawler ingestion.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowReclassifyModal(false)}
+                className="p-1.5 rounded-md text-[#666] hover:text-white hover:bg-[#1a1a1a] transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 space-y-4">
+              {reclassifyStatus?.is_running ? (
+                <div className="space-y-4">
+                  {/* Live Progress Card */}
+                  <div className="p-4 rounded-lg bg-[#050505] border border-amber-900/40 space-y-3 font-mono">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-amber-300 font-semibold flex items-center gap-2">
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        Reclassification In Progress
+                      </span>
+                      <span className="text-[#888]">
+                        {reclassifyStatus.items_per_second || 0} items/sec
+                      </span>
+                    </div>
+
+                    {/* Progress Bar */}
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between text-[11px] text-[#aaa]">
+                        <span>
+                          Processed {reclassifyStatus.processed?.toLocaleString()} of {reclassifyStatus.total_target?.toLocaleString()}
+                        </span>
+                        <span>
+                          {reclassifyStatus.total_target > 0
+                            ? `${((reclassifyStatus.processed / reclassifyStatus.total_target) * 100).toFixed(1)}%`
+                            : '0%'}
+                        </span>
+                      </div>
+                      <div className="h-2 w-full bg-[#1c1c1c] rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-amber-500 transition-all duration-300"
+                          style={{
+                            width: `${Math.min(100, (reclassifyStatus.processed / Math.max(reclassifyStatus.total_target, 1)) * 100)}%`
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Stats Grid */}
+                    <div className="grid grid-cols-3 gap-2 pt-2 border-t border-[#1c1c1c] text-center text-xs">
+                      <div className="p-2 rounded bg-[#111]">
+                        <div className="text-[#777] text-[10px]">Drained (Accepted)</div>
+                        <div className="text-emerald-400 font-bold mt-0.5">
+                          {reclassifyStatus.accepted?.toLocaleString()} ({reclassifyStatus.acceptance_rate}%)
+                        </div>
+                      </div>
+                      <div className="p-2 rounded bg-[#111]">
+                        <div className="text-[#777] text-[10px]">Remaining Flagged</div>
+                        <div className="text-rose-400 font-bold mt-0.5">
+                          {reclassifyStatus.still_flagged?.toLocaleString()}
+                        </div>
+                      </div>
+                      <div className="p-2 rounded bg-[#111]">
+                        <div className="text-[#777] text-[10px]">ETA</div>
+                        <div className="text-white font-bold mt-0.5">
+                          {reclassifyStatus.eta_seconds != null
+                            ? `${Math.floor(reclassifyStatus.eta_seconds / 60)}m ${reclassifyStatus.eta_seconds % 60}s`
+                            : 'Calculating...'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Category shifts breakdown */}
+                    {reclassifyStatus.category_shifts && Object.keys(reclassifyStatus.category_shifts).length > 0 && (
+                      <div className="pt-2 border-t border-[#1c1c1c]">
+                        <div className="text-[10px] text-[#777] uppercase mb-1.5">Top Drained Category Assignments:</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {Object.entries(reclassifyStatus.category_shifts)
+                            .sort((a, b) => b[1] - a[1])
+                            .slice(0, 6)
+                            .map(([cat, cnt]) => (
+                              <span
+                                key={cat}
+                                className="px-2 py-0.5 rounded text-[10px] bg-[#141414] border border-[#222] text-[#ccc]"
+                              >
+                                {cat}: <strong className="text-white">{cnt.toLocaleString()}</strong>
+                              </span>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      onClick={handleCancelReclassify}
+                      disabled={reclassifyCancelling}
+                      className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs font-mono transition-colors flex items-center gap-1.5"
+                    >
+                      <Square className="w-3.5 h-3.5 fill-white" />
+                      <span>{reclassifyCancelling ? 'Halting...' : 'Stop Worker'}</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="p-3.5 rounded-lg bg-[#070707] border border-[#1e1e1e] space-y-3 font-mono text-xs">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] text-[#777] mb-1">Batch Size</label>
+                        <input
+                          type="number"
+                          value={reclassifyBatchSize}
+                          onChange={(e) => setReclassifyBatchSize(e.target.value)}
+                          className="w-full bg-[#111] border border-[#262626] rounded px-3 py-1.5 text-white focus:outline-none focus:border-amber-500"
+                        />
+                        <span className="text-[10px] text-[#555] mt-0.5 block">Recommended: 2,000 for high I/O throughput</span>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-[#777] mb-1">Record Limit (Optional)</label>
+                        <input
+                          type="number"
+                          placeholder="All review items"
+                          value={reclassifyLimit}
+                          onChange={(e) => setReclassifyLimit(e.target.value)}
+                          className="w-full bg-[#111] border border-[#262626] rounded px-3 py-1.5 text-white placeholder-[#555] focus:outline-none focus:border-amber-500"
+                        />
+                        <span className="text-[10px] text-[#555] mt-0.5 block">Leave empty to drain entire review queue</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-2">
+                      <input
+                        type="checkbox"
+                        id="reclassDryRun"
+                        checked={reclassifyDryRun}
+                        onChange={(e) => setReclassifyDryRun(e.target.checked)}
+                        className="rounded bg-[#141414] border-[#333] text-amber-500 focus:ring-0"
+                      />
+                      <label htmlFor="reclassDryRun" className="text-xs text-[#aaa] cursor-pointer">
+                        Dry Run (Measure acceptance rate without writing to PostgreSQL)
+                      </label>
+                    </div>
+                  </div>
+
+                  {reclassifyStatus?.last_completed && (
+                    <div className="p-3 rounded-lg bg-[#090909] border border-[#1a1a1a] font-mono text-xs space-y-1.5">
+                      <div className="text-[11px] text-[#777] flex items-center justify-between">
+                        <span>Previous Execution Result:</span>
+                        <span>{reclassifyStatus.last_completed.completed_at}</span>
+                      </div>
+                      <div className="text-[#ccc]">
+                        Processed <strong className="text-white">{reclassifyStatus.last_completed.processed?.toLocaleString()}</strong> items in {reclassifyStatus.last_completed.duration_seconds}s ({reclassifyStatus.last_completed.items_per_second} /s)
+                      </div>
+                      <div className="text-emerald-400 text-[11px]">
+                        ✓ Accepted: {reclassifyStatus.last_completed.accepted?.toLocaleString()} items drained from queue
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      onClick={() => setShowReclassifyModal(false)}
+                      className="px-3 py-1.5 rounded-lg border border-[#222] text-[#888] hover:text-white hover:bg-[#141414] font-mono text-xs transition-colors"
+                    >
+                      Close
+                    </button>
+                    <button
+                      onClick={handleStartReclassify}
+                      disabled={reclassifyStarting}
+                      className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs font-mono transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      {reclassifyStarting ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Starting...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3.5 h-3.5 fill-white" />
+                          <span>Start Reclassification</span>
+                        </>
+                      )}
+                    </button>
                   </div>
                 </div>
               )}

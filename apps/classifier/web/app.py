@@ -16,6 +16,7 @@ sys.path.append(str(SRC_DIR))
 import db
 from classifier_service import TorrentClassifierService
 import model_manager
+from reclassify_worker import ReclassifyManager
 
 app = FastAPI(
     title="Gaia Torrent Classifier API",
@@ -60,6 +61,12 @@ class LabelRequest(BaseModel):
 
 class RollbackRequest(BaseModel):
     version: str
+
+
+class ReclassifyRequest(BaseModel):
+    batch_size: Optional[int] = 2000
+    limit: Optional[int] = None
+    dry_run: Optional[bool] = False
 
 
 @app.get("/")
@@ -253,3 +260,38 @@ def trigger_retraining(background_tasks: BackgroundTasks):
 def get_retrain_status():
     """Check current retraining progress."""
     return _retrain_status
+
+
+@app.post("/api/reclassify/start")
+def start_reclassification(req: Optional[ReclassifyRequest] = None):
+    """Trigger background reclassification on review queue items."""
+    manager = ReclassifyManager.get_instance()
+    batch_size = req.batch_size if req and req.batch_size else 2000
+    limit = req.limit if req and req.limit else None
+    dry_run = bool(req.dry_run) if req and req.dry_run is not None else False
+
+    try:
+        status = manager.start(batch_size=batch_size, limit=limit, dry_run=dry_run)
+        return {"status": "started", "telemetry": status}
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start reclassification: {str(e)}")
+
+
+@app.get("/api/reclassify/status")
+def get_reclassification_status():
+    """Retrieve live real-time reclassification telemetry."""
+    manager = ReclassifyManager.get_instance()
+    return manager.get_status()
+
+
+@app.post("/api/reclassify/cancel")
+def cancel_reclassification():
+    """Cancel any active background reclassification."""
+    manager = ReclassifyManager.get_instance()
+    cancelled = manager.cancel()
+    if not cancelled:
+        return {"status": "not_running", "message": "No reclassification job currently active."}
+    return {"status": "cancelling", "message": "Cancellation requested. Worker will halt cleanly after current batch."}
+
