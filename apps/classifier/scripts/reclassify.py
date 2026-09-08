@@ -27,10 +27,10 @@ def run_reclassification(batch_size: int = 2000, limit: int = None, dry_run: boo
     print(f"Batch size: {batch_size:,} | Limit: {limit or 'ALL'}", flush=True)
     print("=" * 80, flush=True)
 
-    # 1. Initialize classifier service (loads active model, e.g. v3)
+    # 1. Initialize classifier service (loads active model from active_model.json)
     service = TorrentClassifierService.get_instance()
-    model_version = service.active_version
-    print(f"\n[1] Loaded active classifier model: {model_version}", flush=True)
+    model_version = service.metadata.get("version") or service.active_info.get("version", "unknown")
+    print(f"\n[1] Loaded active classifier model: {model_version} ({service.model_path.name})", flush=True)
 
     # 2. Count candidate review queue items (excluding ground truth)
     p = db.get_pool()
@@ -180,7 +180,7 @@ def process_batch(service, batch_items, old_categories, category_shifts, dry_run
     flagged = 0
 
     for item, res, old_cat in zip(batch_items, results, old_categories):
-        cat = res["category"]
+        cat = res["predicted_category"]
         conf = float(res["confidence"])
         needs_review = bool(res.get("needs_review", False))
 
