@@ -1,22 +1,22 @@
 {
-  "version": "v2",
-  "filename": "torrent_classifier_v2.joblib",
-  "model_path": "/home/core/projects/gaia/apps/classifier/models/torrent_classifier_v2.joblib",
-  "activated_at": "2026-09-08T12:58:58Z",
+  "version": "v4",
+  "filename": "torrent_classifier_v4_20260908_152230.joblib",
+  "model_path": "/home/core/projects/gaia/apps/classifier/models/torrent_classifier_v4_20260908_152230.joblib",
+  "activated_at": "2026-09-08T17:29:33Z",
   "metrics": {
-    "macro_f1": 0.904,
-    "accuracy": 0.9073,
+    "macro_f1": 0.9102,
+    "accuracy": 0.9124,
     "per_class_f1": {
-      "Adult": 0.921,
-      "Anime": 0.9105,
-      "Applications": 0.9143,
-      "Audiobooks": 0.9642,
-      "Books & Learning": 0.9538,
-      "Documentaries": 0.8821,
-      "Games": 0.8831,
-      "Movies": 0.8723,
-      "Music": 0.9025,
-      "Television": 0.8985
+      "Adult": 0.938,
+      "Anime": 0.969,
+      "Applications": 0.892,
+      "Audiobooks": 0.871,
+      "Books & Learning": 0.961,
+      "Documentaries": 0.842,
+      "Games": 0.927,
+      "Movies": 0.879,
+      "Music": 0.936,
+      "Television": 0.878
     }
   },
   "history": [
@@ -128,6 +128,13 @@
       "activated_at": "2026-09-08T12:58:58Z",
       "macro_f1": 0.904,
       "rollback": true
+    },
+    {
+      "version": "v4",
+      "filename": "torrent_classifier_v4_20260908_152230.joblib",
+      "activated_at": "2026-09-08T17:29:33Z",
+      "macro_f1": 0.9102,
+      "adaptive_thresholds": true
     }
   ]
 }
