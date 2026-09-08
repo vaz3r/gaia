@@ -117,14 +117,21 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
     cand_report = classification_report(y_val, val_preds, target_names=classes, output_dict=True)
 
     active_info = get_active_model_info()
-    active_path = get_active_model_path()
-    print(f"      Active model: {active_info.get('version', 'unknown')} ({active_path.name})", flush=True)
+    try:
+        active_path = get_active_model_path()
+        active_exists = active_path.exists()
+    except Exception:
+        active_path = None
+        active_exists = False
+
+    active_name = active_path.name if active_path else active_info.get("filename", "torrent_classifier_v2.joblib")
+    print(f"      Active baseline: {active_info.get('version', 'unknown')} ({active_name})", flush=True)
 
     # Evaluate active model on this same validation holdout
     active_macro_f1 = 0.0
     active_acc = 0.0
     active_class_f1 = {}
-    if active_path.exists():
+    if active_exists:
         try:
             active_payload = joblib.load(active_path)
             active_ext = active_payload["extractor"]
@@ -147,6 +154,11 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
             active_macro_f1 = active_info.get("metrics", {}).get("macro_f1", 0.904)
             active_acc = active_info.get("metrics", {}).get("accuracy", 0.907)
             active_class_f1 = active_info.get("metrics", {}).get("per_class_f1", {})
+    else:
+        print("      Note: Local active .joblib not found; using stored active baseline metrics from active_model.json.", flush=True)
+        active_macro_f1 = active_info.get("metrics", {}).get("macro_f1", 0.904)
+        active_acc = active_info.get("metrics", {}).get("accuracy", 0.907)
+        active_class_f1 = active_info.get("metrics", {}).get("per_class_f1", {})
 
     print("\n" + "-" * 75, flush=True)
     print(f"{'Class':<20} | {'Active F1':<12} | {'Candidate F1':<14} | {'Delta':<10}", flush=True)
@@ -179,7 +191,7 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
     canary_warnings = []
     canary_stats = {}
 
-    if canary_slice and active_path.exists():
+    if canary_slice and active_exists:
         try:
             cand_canary_X = extractor.transform(canary_slice)
             cand_canary_preds = [classes[i] for i in clf.predict(cand_canary_X)]
