@@ -31,9 +31,9 @@ JUNK_EXTENSIONS = {".nfo", ".txt", ".url", ".website", ".lnk", ".diz", ".ion"}
 
 
 def compute_metadata_quality(
-    name: str,
-    total_size: int,
-    file_count: int,
+    name: Optional[str] = None,
+    total_size: int = 0,
+    file_count: int = 0,
     files: Optional[List[Dict[str, Any]]] = None,
     category: Optional[str] = None,
 ) -> Tuple[int, Dict[str, int]]:
@@ -41,11 +41,12 @@ def compute_metadata_quality(
     V1 Explicit Deterministic Quality formulation: 100 - sum(penalties).
     """
     penalties: Dict[str, int] = {}
+    name_clean = (name or "").strip()
 
     # 1. Title quality check: hex hash or uninformative name
-    if re.match(r"^[0-9a-fA-F]{32,64}$", name.strip()) or len(name.strip()) < 4:
+    if re.match(r"^[0-9a-fA-F]{32,64}$", name_clean) or len(name_clean) < 4:
         penalties["missing_clean_title"] = 25
-    elif re.search(r"\b(1080p|720p|2160p|4k|web-dl|bluray|x264|x265|hevc|repack|flac|mp3)\b", name, re.IGNORECASE):
+    elif re.search(r"\b(1080p|720p|2160p|4k|web-dl|bluray|x264|x265|hevc|repack|flac|mp3)\b", name_clean, re.IGNORECASE):
         # Good release structure
         pass
 
@@ -144,9 +145,9 @@ def compute_availability(
 def evaluate_policy(
     infohash: bytes,
     model_safe_probability: float,
-    name: str,
-    total_size: int,
-    file_count: int,
+    name: Optional[str] = None,
+    total_size: int = 0,
+    file_count: int = 0,
     files: Optional[List[Dict[str, Any]]] = None,
     category: Optional[str] = None,
     seed_confirmed: bool = False,
@@ -212,7 +213,7 @@ def evaluate_policy(
             deductions += 50
 
         # Check spam keywords in title
-        name_lower = name.lower()
+        name_lower = (name or "").lower()
         if any(k in name_lower for k in SPAM_KEYWORDS):
             reason_code_strings.append(ReasonCode.SUSPICIOUS_SPAM_KEYWORDS.value)
             deductions += 20

@@ -135,8 +135,8 @@ def check_homoglyph_spoofing(text: Optional[str] = None) -> bool:
 
 
 def evaluate_silver_invariants(
-    name: str,
-    total_size: int,
+    name: Optional[str] = None,
+    total_size: int = 0,
     category: Optional[str] = None,
     files: Optional[List[Dict[str, Any]]] = None,
     last_error: Optional[str] = None,

@@ -89,3 +89,22 @@ def test_password_trap_deduction():
     assert res_loc.integrity_score == 85 # 100 - 15 = 85 (keeps SAFE tier!)
     assert res_loc.risk_tier == RiskTier.SAFE
     assert res_loc.policy_action == PolicyAction.ALLOW
+
+
+def test_null_name_safety():
+    """
+    Ensure torrents with name=None do not raise AttributeError.
+    """
+    res = evaluate_policy(
+        infohash=b"\x05" * 20,
+        model_safe_probability=0.90,
+        name=None,
+        total_size=500000000,
+        file_count=1,
+        files=[{"path": ["data.bin"], "length": 500000000}],
+        category="Other",
+    )
+    assert res is not None
+    assert res.integrity_score > 0
+    assert res.metadata_quality_score >= 0
+

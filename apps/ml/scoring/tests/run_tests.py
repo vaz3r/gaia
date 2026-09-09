@@ -19,6 +19,7 @@ from tests.unit.test_policy_engine import (
     test_stale_swarm_never_marked_as_spam,
     test_malicious_fake_suppression,
     test_password_trap_deduction,
+    test_null_name_safety,
 )
 
 
@@ -33,6 +34,7 @@ def run_all_tests():
         ("Policy: Stale Swarm Never Spam Invariant", test_stale_swarm_never_marked_as_spam),
         ("Policy: Malicious Fake Suppression Invariant", test_malicious_fake_suppression),
         ("Policy: Password Trap Deduction", test_password_trap_deduction),
+        ("Policy: Null Name Safety", test_null_name_safety),
     ]
 
     passed = 0

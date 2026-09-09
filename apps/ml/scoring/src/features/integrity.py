@@ -33,9 +33,9 @@ def shannon_entropy(text: str) -> float:
 
 
 def extract_integrity_features(
-    name: str,
-    total_size: int,
-    file_count: int,
+    name: Optional[str] = None,
+    total_size: int = 0,
+    file_count: int = 0,
     piece_length: Optional[int] = None,
     files: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, float]:
