@@ -120,3 +120,30 @@ services:
     volumes:
       - /home/${DEPLOY_USER:-core}/gaia-data/classifier/models:/app/models
     command: ["python", "scripts/worker.py"]
+
+  anomaly-worker:
+    build:
+      context: ../../../ml/anomalies
+      dockerfile: Dockerfile
+    image: gaia-anomaly-worker:${GIT_COMMIT:-latest}
+    container_name: gaia-anomaly-worker
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      DB_HOST: localhost
+      PG_PORT: ${PG_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-crawler}
+      POSTGRES_DB: ${POSTGRES_DB:-craw}
+      PG_PASSWORD: ${PG_PASSWORD}
+      LOG_ANALYZER_URL: http://localhost:3001
+      DETECTION_INTERVAL_MINUTES: 15
+      RETRAIN_INTERVAL_HOURS: 24
+      ALERT_MIN_SCORE: 0.60
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      LOG_LEVEL: INFO
+    volumes:
+      - /home/${DEPLOY_USER:-core}/gaia-data/anomalies/models:/app/models_storage
+      - /home/${DEPLOY_USER:-core}/gaia-data/anomalies/data:/app/data
+    depends_on:
+      - postgres
+

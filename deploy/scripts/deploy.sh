@@ -73,7 +73,7 @@ $SSH "cd $DEPLOY_REMOTE_GIT && git fetch origin && git checkout $TAG"
 
 # ── 3. Ensure data directories exist ──
 echo "[3/4] Ensuring data directories..."
-$SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S mkdir -p ${DEPLOY_REMOTE_DATA}/crawler ${DEPLOY_REMOTE_DATA}/postgres ${DEPLOY_REMOTE_DATA}/logs ${DEPLOY_REMOTE_DATA}/classifier/models /mnt/gaia/logs/crawler && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R 10001:10001 ${DEPLOY_REMOTE_DATA} /mnt/gaia/logs && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R $DEPLOY_USER:$DEPLOY_USER ${DEPLOY_REMOTE_DATA}/classifier && echo '${DEPLOY_PASSWORD:-}' | sudo -S chmod -R 777 ${DEPLOY_REMOTE_DATA}/classifier || true"
+$SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S mkdir -p ${DEPLOY_REMOTE_DATA}/crawler ${DEPLOY_REMOTE_DATA}/postgres ${DEPLOY_REMOTE_DATA}/logs ${DEPLOY_REMOTE_DATA}/classifier/models ${DEPLOY_REMOTE_DATA}/anomalies/models ${DEPLOY_REMOTE_DATA}/anomalies/data /mnt/gaia/logs/crawler && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R 10001:10001 ${DEPLOY_REMOTE_DATA} /mnt/gaia/logs && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R $DEPLOY_USER:$DEPLOY_USER ${DEPLOY_REMOTE_DATA}/classifier ${DEPLOY_REMOTE_DATA}/anomalies && echo '${DEPLOY_PASSWORD:-}' | sudo -S chmod -R 777 ${DEPLOY_REMOTE_DATA}/classifier ${DEPLOY_REMOTE_DATA}/anomalies || true"
 
 # Ensure baseline classifier model exists on remote host
 if [ -f "$REPO_ROOT/apps/classifier/models/torrent_classifier_v2.joblib" ]; then
@@ -84,6 +84,18 @@ if [ -f "$REPO_ROOT/apps/classifier/models/torrent_classifier_v2.joblib" ]; then
         $SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S chmod -R 777 ${DEPLOY_REMOTE_DATA}/classifier || true"
     fi
 fi
+
+# Ensure baseline anomaly models exist on remote host
+if [ -f "$REPO_ROOT/ml/anomalies/models_storage/isolation_forest.joblib" ]; then
+    if ! $SSH "[ -f ${DEPLOY_REMOTE_DATA}/anomalies/models/isolation_forest.joblib ]" >/dev/null 2>&1; then
+        echo "Syncing baseline anomaly models to remote ${DEPLOY_HOST}..."
+        $SCP "$REPO_ROOT/ml/anomalies/models_storage/isolation_forest.joblib" "$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_REMOTE_DATA}/anomalies/models/"
+        $SCP "$REPO_ROOT/ml/anomalies/models_storage/autoencoder.joblib" "$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_REMOTE_DATA}/anomalies/models/"
+        $SCP "$REPO_ROOT/ml/anomalies/models_storage/supervised_classifier.joblib" "$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_REMOTE_DATA}/anomalies/models/"
+        $SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S chmod -R 777 ${DEPLOY_REMOTE_DATA}/anomalies || true"
+    fi
+fi
+
 
 # ── 4. Build and deploy services ──
 if [ -n "$SERVICES" ]; then

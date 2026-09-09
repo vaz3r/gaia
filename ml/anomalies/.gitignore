@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+data/*.parquet
+data/*.csv
+data/*.png
+models_storage/*.joblib
