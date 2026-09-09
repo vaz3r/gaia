@@ -70,6 +70,14 @@ impl AnnouncePeerCache {
         let now = Instant::now();
         self.inner
             .retain(|_, (_, ts)| now.duration_since(*ts) < self.ttl);
+        if self.inner.len() > self.max_entries {
+            let excess = self.inner.len() - self.max_entries;
+            let target = (excess / 4).max(100);
+            let to_remove: Vec<_> = self.inner.iter().take(target).map(|e| *e.key()).collect();
+            for k in to_remove {
+                self.inner.remove(&k);
+            }
+        }
     }
 }
 
@@ -241,14 +249,24 @@ pub async fn run_pipeline(
 ) {
     let pipeline_limit = Arc::new(Semaphore::new(config.pipeline_limit.max(1)));
     let fetch_limit = Arc::new(Semaphore::new(config.fetch_limit.max(1)));
-    let negative_cache = Arc::new(dashmap::DashMap::new());
+    let negative_cache: Arc<dashmap::DashMap<std::net::IpAddr, tokio::time::Instant>> =
+        Arc::new(dashmap::DashMap::new());
     let nc_clone = negative_cache.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
         loop {
             interval.tick().await;
             let now = tokio::time::Instant::now();
-            nc_clone.retain(|_, v| *v > now);
+            nc_clone.retain(|_, v: &mut tokio::time::Instant| *v > now);
+            if nc_clone.len() > 50_000 {
+                let excess = nc_clone.len() - 50_000;
+                let target = (excess / 4).max(100);
+                let to_remove: Vec<std::net::IpAddr> =
+                    nc_clone.iter().take(target).map(|e| *e.key()).collect();
+                for k in to_remove {
+                    nc_clone.remove(&k);
+                }
+            }
         }
     });
     let next_router = AtomicUsize::new(0);
