@@ -220,6 +220,10 @@ impl SingleRoutingTable {
     }
 
     pub fn closest(&self, target: &NodeId, n: usize) -> Vec<NodeInfo> {
+        if n == 0 {
+            return Vec::new();
+        }
+
         #[derive(Clone)]
         struct DistanceNode {
             penalty: u32,
@@ -246,32 +250,67 @@ impl SingleRoutingTable {
         }
 
         let mut heap = std::collections::BinaryHeap::with_capacity(n);
-        for bucket in &self.buckets {
-            for node in bucket {
-                let penalty = if node.fail_count > 2 {
-                    3
-                } else if node.query_count > 0 && !node.last_useful {
-                    2
-                } else if node.fail_count > 0 {
-                    1
-                } else {
-                    0
-                };
-                let dist = xor(target, &node.id);
-                let cand = DistanceNode {
-                    penalty,
-                    dist,
-                    node: node.clone(),
-                };
-                if heap.len() < n {
-                    heap.push(cand);
-                } else if let Some(max_node) = heap.peek()
-                    && cand < *max_node
-                {
-                    heap.pop();
-                    heap.push(cand);
+        let center = bucket_index(&self.self_id, target);
+
+        // Radial search outward from target bucket.
+        // In Kademlia, nodes closest to `target` reside in the bucket corresponding
+        // to `target`, or immediate adjacent buckets.
+        let mut delta = 0;
+        let mut buckets_checked_since_full = 0;
+
+        while delta < 160 {
+            let idx1 = center as isize - delta as isize;
+            let idx2 = center as isize + delta as isize;
+
+            let mut process_bucket = |idx: usize| {
+                let bucket = &self.buckets[idx];
+                for node in bucket {
+                    let penalty = if node.fail_count > 2 {
+                        3
+                    } else if node.query_count > 0 && !node.last_useful {
+                        2
+                    } else if node.fail_count > 0 {
+                        1
+                    } else {
+                        0
+                    };
+                    let dist = xor(target, &node.id);
+                    let cand = DistanceNode {
+                        penalty,
+                        dist,
+                        node: node.clone(),
+                    };
+                    if heap.len() < n {
+                        heap.push(cand);
+                    } else if let Some(max_node) = heap.peek()
+                        && cand < *max_node
+                    {
+                        heap.pop();
+                        heap.push(cand);
+                    }
+                }
+            };
+
+            if idx1 >= 0 && idx1 < 160 {
+                process_bucket(idx1 as usize);
+            }
+            if delta > 0 && idx2 >= 0 && idx2 < 160 {
+                process_bucket(idx2 as usize);
+            }
+
+            if heap.len() >= n {
+                buckets_checked_since_full += 1;
+                // Once we have collected at least `n` candidates and checked adjacent
+                // buckets (at least 8 buckets outward), additional distant buckets cannot
+                // produce closer XOR candidates than our current best.
+                if let Some(top) = heap.peek() {
+                    if top.penalty == 0 && buckets_checked_since_full >= 8 {
+                        break;
+                    }
                 }
             }
+
+            delta += 1;
         }
 
         let mut result: Vec<NodeInfo> = heap.into_iter().map(|w| w.node).collect();
@@ -296,7 +335,11 @@ impl SingleRoutingTable {
     }
 
     pub fn contains_id(&self, id: &NodeId) -> bool {
-        self.buckets.iter().any(|b| b.iter().any(|n| &n.id == id))
+        if id == &self.self_id {
+            return false;
+        }
+        let idx = bucket_index(&self.self_id, id);
+        self.buckets[idx].iter().any(|n| &n.id == id)
     }
 
     #[cfg(test)]
@@ -333,6 +376,21 @@ impl SingleRoutingTable {
         }
         result
     }
+}
+
+pub fn encode_compact_into(nodes: &[NodeInfo], out: &mut [u8]) -> usize {
+    let mut pos = 0;
+    for n in nodes {
+        if let std::net::IpAddr::V4(v4) = n.addr.ip() {
+            if pos + 26 <= out.len() {
+                out[pos..pos + 20].copy_from_slice(&n.id);
+                out[pos + 20..pos + 24].copy_from_slice(&v4.octets());
+                out[pos + 24..pos + 26].copy_from_slice(&n.addr.port().to_be_bytes());
+                pos += 26;
+            }
+        }
+    }
+    pos
 }
 
 pub fn encode_compact(nodes: &[NodeInfo]) -> Vec<u8> {

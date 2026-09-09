@@ -40,6 +40,9 @@ use tokio::io::unix::AsyncFd;
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, mpsc};
 
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 #[tokio::main]
 async fn main() {
     eprintln!("[DBG] 1: before Config::load");

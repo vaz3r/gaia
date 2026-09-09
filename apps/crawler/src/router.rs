@@ -215,27 +215,40 @@ impl Router {
             self.external_ip.unwrap_or(self.self_addr.ip()),
             self.self_addr.port(),
         );
-        let mut indices: Vec<usize> = (0..self.sybils.len()).collect();
-        
-        let k = count.min(indices.len());
-        if k > 0 && k < indices.len() {
-            indices.select_nth_unstable_by(k - 1, |&a, &b| {
-                cmp_xor(target, &self.sybils[a].0, &self.sybils[b].0)
-            });
-            indices.truncate(k);
+
+        let k = count.min(self.sybils.len()).min(32);
+        let mut best: [usize; 32] = [0; 32];
+        let mut best_count = 0;
+
+        for (idx, (sybil_id, _)) in self.sybils.iter().enumerate() {
+            if best_count < k {
+                let mut insert_pos = best_count;
+                while insert_pos > 0 && cmp_xor(target, sybil_id, &self.sybils[best[insert_pos - 1]].0) == std::cmp::Ordering::Less {
+                    best[insert_pos] = best[insert_pos - 1];
+                    insert_pos -= 1;
+                }
+                best[insert_pos] = idx;
+                best_count += 1;
+            } else if cmp_xor(target, sybil_id, &self.sybils[best[k - 1]].0) == std::cmp::Ordering::Less {
+                let mut insert_pos = k - 1;
+                while insert_pos > 0 && cmp_xor(target, sybil_id, &self.sybils[best[insert_pos - 1]].0) == std::cmp::Ordering::Less {
+                    best[insert_pos] = best[insert_pos - 1];
+                    insert_pos -= 1;
+                }
+                best[insert_pos] = idx;
+            }
         }
 
-        let mut sybils: Vec<NodeInfo> = indices.into_iter().map(|idx| {
-            NodeInfo {
+        let mut sybils: Vec<NodeInfo> = Vec::with_capacity(count);
+        for &idx in &best[..best_count] {
+            sybils.push(NodeInfo {
                 id: self.sybils[idx].0,
                 addr: public_addr,
                 query_count: 0,
                 fail_count: 0,
                 last_useful: true,
-            }
-        }).collect();
-
-        sybils.sort_unstable_by(|a, b| cmp_xor(target, &a.id, &b.id));
+            });
+        }
         if sybils.len() < count {
             let known = self
                 .table
@@ -376,7 +389,6 @@ impl Router {
         }
 
         let nodes = self.closest_phantom(target, 8);
-        let compact = crate::dht::routing_table::encode_compact(&nodes);
 
         let mut buf = [0u8; 512];
         let mut pos = 0;
@@ -392,12 +404,13 @@ impl Router {
         buf[pos..pos + b2.len()].copy_from_slice(b2);
         pos += b2.len();
 
+        let compact_len = nodes.len() * 26;
         let mut cursor = std::io::Cursor::new(&mut buf[pos..]);
-        write!(cursor, "{}:", compact.len()).unwrap();
+        write!(cursor, "{}:", compact_len).unwrap();
         pos += cursor.position() as usize;
 
-        buf[pos..pos + compact.len()].copy_from_slice(&compact);
-        pos += compact.len();
+        let written = crate::dht::routing_table::encode_compact_into(&nodes, &mut buf[pos..pos + compact_len]);
+        pos += written;
 
         let b4 = b"e1:t";
         buf[pos..pos + b4.len()].copy_from_slice(b4);
@@ -441,7 +454,6 @@ impl Router {
         self.metrics.tokens_issued.add(1);
 
         let nodes = self.closest_phantom(ih, 8);
-        let compact = crate::dht::routing_table::encode_compact(&nodes);
 
         let mut buf = [0u8; 512];
         let mut pos = 0;
@@ -457,12 +469,13 @@ impl Router {
         buf[pos..pos + b2.len()].copy_from_slice(b2);
         pos += b2.len();
 
+        let compact_len = nodes.len() * 26;
         let mut cursor = std::io::Cursor::new(&mut buf[pos..]);
-        write!(cursor, "{}:", compact.len()).unwrap();
+        write!(cursor, "{}:", compact_len).unwrap();
         pos += cursor.position() as usize;
 
-        buf[pos..pos + compact.len()].copy_from_slice(&compact);
-        pos += compact.len();
+        let written = crate::dht::routing_table::encode_compact_into(&nodes, &mut buf[pos..pos + compact_len]);
+        pos += written;
 
         let b3 = b"5:token8:";
         buf[pos..pos + b3.len()].copy_from_slice(b3);
