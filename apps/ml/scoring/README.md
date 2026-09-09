@@ -74,11 +74,104 @@ Audit tables:
 
 ---
 
-## 4. Runbooks & Operational Commands
+## 4. Manual Review, Adjudication & Override System
+
+When human operators inspect a torrent flagged for review (or falsely categorized) and confirm its authenticity, the system supports real-time manual overrides without risking background worker clobbering.
+
+### 4.1 Invariant Protection & Overwrite Prevention
+- When an override is applied, the record is tagged with `decision_source = 'MANUAL'`.
+- **Worker Daemon Invariant:** `gaia-scoring-worker` explicitly protects human adjudications using conditional updates:
+  ```sql
+  UPDATE torrents t
+  SET integrity_score = CASE WHEN t.decision_source = 'MANUAL' THEN t.integrity_score ELSE s.integrity_score END,
+      policy_action = CASE WHEN t.decision_source = 'MANUAL' THEN t.policy_action ELSE s.policy_action END,
+      risk_tier = CASE WHEN t.decision_source = 'MANUAL' THEN t.risk_tier ELSE s.risk_tier END,
+      availability_score = s.availability_score,
+      availability_state = s.availability_state,
+      scored_at = s.scored_at
+  FROM staging_worker_scores s
+  WHERE t.infohash = s.infohash;
+  ```
+- **Operational Result:** Background cycles continue to refresh dynamic swarm availability (`availability_score`, `availability_state`), but **never** overwrite human integrity or policy decisions.
+- **Audit Logging:** An immutable record is appended to `torrent_score_history` with `score_status = 'OVERRIDDEN'` and operator notes recorded in `reason_codes`.
+
+### 4.2 Dashboard Adjudication API (`apps/dashboard/server.js`)
+
+#### `POST /api/scoring/override`
+Adjudicates and overrides the policy action and risk tier of any torrent.
+- **Request Body:**
+  ```json
+  {
+    "infohash": "53072b1daf57d7a566c6f3ea86ca25fe9f68860d",
+    "action": "ALLOW",
+    "risk_tier": "SAFE",
+    "integrity_score": 100,
+    "notes": "Verified genuine Russian audiobook release by Puffin Cafe"
+  }
+  ```
+- **Actions & Defaults:**
+  - `ALLOW` $\rightarrow$ `risk_tier: 'SAFE'`, `integrity_score: 100`
+  - `DOWNRANK` $\rightarrow$ `risk_tier: 'REVIEW'`, `integrity_score: 40`
+  - `SUPPRESS` $\rightarrow$ `risk_tier: 'BLOCKED'`, `integrity_score: 0`
+  - `REVIEW` $\rightarrow$ `risk_tier: 'REVIEW'`, `integrity_score: 50`
+- **Response:**
+  ```json
+  {
+    "success": true,
+    "message": "Torrent successfully overridden to ALLOW (SAFE) with MANUAL decision source.",
+    "data": {
+      "infohash": "53072b1daf57d7a566c6f3ea86ca25fe9f68860d",
+      "name": "Клиффорд Саймак - Пыльная зебра (2022.Puffin Сafe).mp3",
+      "policy_action": "ALLOW",
+      "risk_tier": "SAFE",
+      "integrity_score": 100,
+      "decision_source": "MANUAL",
+      "scored_at": "2026-09-09T11:25:11.444Z"
+    }
+  }
+  ```
+
+#### `GET /api/scoring/pending`
+Returns a paginated list of torrents flagged for operator inspection (`policy_action = 'REVIEW' OR risk_tier = 'REVIEW'`).
+- **Query Parameters:** `?page=1&limit=25`
+- **Response Format:** `{ data: [...], page: 1, limit: 25, total: 857, pages: 35 }`
+
+#### `GET /api/scoring/stats`
+Returns live system metrics on scored torrents, risk tiers, and operator overrides:
+- **Response:**
+  ```json
+  {
+    "total_torrents": "2770778",
+    "scored_torrents": "571000",
+    "manual_overrides": "1",
+    "action_allow": "569606",
+    "action_downrank": "741",
+    "action_suppress": "541",
+    "action_review": "112",
+    "tier_safe": "569584",
+    "tier_review": "748",
+    "tier_suspicious": "15",
+    "tier_blocked": "653"
+  }
+  ```
+
+### 4.3 CLI Adjudication Tool
+Operators can adjudicate directly from the server or terminal:
+```bash
+python scripts/adjudicate.py \
+  --infohash 53072b1daf57d7a566c6f3ea86ca25fe9f68860d \
+  --action ALLOW \
+  --notes "Verified genuine release"
+```
+- **Active Learning:** Automatically appends the sample into `data/gold_benchmark.json`. During scheduled weekly retraining, the model learns the structural and lexical patterns of these genuine releases, reducing future false-positive flags across the entire catalog.
+
+---
+
+## 5. Runbooks & Operational Commands
 
 ### Run Unit & Invariant Tests
 ```bash
-python -m tests.run_tests
+PYTHONPATH=. .venv/bin/python tests/run_tests.py
 ```
 
 ### Run Dataset Audit
@@ -100,7 +193,13 @@ python scripts/backfill_scores.py 10
 python scripts/backfill_scores.py
 ```
 
-### Run Daemon Worker (Shadow Mode)
+### Run Daemon Worker
 ```bash
 python src/worker.py
 ```
+
+### Manual Torrent Adjudication CLI
+```bash
+python scripts/adjudicate.py --infohash <hex> --action ALLOW --notes "Genuine release"
+```
+
