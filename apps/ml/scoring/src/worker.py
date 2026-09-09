@@ -158,15 +158,15 @@ class ScoringWorker:
             # Update torrents summary columns
             cur.execute("""
                 UPDATE torrents t
-                SET integrity_score = s.integrity_score,
+                SET integrity_score = CASE WHEN t.decision_source = 'MANUAL' THEN t.integrity_score ELSE s.integrity_score END,
                     model_safe_probability = s.model_safe_probability,
-                    policy_integrity_score = s.policy_integrity_score,
-                    policy_action = s.policy_action,
+                    policy_integrity_score = CASE WHEN t.decision_source = 'MANUAL' THEN t.policy_integrity_score ELSE s.policy_integrity_score END,
+                    policy_action = CASE WHEN t.decision_source = 'MANUAL' THEN t.policy_action ELSE s.policy_action END,
                     policy_version = s.policy_version,
-                    decision_source = s.decision_source,
+                    decision_source = CASE WHEN t.decision_source = 'MANUAL' THEN t.decision_source ELSE s.decision_source END,
                     metadata_quality_score = s.metadata_quality_score,
                     availability_score = s.availability_score,
-                    risk_tier = s.risk_tier,
+                    risk_tier = CASE WHEN t.decision_source = 'MANUAL' THEN t.risk_tier ELSE s.risk_tier END,
                     availability_state = s.availability_state,
                     score_model_version = s.score_model_version,
                     scored_at = s.scored_at

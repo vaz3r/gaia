@@ -136,7 +136,9 @@ app.get('/api/torrents', async (req, res) => {
       `SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
               first_seen, last_seen, total_seen,
               health_score, popularity_score, swarm_peers, seed_confirmed, last_health_check,
-              category, category_confidence, needs_review, classified_at
+              category, category_confidence, needs_review, classified_at,
+              integrity_score, policy_action, risk_tier, decision_source,
+              availability_score, availability_state, scored_at
        FROM torrents ${where} ${orderBy}
        LIMIT ${limit} OFFSET ${offset}`,
       params
@@ -1118,6 +1120,164 @@ app.use('/api/classifier', async (req, res) => {
       details: err.message,
       target: targetUrl
     });
+  }
+});
+
+// ============================================================
+// SCORING ADJUDICATION & OVERRIDE API
+// Allows operators to manually review and override trust/risk tiers
+// ============================================================
+const SCORING_DEFAULTS = {
+  ALLOW: { risk_tier: 'SAFE', score: 100 },
+  DOWNRANK: { risk_tier: 'REVIEW', score: 40 },
+  SUPPRESS: { risk_tier: 'BLOCKED', score: 0 },
+  REVIEW: { risk_tier: 'REVIEW', score: 50 }
+};
+
+// POST /api/scoring/override
+// Body: { infohash, action, risk_tier?, integrity_score?, notes? }
+app.post('/api/scoring/override', async (req, res) => {
+  try {
+    const { infohash, action, risk_tier, integrity_score, notes } = req.body;
+    if (!infohash || typeof infohash !== 'string' || infohash.trim().length !== 40) {
+      return res.status(400).json({ error: 'Valid 40-hex infohash is required' });
+    }
+
+    const normAction = (action || '').trim().toUpperCase();
+    if (!SCORING_DEFAULTS[normAction]) {
+      return res.status(400).json({ 
+        error: `Invalid action '${action}'. Must be one of ${Object.keys(SCORING_DEFAULTS).join(', ')}` 
+      });
+    }
+
+    const defaults = SCORING_DEFAULTS[normAction];
+    const finalTier = (risk_tier || defaults.risk_tier).trim().toUpperCase();
+    const finalScore = Number.isInteger(integrity_score) 
+      ? Math.max(0, Math.min(100, integrity_score)) 
+      : defaults.score;
+    const cleanInfohash = infohash.trim().toLowerCase();
+
+    // Perform atomic update on torrents
+    const updateRes = await query(
+      `UPDATE torrents
+       SET policy_action = $1,
+           risk_tier = $2,
+           integrity_score = $3,
+           policy_integrity_score = $3,
+           decision_source = 'MANUAL',
+           scored_at = now()
+       WHERE infohash = decode($4, 'hex')
+       RETURNING encode(infohash, 'hex') AS infohash, name, total_size, file_count, 
+                 policy_action, risk_tier, integrity_score, decision_source, scored_at`,
+      [normAction, finalTier, finalScore, cleanInfohash]
+    );
+
+    if (updateRes.rowCount === 0) {
+      return res.status(404).json({ error: `Torrent ${cleanInfohash} not found in database` });
+    }
+
+    const updated = updateRes.rows[0];
+
+    // Log to torrent_score_history
+    const reasonCodes = [`MANUAL_ADJUDICATION:${normAction}`];
+    if (notes && typeof notes === 'string' && notes.trim().length > 0) {
+      reasonCodes.push(`NOTES:${notes.trim()}`);
+    }
+
+    await query(
+      `INSERT INTO torrent_score_history (
+         infohash, scoring_run_id, model_name, model_version,
+         model_safe_probability, policy_integrity_score, integrity_score,
+         metadata_quality_score, availability_score, risk_tier,
+         policy_action, decision_source, reason_codes, score_status, scored_at
+       ) VALUES (
+         decode($1, 'hex'), gen_random_uuid(), 'manual_adjudication', 'dashboard_review_v1',
+         $2, $3, $3, 100, 100, $4, $5, 'MANUAL',
+         $6::jsonb, 'OVERRIDDEN', now()
+       )`,
+      [
+        cleanInfohash,
+        normAction === 'ALLOW' ? 1.0 : 0.0,
+        finalScore,
+        finalTier,
+        normAction,
+        JSON.stringify(reasonCodes)
+      ]
+    );
+
+    res.json({
+      success: true,
+      message: `Torrent successfully overridden to ${normAction} (${finalTier}) with MANUAL decision source.`,
+      data: updated
+    });
+  } catch (err) {
+    console.error('Error overriding torrent score:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/scoring/pending?page=1&limit=25
+// Returns torrents requiring operator adjudication
+app.get('/api/scoring/pending', async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25));
+    const offset = (page - 1) * limit;
+
+    const countRes = await query(
+      `SELECT count(*) AS total FROM torrents 
+       WHERE policy_action = 'REVIEW' OR risk_tier = 'REVIEW'`
+    );
+    const total = parseInt(countRes.rows[0]?.total || 0, 10);
+
+    const rowsRes = await query(
+      `SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
+              category, integrity_score, policy_action, risk_tier, decision_source,
+              availability_score, availability_state, scored_at
+       FROM torrents
+       WHERE policy_action = 'REVIEW' OR risk_tier = 'REVIEW'
+       ORDER BY verified_at DESC NULLS LAST
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    res.json({
+      data: rowsRes.rows,
+      page,
+      limit,
+      total,
+      pages: Math.max(1, Math.ceil(total / limit))
+    });
+  } catch (err) {
+    console.error('Error fetching pending torrent reviews:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/scoring/stats
+// Aggregated statistics on scoring health, risk tiers, and manual overrides
+app.get('/api/scoring/stats', async (req, res) => {
+  try {
+    const countsRes = await query(`
+      SELECT 
+        COUNT(*) AS total_torrents,
+        COUNT(scored_at) AS scored_torrents,
+        COUNT(*) FILTER (WHERE decision_source = 'MANUAL') AS manual_overrides,
+        COUNT(*) FILTER (WHERE policy_action = 'ALLOW') AS action_allow,
+        COUNT(*) FILTER (WHERE policy_action = 'DOWNRANK') AS action_downrank,
+        COUNT(*) FILTER (WHERE policy_action = 'SUPPRESS') AS action_suppress,
+        COUNT(*) FILTER (WHERE policy_action = 'REVIEW') AS action_review,
+        COUNT(*) FILTER (WHERE risk_tier = 'SAFE') AS tier_safe,
+        COUNT(*) FILTER (WHERE risk_tier = 'REVIEW') AS tier_review,
+        COUNT(*) FILTER (WHERE risk_tier = 'SUSPICIOUS') AS tier_suspicious,
+        COUNT(*) FILTER (WHERE risk_tier = 'BLOCKED') AS tier_blocked
+      FROM torrents;
+    `);
+
+    res.json(countsRes.rows[0]);
+  } catch (err) {
+    console.error('Error fetching scoring stats:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
