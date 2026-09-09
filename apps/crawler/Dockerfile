@@ -2,7 +2,7 @@ FROM rust:1.97-slim AS builder
 WORKDIR /app
 ARG CRAW_GIT_HASH=unknown
 ENV CRAW_GIT_HASH=${CRAW_GIT_HASH}
-RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y pkg-config libssl-dev make && rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
