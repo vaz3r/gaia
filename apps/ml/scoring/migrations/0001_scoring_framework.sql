@@ -17,6 +17,11 @@ ALTER TABLE torrents
     ADD COLUMN IF NOT EXISTS score_model_version VARCHAR(64),
     ADD COLUMN IF NOT EXISTS scored_at TIMESTAMPTZ;
 
+-- High-throughput partial index for real-time scoring worker
+CREATE INDEX IF NOT EXISTS idx_torrents_unscored_verified
+    ON torrents (verified_at DESC NULLS LAST) 
+    WHERE scored_at IS NULL;
+
 -- 2. Immutable Score History & Audit Log
 CREATE TABLE IF NOT EXISTS torrent_score_history (
     id                     BIGSERIAL PRIMARY KEY,
