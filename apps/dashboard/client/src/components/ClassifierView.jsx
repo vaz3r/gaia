@@ -99,9 +99,10 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
   const [reclassifyStarting, setReclassifyStarting] = useState(false);
   const [reclassifyCancelling, setReclassifyCancelling] = useState(false);
   const [showReclassifyModal, setShowReclassifyModal] = useState(false);
-  const [reclassifyBatchSize, setReclassifyBatchSize] = useState(2000);
+  const [reclassifyBatchSize, setReclassifyBatchSize] = useState(1000);
   const [reclassifyLimit, setReclassifyLimit] = useState('');
   const [reclassifyDryRun, setReclassifyDryRun] = useState(false);
+  const [dismissedReclassifyError, setDismissedReclassifyError] = useState(null);
 
   // Fetch telemetry & status
   const fetchStatusAndMetrics = useCallback(async () => {
@@ -155,12 +156,14 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
     }
   }, [page, limit, searchQuery]);
 
-  // Initial load & polling
+  // Initial load & dynamic polling
   useEffect(() => {
     fetchStatusAndMetrics();
-    const interval = setInterval(fetchStatusAndMetrics, 30000);
+    // Fast poll if reclassification is active, else standard 15s interval
+    const pollTime = reclassifyStatus?.is_running ? 2000 : 15000;
+    const interval = setInterval(fetchStatusAndMetrics, pollTime);
     return () => clearInterval(interval);
-  }, [fetchStatusAndMetrics]);
+  }, [fetchStatusAndMetrics, reclassifyStatus?.is_running]);
 
   useEffect(() => {
     fetchQueueTorrents();
@@ -572,6 +575,37 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
           </div>
         </div>
       </section>
+
+      {/* Error Alert Banner when previous worker failed */}
+      {!reclassifyStatus?.is_running && reclassifyStatus?.last_error && dismissedReclassifyError !== reclassifyStatus.last_error && (
+        <section className="rounded-xl border border-rose-900/40 bg-rose-950/20 p-4 space-y-2.5 font-mono">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-rose-400">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span className="text-xs font-semibold">Reclassification Worker Stopped with Error</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowReclassifyModal(true)}
+                className="px-2.5 py-1 rounded bg-rose-900/40 hover:bg-rose-900/60 border border-rose-700/50 text-rose-200 text-[11px] flex items-center gap-1.5 transition-colors"
+              >
+                <RefreshCw className="w-3 h-3" />
+                <span>Retry</span>
+              </button>
+              <button
+                onClick={() => setDismissedReclassifyError(reclassifyStatus.last_error)}
+                className="p-1 text-rose-400 hover:text-rose-200 rounded hover:bg-rose-900/30 transition-colors"
+                title="Dismiss"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+          <div className="p-2.5 rounded bg-[#0b0b0b] border border-rose-950 text-[11px] text-rose-300 font-mono overflow-x-auto whitespace-pre-wrap">
+            {reclassifyStatus.last_error}
+          </div>
+        </section>
+      )}
 
       {/* Live Reclassification Progress Banner (Visible when job is running) */}
       {reclassifyStatus?.is_running && (

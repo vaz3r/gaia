@@ -54,7 +54,7 @@ class ReclassifyManager:
                 return True
             return False
 
-    def start(self, batch_size: int = 2000, limit: Optional[int] = None, dry_run: bool = False) -> Dict[str, Any]:
+    def start(self, batch_size: int = 1000, limit: Optional[int] = None, dry_run: bool = False) -> Dict[str, Any]:
         with self._lock:
             if self._status["is_running"]:
                 raise RuntimeError("Reclassification task is already running")
@@ -62,23 +62,12 @@ class ReclassifyManager:
             service = TorrentClassifierService.get_instance()
             model_ver = service.metadata.get("version") or service.active_info.get("version", "unknown")
 
-            # Count total eligible items in review queue (excluding verified ground truth)
-            p = db.get_pool()
-            conn = p.getconn()
+            # Count total eligible items in review queue
             try:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT count(*)
-                        FROM torrents t
-                        WHERE t.needs_review = true
-                          AND NOT EXISTS (
-                              SELECT 1 FROM labeled_results lr WHERE lr.infohash = t.infohash
-                          );
-                    """)
-                    row = cur.fetchone()
-                    total_queue = row[0] if row else 0
-            finally:
-                p.putconn(conn)
+                metrics = db.get_queue_metrics()
+                total_queue = metrics.get("review_queue_depth") or 100000
+            except Exception:
+                total_queue = 100000
 
             target_count = min(total_queue, limit) if limit else total_queue
 
@@ -134,6 +123,8 @@ class ReclassifyManager:
                 batch_rows = []
                 try:
                     with conn.cursor() as cur:
+                        # Ensure batch worker has sufficient execution time
+                        cur.execute("SET statement_timeout = '60000';")
                         if last_infohash is None:
                             query = """
                                 SELECT t.infohash, t.name, t.total_size, t.file_count, t.files, t.category
@@ -292,6 +283,7 @@ class ReclassifyManager:
         conn = p.getconn()
         try:
             with conn.cursor() as cur:
+                cur.execute("SET statement_timeout = '60000';")
                 query = """
                     UPDATE torrents AS t
                     SET 
