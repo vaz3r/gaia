@@ -29,7 +29,7 @@ const STATS_CACHE_MS = parseInt(process.env.STATS_CACHE_MS || '30000', 10);
 const ANALYSIS_CACHE_MS = parseInt(process.env.ANALYSIS_CACHE_MS || '60000', 10);
 let metricsCache = { ts: 0, data: null };
 let statsCache = { ts: 0, data: null };
-let analysisCache = { ts: 0, data: null };
+let analysisCacheMap = new Map(); // key -> { ts: number, data: any }
 
 const SORTS = {
   verified_at: 'verified_at',
@@ -572,13 +572,21 @@ async function computeAnalysis(selectedCategory = null) {
 
       // 2. Release Velocity: New verified releases spreading fastest (<48h old, ordered by velocity)
       query(`
-        SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
+        WITH candidates AS (
+          SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
+                 first_seen, last_seen, total_seen, health_score, popularity_score, swarm_peers,
+                 category, category_confidence, needs_review
+          FROM torrents
+          WHERE verified_at >= now() - interval '48 hours' ${catFilterSql}
+          ORDER BY verified_at DESC
+          LIMIT 500
+        )
+        SELECT infohash, name, total_size, file_count, verified_at,
                first_seen, last_seen, total_seen, health_score, popularity_score, swarm_peers,
                category, category_confidence, needs_review,
                round(total_seen / GREATEST(0.25, EXTRACT(epoch FROM (now() - verified_at)) / 3600.0), 2) as velocity,
                round(EXTRACT(epoch FROM (now() - verified_at)) / 3600.0, 1) as age_hours
-        FROM torrents
-        WHERE verified_at >= now() - interval '48 hours' ${catFilterSql}
+        FROM candidates
         ORDER BY velocity DESC, verified_at DESC
         LIMIT 25
       `, catParams),
@@ -595,68 +603,62 @@ async function computeAnalysis(selectedCategory = null) {
         LIMIT 25
       `, catParams),
 
-      // 4. Global Swarm & Classification Summary
+      // 4. Global Swarm & Classification Summary (instant lookup from global_swarm_summary)
       query(`
         SELECT 
-          count(*) as total_torrents,
-          count(category) as classified_torrents,
-          count(*) - count(category) as unclassified_torrents,
-          count(*) filter (where needs_review = true) as review_needed_torrents,
-          round(avg(total_seen), 1) as avg_sightings,
-          max(total_seen) as max_sightings,
-          count(*) filter (where total_seen >= 10) as high_activity_swarms,
-          count(*) filter (where first_seen >= now() - interval '48 hours') as fresh_swarms_48h,
-          count(*) filter (where last_seen >= now() - interval '24 hours') as active_swarms_24h,
-          round(sum(total_size / (1024*1024*1024)::numeric) / 1024, 2) as total_size_tb
-        FROM torrents
+          total_torrents,
+          classified_torrents,
+          unclassified_torrents,
+          review_needed_torrents,
+          avg_sightings,
+          max_sightings,
+          high_activity_swarms,
+          fresh_swarms_48h,
+          active_swarms_24h,
+          total_size_tb
+        FROM global_swarm_summary
+        WHERE id = 1
       `),
 
-      // 5. Category Distribution Matrix & Metrics
+      // 5. Category Distribution Matrix & Metrics (instant lookup from category_stats_summary)
       query(`
         SELECT 
           category,
-          count(*)::bigint as count,
-          round(count(*)::numeric * 100.0 / nullif(sum(count(*)) over (), 0), 2) as pct,
-          round(avg(category_confidence)::numeric, 3) as avg_confidence,
-          round(avg(total_size / (1024*1024*1024)::numeric), 2) as avg_size_gb,
-          round(sum(total_size / (1024*1024*1024)::numeric) / 1024, 2) as total_size_tb,
-          round(avg(swarm_peers::numeric), 1) as avg_peers,
-          round(avg(health_score::numeric), 1) as avg_health,
-          count(*) filter (where needs_review = true) as review_needed
-        FROM torrents
-        WHERE category IS NOT NULL
-        GROUP BY category
+          count,
+          pct,
+          avg_confidence,
+          avg_size_gb,
+          total_size_tb,
+          avg_peers,
+          avg_health,
+          review_needed
+        FROM category_stats_summary
         ORDER BY count DESC
       `),
 
-      // 6. Category Swarm Half-Life & Survivability
+      // 6. Category Swarm Half-Life & Survivability (instant lookup from category_survivability_summary)
       query(`
         SELECT 
           category,
-          count(*) as total_torrents,
-          count(*) filter (where swarm_peers > 0) as active_seed_torrents,
-          round(count(*) filter (where swarm_peers > 0) * 100.0 / nullif(count(*), 0), 1) as survivability_pct,
-          round(avg(swarm_peers), 1) as avg_swarm_peers
-        FROM torrents
-        WHERE category IS NOT NULL
-        GROUP BY category
+          total_torrents,
+          active_seed_torrents,
+          survivability_pct,
+          avg_swarm_peers
+        FROM category_survivability_summary
         ORDER BY survivability_pct DESC
       `),
 
-      // 7. Temporal Ingestion Trends (Past 7 days)
+      // 7. Temporal Ingestion Trends (Past 7 days - instant lookup from category_trends_7d_summary)
       query(`
-        SELECT date_trunc('day', verified_at) as day, category, count(*) as count
-        FROM torrents
-        WHERE verified_at >= now() - interval '7 days' AND category IS NOT NULL
-        GROUP BY day, category
+        SELECT day, category, count
+        FROM category_trends_7d_summary
         ORDER BY day ASC
       `),
 
-      // 8. Swarm Peer Geography (Top CIDR/Autonomous System clusters from stable_peers)
+      // 8. Swarm Peer Geography (instant lookup from peer_geography_summary)
       query(`
-        SELECT split_part(host(ip), '.', 1) as prefix, count(*) as peer_count
-        FROM stable_peers
-        GROUP BY prefix
+        SELECT prefix, peer_count
+        FROM peer_geography_summary
         ORDER BY peer_count DESC
         LIMIT 10
       `)
@@ -738,13 +740,13 @@ async function computeAnalysis(selectedCategory = null) {
       cached_at: new Date().toISOString()
     };
 
-    if (!selectedCategory) {
-      analysisCache = { ts: now, data };
-    }
+    const cacheKey = selectedCategory || '__all__';
+    analysisCacheMap.set(cacheKey, { ts: now, data });
     return data;
   } catch (err) {
     console.error('Failed to compute analysis telemetry:', err);
-    return analysisCache.data;
+    const cached = analysisCacheMap.get(selectedCategory || '__all__');
+    return cached ? cached.data : {};
   }
 }
 
@@ -752,9 +754,11 @@ async function computeAnalysis(selectedCategory = null) {
 app.get('/api/analysis', async (req, res) => {
   const selectedCategory = req.query.category && req.query.category !== 'All' ? req.query.category : null;
   const now = Date.now();
+  const cacheKey = selectedCategory || '__all__';
 
-  if (!selectedCategory && analysisCache.data) {
-    return res.json(analysisCache.data);
+  const cached = analysisCacheMap.get(cacheKey);
+  if (cached && (now - cached.ts) < ANALYSIS_CACHE_MS) {
+    return res.json(cached.data);
   }
 
   const data = await computeAnalysis(selectedCategory);
@@ -767,7 +771,8 @@ app.get('/api/routing/security', async (req, res) => {
     const r = await query(`
       SELECT DISTINCT ON (metric_name) metric_name, metric_value, ts
       FROM metrics
-      WHERE metric_name LIKE '%bep42%' OR metric_name LIKE '%random%'
+      WHERE ts >= NOW() - INTERVAL '2 hours'
+        AND (metric_name LIKE '%bep42%' OR metric_name LIKE '%random%')
       ORDER BY metric_name, ts DESC
     `);
 

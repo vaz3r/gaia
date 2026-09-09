@@ -158,7 +158,7 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
   // Initial load & polling
   useEffect(() => {
     fetchStatusAndMetrics();
-    const interval = setInterval(fetchStatusAndMetrics, 15000);
+    const interval = setInterval(fetchStatusAndMetrics, 30000);
     return () => clearInterval(interval);
   }, [fetchStatusAndMetrics]);
 

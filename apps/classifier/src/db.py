@@ -18,12 +18,13 @@ def get_pool() -> pool.SimpleConnectionPool:
     if _connection_pool is None or _connection_pool.closed:
         _connection_pool = pool.SimpleConnectionPool(
             minconn=1,
-            maxconn=10,
+            maxconn=25,
             host=DB_HOST,
             port=PG_PORT,
             user=POSTGRES_USER,
             password=PG_PASSWORD,
             dbname=POSTGRES_DB,
+            options="-c statement_timeout=5000",
             keepalives=1,
             keepalives_idle=30,
             keepalives_interval=10,
@@ -567,10 +568,13 @@ def get_queue_metrics() -> Dict[str, Any]:
                 # Smooth rate per minute using the 5m rolling window when between 2,000-item worker batches
                 rate_1m = rate_1m_raw if rate_1m_raw > 0 else int(round(rate_5m / 5.0))
 
-                # Category breakdown
-                cur.execute("SELECT category, count(*) FROM torrents WHERE category IS NOT NULL GROUP BY category ORDER BY count(*) DESC;")
-                cat_rows = cur.fetchall()
-                category_counts = {r[0]: r[1] for r in cat_rows}
+                # Category breakdown (instant lookup from pre-aggregated category_stats_summary table)
+                try:
+                    cur.execute("SELECT category, count FROM category_stats_summary ORDER BY count DESC;")
+                    cat_rows = cur.fetchall()
+                    category_counts = {r[0]: int(r[1]) for r in cat_rows}
+                except Exception:
+                    category_counts = {}
             else:
                 unclassified = total
                 review_queue = 0
