@@ -781,6 +781,66 @@ app.get('/api/routing/security', async (req, res) => {
   }
 });
 
+// ============================================================
+// SERVER-SENT EVENTS (SSE) ENGINE: /api/live/stream
+// Broadcasts lightweight telemetry updates to connected clients
+// ============================================================
+const sseClients = new Set();
+
+app.get('/api/live/stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const client = { id: Date.now() + Math.random(), res };
+  sseClients.add(client);
+
+  // Send initial payload immediately if caches exist
+  const initialPayload = {
+    type: 'init',
+    serverStats: statsCache.data,
+    serverMetrics: metricsCache.data,
+    analyticsData: analyticsCache.data,
+    timestamp: Date.now()
+  };
+  res.write(`data: ${JSON.stringify(initialPayload)}\n\n`);
+
+  req.on('close', () => {
+    sseClients.delete(client);
+  });
+});
+
+function broadcastSSE(data) {
+  if (sseClients.size === 0) return;
+  const msg = `data: ${JSON.stringify(data)}\n\n`;
+  for (const client of sseClients) {
+    try {
+      client.res.write(msg);
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}
+
+// Background tick to broadcast live telemetry every 2.5 seconds
+setInterval(async () => {
+  if (sseClients.size === 0) return;
+  try {
+    const payload = {
+      type: 'tick',
+      serverStats: statsCache.data,
+      serverMetrics: metricsCache.data,
+      analyticsData: analyticsCache.data,
+      timestamp: Date.now()
+    };
+    broadcastSSE(payload);
+  } catch (err) {
+    console.error('SSE broadcast error:', err.message);
+  }
+}, 2500);
+
 app.get('/api/health', (req, res) => res.json({ ok: true, now: new Date().toISOString() }));
 
 // GET /api/logs?limit=50&level=ALL|INFO|WARN|DEBUG

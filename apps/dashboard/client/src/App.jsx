@@ -52,6 +52,7 @@ import { api, loadTrackers, magnetFrom } from './api.js';
 import { formatBytes, formatNum, formatTime, formatUptime, formatDubaiDate, formatDubaiTimeHM } from './utils.js';
 import AnalysisView from './components/AnalysisView.jsx';
 import ClassifierView from './components/ClassifierView.jsx';
+import { useTelemetryStream } from './useTelemetryStream.js';
 
 export const CANONICAL_CATEGORIES = [
   'Adult',
@@ -81,8 +82,12 @@ export const CATEGORY_COLORS = {
 };
 
 export default function App() {
-  // Navigation & Primary Views: 'overview' | 'browser' | 'classifier' | 'analysis' | 'routing' | 'diagnostics'
+  // Realtime push stream via SSE (/api/live/stream)
+  const { telemetry: streamData, connected: streamConnected } = useTelemetryStream();
+
+  // Navigation & Primary Views: 'overview' | 'browser' | 'classifier' | 'routing' | 'diagnostics'
   const [activeTab, setActiveTab] = useState('overview');
+  const [explorerMode, setExplorerMode] = useState('catalog'); // 'catalog' | 'analytics'
   const [classifierReviewCount, setClassifierReviewCount] = useState(null);
   const [classifierTotalClassified, setClassifierTotalClassified] = useState(null);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -151,7 +156,6 @@ export default function App() {
   };
 
   // Diagnostics state
-  const [cacheAllocSize, setCacheAllocSize] = useState(500);
   const [logFilter, setLogFilter] = useState('ALL');
   const [routingSecurity, setRoutingSecurity] = useState(null);
 
@@ -205,59 +209,39 @@ export default function App() {
     setPeersPage(1);
   };
 
-  // Poll real stats & metrics from backend
+  // Synchronize realtime push data from SSE stream
+  useEffect(() => {
+    if (!streamData) return;
+    if (streamData.serverStats) setServerStats(streamData.serverStats);
+    if (streamData.serverMetrics) setServerMetrics(streamData.serverMetrics);
+    if (streamData.analyticsData) setAnalyticsData(streamData.analyticsData);
+  }, [streamData]);
+
+  // Initial load and fallback polling for supplementary telemetry
   useEffect(() => {
     loadTrackers();
 
-    const fetchTelemetry = () => {
-      // 1. Core aggregate stats
-      api('/api/stats')
-        .then(setServerStats)
-        .catch(() => {});
+    const fetchSupplemental = () => {
+      // If SSE is not connected, fallback to fetching core stats
+      if (!streamConnected) {
+        api('/api/stats').then(setServerStats).catch(() => {});
+        api('/api/metrics/current').then(setServerMetrics).catch(() => {});
+        api('/api/analytics').then((res) => { if (res) setAnalyticsData(res); }).catch(() => {});
+      }
 
-      // 2. Real-time rates & snapshot
-      api('/api/metrics/current')
-        .then(setServerMetrics)
-        .catch(() => {});
-
-      // 3. Swarm & log intelligence analytics
-      api('/api/analytics')
-        .then((res) => {
-          if (res) setAnalyticsData(res);
-        })
-        .catch(() => {});
-
-      // 4. BEP 42 Sybil Protection Telemetry
-      api('/api/routing/security')
-        .then((res) => {
-          if (res) setRoutingSecurity(res);
-        })
-        .catch(() => {});
-
-      // 5. Crawler syslog
-      api(`/api/logs?limit=50&level=${logFilter}`)
-        .then((res) => {
-          if (res?.logs) setLogsList(res.logs);
-        })
-        .catch(() => {});
-
-      // 6. Classifier metrics for badge count
-      api('/api/classifier/metrics')
-        .then((res) => {
-          if (res?.review_queue_depth != null) {
-            setClassifierReviewCount(res.review_queue_depth);
-          }
-          if (res?.total_classified != null) {
-            setClassifierTotalClassified(res.total_classified);
-          }
-        })
-        .catch(() => {});
+      // Supplementary telemetry polled at low frequency (60s)
+      api('/api/routing/security').then((res) => { if (res) setRoutingSecurity(res); }).catch(() => {});
+      api(`/api/logs?limit=50&level=${logFilter}`).then((res) => { if (res?.logs) setLogsList(res.logs); }).catch(() => {});
+      api('/api/classifier/metrics').then((res) => {
+        if (res?.review_queue_depth != null) setClassifierReviewCount(res.review_queue_depth);
+        if (res?.total_classified != null) setClassifierTotalClassified(res.total_classified);
+      }).catch(() => {});
     };
 
-    fetchTelemetry();
-    const interval = setInterval(fetchTelemetry, 10000);
+    fetchSupplemental();
+    const interval = setInterval(fetchSupplemental, 60000);
     return () => clearInterval(interval);
-  }, [logFilter]);
+  }, [logFilter, streamConnected]);
 
   // Click-outside listener for More menu dropdown
   useEffect(() => {
@@ -678,7 +662,7 @@ export default function App() {
             <nav className="flex items-center gap-1">
               {[
                 { id: 'overview', label: 'Overview' },
-                { id: 'browser', label: 'Explorer', badge: `${metrics.totalVerified}` },
+                { id: 'browser', label: 'Explorer & Analytics', badge: `${metrics.totalVerified}` },
                 {
                   id: 'classifier',
                   label: 'Classifier',
@@ -688,7 +672,6 @@ export default function App() {
                         : (classifierTotalClassified / 1000).toFixed(0) + 'k')
                     : (classifierReviewCount != null && classifierReviewCount > 0 ? `${classifierReviewCount.toLocaleString()}` : null),
                 },
-                { id: 'analysis', label: 'Analysis' },
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -765,13 +748,13 @@ export default function App() {
               <span className="text-[#555]">GST (UTC+4)</span>
             </div>
 
-            {/* Live Indicator */}
+            {/* Live SSE Stream Indicator */}
             <div className="flex items-center gap-2 bg-[#0c0c0c] border border-[#222] px-2.5 py-1 rounded-full text-[11px] text-[#888]">
               <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-60 ${streamConnected ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
+                <span className={`relative inline-flex rounded-full h-2 w-2 ${streamConnected ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
               </span>
-              <span className="text-[#ededed] font-mono">healthy</span>
+              <span className="text-[#ededed] font-mono">{streamConnected ? 'live stream' : 'polling'}</span>
               <span className="text-[#444]">·</span>
               <span className="font-mono text-[#666]">{metrics.latency}ms</span>
             </div>
@@ -1126,8 +1109,8 @@ export default function App() {
               })()}
             </section>
 
-            {/* Tri-card Telemetry Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Dual Telemetry Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="rounded-xl border border-[#1e1e1e] bg-[#090909] p-4 flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-3 text-xs">
@@ -1214,429 +1197,413 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-                <div className="pt-3 mt-3 border-t border-[#181818] text-[11px] text-[#666] flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                  <span>Verified cryptographic integrity enforcement.</span>
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-[#262626] bg-[#0a0a0a] p-4 flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between mb-2 text-xs">
-                    <span className="font-semibold text-white">Peer Cache Status</span>
-                    <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-[#16231b] text-emerald-400 border border-emerald-800/40">
-                      Active
-                    </span>
-                  </div>
-                  <p className="text-xs text-[#888] leading-relaxed">
-                    Live LRU table holding <strong className="text-white">{metrics.peerCacheSize.toLocaleString()}</strong> peer
-                    endpoints. Eviction velocity: <strong className="text-white">{(metrics.peerCacheEvictions / 1000).toFixed(0)}k/hr</strong>.
-                  </p>
-                </div>
-                <div className="space-y-2 pt-3 border-t border-[#181818]">
-                  <div className="flex justify-between text-xs font-mono">
-                    <span className="text-[#666]">Table Utilization:</span>
-                    <span className="text-[#ccc]">{metrics.peerCacheSize.toLocaleString()} / 100k entries</span>
-                  </div>
-                  <div className="flex justify-between text-xs font-mono">
-                    <span className="text-[#666]">Queue Backpressure:</span>
-                    <span className="text-emerald-400">0 dropped</span>
-                  </div>
-                </div>
               </div>
             </div>
           </div>
         )}
 
         {/* ============================================================ */}
-        {/* TAB 2: TORRENT BROWSER (Server-side Paginated & Indexed)      */}
+        {/* TAB 2: EXPLORER & SWARM ANALYTICS (Merged Catalog & Intelligence) */}
         {/* ============================================================ */}
         {activeTab === 'browser' && (
           <div className="space-y-4">
-            {/* Search & Filter Bar */}
-            <div className="p-4 rounded-xl border border-[#222] bg-[#090909] flex flex-col sm:flex-row gap-3 items-center justify-between">
-              {/* Server Search */}
-              <div className="relative w-full sm:w-96">
-                <Search className="w-3.5 h-3.5 text-[#666] absolute left-3 top-3" />
-                <input
-                  type="text"
-                  placeholder="Search 1.8M+ torrents by title, keyword, or hex infohash..."
-                  value={searchInput}
-                  onChange={(e) => handleSearchChange(e.target.value)}
-                  className="w-full bg-[#000] border border-[#222] rounded-lg pl-9 pr-8 py-2 text-xs text-white placeholder-[#555] focus:outline-none focus:border-[#444] font-mono transition-colors"
-                />
-                {searchInput && (
-                  <button
-                    onClick={handleClearSearch}
-                    className="absolute right-2.5 top-2.5 text-[#666] hover:text-white"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
+            {/* View Submode Switcher */}
+            <div className="flex items-center justify-between border-b border-[#1c1c1c] pb-3">
+              <div className="flex items-center gap-1.5 bg-[#090909] border border-[#1e1e1e] p-1 rounded-lg">
+                <button
+                  onClick={() => setExplorerMode('catalog')}
+                  className={`px-3 py-1.5 text-xs font-mono rounded-md transition-colors flex items-center gap-2 ${
+                    explorerMode === 'catalog'
+                      ? 'bg-[#1a1a1a] text-white font-medium border border-[#333]'
+                      : 'text-[#888] hover:text-[#ededed] hover:bg-[#111]'
+                  }`}
+                >
+                  <Search className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Catalog Browser</span>
+                </button>
+                <button
+                  onClick={() => setExplorerMode('analytics')}
+                  className={`px-3 py-1.5 text-xs font-mono rounded-md transition-colors flex items-center gap-2 ${
+                    explorerMode === 'analytics'
+                      ? 'bg-[#1a1a1a] text-white font-medium border border-[#333]'
+                      : 'text-[#888] hover:text-[#ededed] hover:bg-[#111]'
+                  }`}
+                >
+                  <BarChart3 className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Swarm & Content Intelligence</span>
+                </button>
               </div>
 
-              {/* Sorting & Page Size Controls */}
-              <div className="flex items-center gap-3 w-full sm:w-auto justify-end text-xs">
-                {/* Category Filter */}
-                <div className="flex items-center gap-1.5 font-mono text-xs">
-                  <span className="text-[#666]">Category:</span>
-                  <select
-                    value={categoryFilter}
-                    onChange={(e) => {
-                      setCategoryFilter(e.target.value);
-                      setTorrentsPage(1);
-                    }}
-                    className="bg-[#000] border border-[#222] rounded-lg px-2.5 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
-                  >
-                    <option value="">All Categories</option>
-                    {CANONICAL_CATEGORIES.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Sort Order Selector */}
-                <div className="flex items-center gap-1.5 font-mono text-xs">
-                  <span className="text-[#666]">Sort:</span>
-                  <select
-                    value={`${sortField}:${sortOrder}`}
-                    onChange={(e) => {
-                      const [f, o] = e.target.value.split(':');
-                      setSortField(f);
-                      setSortOrder(o);
-                      setTorrentsPage(1);
-                    }}
-                    className="bg-[#000] border border-[#222] rounded-lg px-2.5 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
-                  >
-                    {searchQuery && <option value="relevance:desc">Best Match (Relevance)</option>}
-                    <option value="verified_at:desc">Newest Verified</option>
-                    <option value="verified_at:asc">Oldest Verified</option>
-                    <option value="size:desc">Largest Size</option>
-                    <option value="size:asc">Smallest Size</option>
-                    <option value="files:desc">Most Files</option>
-                    <option value="sightings:desc">Most Active Swarms</option>
-                    <option value="name:asc">Name (A-Z)</option>
-                  </select>
-                </div>
-
-                {/* Page Limit Selector */}
-                <div className="flex items-center gap-1.5 font-mono text-xs">
-                  <span className="text-[#666]">Show:</span>
-                  <select
-                    value={torrentsLimit}
-                    onChange={(e) => {
-                      setTorrentsLimit(Number(e.target.value));
-                      setTorrentsPage(1);
-                    }}
-                    className="bg-[#000] border border-[#222] rounded-lg px-2 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
-                  >
-                    <option value={25}>25</option>
-                    <option value={50}>50</option>
-                    <option value={100}>100</option>
-                  </select>
-                </div>
+              <div className="hidden sm:flex items-center gap-2 text-xs font-mono text-[#666]">
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                <span>{metrics.totalVerified} infohashes indexed</span>
               </div>
             </div>
 
-            {/* Results Counter & Active Stats */}
-            <div className="flex items-center justify-between text-xs text-[#666] px-1 font-mono">
-              <span className="flex items-center gap-2">
-                {torrentsLoading ? (
-                  <RefreshCw className="w-3 h-3 animate-spin text-emerald-400" />
-                ) : (
-                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                )}
-                Showing {torrentsData?.total > 0 ? (torrentsPage - 1) * torrentsLimit + 1 : 0} –{' '}
-                {Math.min(torrentsPage * torrentsLimit, torrentsData?.total || 0).toLocaleString()} of{' '}
-                <strong className="text-white">{(torrentsData?.total || 0).toLocaleString()}</strong> verified payloads
-              </span>
-              <span>{totalCatalogedStr}</span>
-            </div>
-
-            {/* Torrents Table */}
-            <div className="rounded-xl border border-[#1e1e1e] bg-[#090909] overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b border-[#181818] text-[#666] font-mono text-[11px]">
-                      <th
-                        onClick={() => handleSortToggle('name')}
-                        className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <span>Payload Description</span>
-                          {sortField === 'name' && (
-                            <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
-                          )}
-                        </div>
-                      </th>
-                      <th className="py-3 px-4 font-normal">Infohash (Hex)</th>
-                      <th className="py-3 px-4 font-normal">Category</th>
-                      <th
-                        onClick={() => handleSortToggle('size')}
-                        className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <span>Size</span>
-                          {sortField === 'size' && (
-                            <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
-                          )}
-                        </div>
-                      </th>
-                      <th
-                        onClick={() => handleSortToggle('files')}
-                        className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <span>Files</span>
-                          {sortField === 'files' && (
-                            <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
-                          )}
-                        </div>
-                      </th>
-                      <th
-                        onClick={() => handleSortToggle('health')}
-                        className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <span>Health</span>
-                          {sortField === 'health' && (
-                            <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
-                          )}
-                        </div>
-                      </th>
-                      <th
-                        onClick={() => handleSortToggle('popularity')}
-                        className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <span>Popularity</span>
-                          {sortField === 'popularity' && (
-                            <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
-                          )}
-                        </div>
-                      </th>
-                      <th
-                        onClick={() => handleSortToggle('verified_at')}
-                        className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <span>Verified</span>
-                          {sortField === 'verified_at' && (
-                            <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
-                          )}
-                        </div>
-                      </th>
-                      <th className="py-3 px-4 font-normal text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#141414] font-mono text-[11px]">
-                    {torrentsData?.data?.map((t) => {
-                      const displayName = t.name && t.name.trim().length > 0 ? t.name : `payload-${t.infohash.slice(0, 8)}`;
-                      const isMultiFile = (t.file_count || 1) > 1;
-                      const sizeFormatted = formatBytes(t.total_size);
-                      const timeAgo = t.verified_at ? formatTime(t.verified_at) : '—';
-                      const cat = t.category;
-                      const catColor = cat ? (CATEGORY_COLORS[cat] || CATEGORY_COLORS.Other) : null;
-
-                      return (
-                        <tr
-                          key={t.infohash}
-                          onClick={() => handleInspectTorrent(t)}
-                          className="hover:bg-[#0f0f0f] cursor-pointer transition-colors group"
-                        >
-                          <td className="py-3 px-4">
-                            <div className="font-sans font-medium text-[#ededed] group-hover:text-white flex items-center gap-2">
-                              <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
-                              <span className="truncate max-w-md" title={displayName}>
-                                {displayName}
-                              </span>
-                            </div>
-                            <div className="text-[10px] text-[#666] font-mono mt-0.5 pl-4">
-                              {isMultiFile ? `${t.file_count} files` : 'Single file'} · verified in cluster
-                            </div>
-                          </td>
-
-                          <td className="py-3 px-4">
-                            <span className="text-[#888] group-hover:text-[#ccc] transition-colors">
-                              {t.infohash.slice(0, 10)}...{t.infohash.slice(-8)}
-                            </span>
-                          </td>
-
-                          <td className="py-3 px-4 whitespace-nowrap">
-                            {cat ? (
-                              <span className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded border ${catColor}`}>
-                                {cat}
-                                {t.category_confidence ? (
-                                  <span className="opacity-60 ml-1">
-                                    {Math.round(t.category_confidence * 100)}%
-                                  </span>
-                                ) : null}
-                              </span>
-                            ) : (
-                              <span className="text-[#444] text-[10px] font-mono">—</span>
-                            )}
-                          </td>
-
-                          <td className="py-3 px-4 text-[#aaa] whitespace-nowrap">
-                            {sizeFormatted}
-                          </td>
-
-                          <td className="py-3 px-4 text-[#888] whitespace-nowrap">
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#141414] text-[#aaa] border border-[#242424]">
-                              {t.file_count || 1}
-                            </span>
-                          </td>
-
-                          <td className="py-3 px-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
-                              <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full ${
-                                    (t.health_score ?? 0) >= 70
-                                      ? 'bg-emerald-400'
-                                      : (t.health_score ?? 0) >= 40
-                                      ? 'bg-amber-400'
-                                      : 'bg-rose-500'
-                                  }`}
-                                  style={{ width: `${Math.min(100, Math.max(0, t.health_score ?? 0))}%` }}
-                                />
-                              </div>
-                              <span
-                                className={`text-[11px] font-mono font-semibold ${
-                                  (t.health_score ?? 0) >= 70
-                                    ? 'text-emerald-400'
-                                    : (t.health_score ?? 0) >= 40
-                                    ? 'text-amber-400'
-                                    : 'text-rose-400'
-                                }`}
-                              >
-                                {t.health_score ?? 0}%
-                              </span>
-                            </div>
-                          </td>
-
-                          <td className="py-3 px-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
-                              <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
-                                <div
-                                  className="h-full rounded-full bg-cyan-400"
-                                  style={{ width: `${Math.min(100, Math.max(0, t.popularity_score ?? 0))}%` }}
-                                />
-                              </div>
-                              <span className="text-[11px] font-mono text-cyan-400 font-semibold">
-                                {t.popularity_score ?? 0}%
-                              </span>
-                            </div>
-                          </td>
-
-                          <td className="py-3 px-4 text-[#888] whitespace-nowrap">
-                            {timeAgo}
-                          </td>
-
-                          <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button
-                                onClick={() => copyToClipboard(generateMagnetLink(t), 'magnet')}
-                                className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white hover:border-[#444] transition-colors"
-                                title="Copy Magnet Link"
-                              >
-                                <DownloadCloud className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => handleInspectTorrent(t)}
-                                className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white hover:border-[#444] transition-colors"
-                                title="Inspect Metadata"
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              {(!torrentsData?.data || torrentsData.data.length === 0) && !torrentsLoading && (
-                <div className="p-12 text-center text-xs text-[#666] font-mono">
-                  No indexed torrents matched your query.
-                </div>
-              )}
-            </div>
-
-            {/* Pagination Controls Bar */}
-            {torrentsData?.pages > 1 && (
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-xl border border-[#1e1e1e] bg-[#090909] text-xs font-mono">
-                <div className="text-[#777]">
-                  Page <span className="text-white font-bold">{torrentsData.page}</span> of{' '}
-                  <span className="text-white font-bold">{(torrentsData.pages).toLocaleString()}</span>
-                </div>
-
-                <div className="flex items-center gap-1.5">
-                  <button
-                    disabled={torrentsPage <= 1 || torrentsLoading}
-                    onClick={() => setTorrentsPage(1)}
-                    className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    title="First Page"
-                  >
-                    <ChevronsLeft className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    disabled={torrentsPage <= 1 || torrentsLoading}
-                    onClick={() => setTorrentsPage((p) => Math.max(1, p - 1))}
-                    className="px-2.5 py-1 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
-                  >
-                    <ChevronLeft className="w-3.5 h-3.5" /> Prev
-                  </button>
-
-                  <div className="flex items-center gap-1 px-2">
-                    <span className="text-[#555]">Go to</span>
+            {/* Submode 1: Catalog Browser */}
+            {explorerMode === 'catalog' && (
+              <div className="space-y-4">
+                {/* Search & Filter Bar */}
+                <div className="p-4 rounded-xl border border-[#222] bg-[#090909] flex flex-col sm:flex-row gap-3 items-center justify-between">
+                  {/* Server Search */}
+                  <div className="relative w-full sm:w-96">
+                    <Search className="w-3.5 h-3.5 text-[#666] absolute left-3 top-3" />
                     <input
-                      type="number"
-                      min={1}
-                      max={torrentsData.pages}
-                      value={torrentsPage}
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value, 10);
-                        if (val >= 1 && val <= torrentsData.pages) {
-                          setTorrentsPage(val);
-                        }
-                      }}
-                      className="w-14 bg-[#000] border border-[#262626] rounded px-1.5 py-0.5 text-center text-white focus:outline-none focus:border-[#444]"
+                      type="text"
+                      placeholder="Search 1.8M+ torrents by title, keyword, or hex infohash..."
+                      value={searchInput}
+                      onChange={(e) => handleSearchChange(e.target.value)}
+                      className="w-full bg-[#000] border border-[#222] rounded-lg pl-9 pr-8 py-2 text-xs text-white placeholder-[#555] focus:outline-none focus:border-[#444] font-mono transition-colors"
                     />
+                    {searchInput && (
+                      <button
+                        onClick={handleClearSearch}
+                        className="absolute right-2.5 top-2.5 text-[#666] hover:text-white"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
 
-                  <button
-                    disabled={torrentsPage >= torrentsData.pages || torrentsLoading}
-                    onClick={() => setTorrentsPage((p) => Math.min(torrentsData.pages, p + 1))}
-                    className="px-2.5 py-1 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
-                  >
-                    Next <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    disabled={torrentsPage >= torrentsData.pages || torrentsLoading}
-                    onClick={() => setTorrentsPage(torrentsData.pages)}
-                    className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    title="Last Page"
-                  >
-                    <ChevronsRight className="w-3.5 h-3.5" />
-                  </button>
+                  {/* Sorting & Page Size Controls */}
+                  <div className="flex items-center gap-3 w-full sm:w-auto justify-end text-xs">
+                    {/* Category Filter */}
+                    <div className="flex items-center gap-1.5 font-mono text-xs">
+                      <span className="text-[#666]">Category:</span>
+                      <select
+                        value={categoryFilter}
+                        onChange={(e) => {
+                          setCategoryFilter(e.target.value);
+                          setTorrentsPage(1);
+                        }}
+                        className="bg-[#000] border border-[#222] rounded-lg px-2.5 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+                      >
+                        <option value="">All Categories</option>
+                        {CANONICAL_CATEGORIES.map((c) => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Sort Order Selector */}
+                    <div className="flex items-center gap-1.5 font-mono text-xs">
+                      <span className="text-[#666]">Sort:</span>
+                      <select
+                        value={`${sortField}:${sortOrder}`}
+                        onChange={(e) => {
+                          const [f, o] = e.target.value.split(':');
+                          setSortField(f);
+                          setSortOrder(o);
+                          setTorrentsPage(1);
+                        }}
+                        className="bg-[#000] border border-[#222] rounded-lg px-2.5 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+                      >
+                        {searchQuery && <option value="relevance:desc">Best Match (Relevance)</option>}
+                        <option value="verified_at:desc">Newest Verified</option>
+                        <option value="verified_at:asc">Oldest Verified</option>
+                        <option value="popularity:desc">Highest Trending Score</option>
+                        <option value="sightings:desc">Most Active Swarms (Sightings)</option>
+                        <option value="size:desc">Largest Size</option>
+                        <option value="size:asc">Smallest Size</option>
+                        <option value="files:desc">Most Files</option>
+                        <option value="name:asc">Name (A-Z)</option>
+                      </select>
+                    </div>
+
+                    {/* Page Limit Selector */}
+                    <div className="flex items-center gap-1.5 font-mono text-xs">
+                      <span className="text-[#666]">Show:</span>
+                      <select
+                        value={torrentsLimit}
+                        onChange={(e) => {
+                          setTorrentsLimit(Number(e.target.value));
+                          setTorrentsPage(1);
+                        }}
+                        className="bg-[#000] border border-[#222] rounded-lg px-2 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+                      >
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Results Counter & Active Stats */}
+                <div className="flex items-center justify-between text-xs text-[#666] px-1 font-mono">
+                  <span className="flex items-center gap-2">
+                    {torrentsLoading ? (
+                      <RefreshCw className="w-3 h-3 animate-spin text-emerald-400" />
+                    ) : (
+                      <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                    )}
+                    Showing {torrentsData?.total > 0 ? (torrentsPage - 1) * torrentsLimit + 1 : 0} –{' '}
+                    {Math.min(torrentsPage * torrentsLimit, torrentsData?.total || 0).toLocaleString()} of{' '}
+                    <strong className="text-white">{(torrentsData?.total || 0).toLocaleString()}</strong> verified payloads
+                  </span>
+                  <span>{totalCatalogedStr}</span>
+                </div>
+
+                {/* Torrents Table */}
+                <div className="rounded-xl border border-[#1e1e1e] bg-[#090909] overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-[#181818] text-[#666] font-mono text-[11px]">
+                          <th
+                            onClick={() => handleSortToggle('name')}
+                            className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <span>Payload Description</span>
+                              {sortField === 'name' && (
+                                <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                              )}
+                            </div>
+                          </th>
+                          <th className="py-3 px-4 font-normal">Infohash (Hex)</th>
+                          <th className="py-3 px-4 font-normal">Category</th>
+                          <th
+                            onClick={() => handleSortToggle('size')}
+                            className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <span>Size</span>
+                              {sortField === 'size' && (
+                                <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                              )}
+                            </div>
+                          </th>
+                          <th
+                            onClick={() => handleSortToggle('files')}
+                            className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <span>Files</span>
+                              {sortField === 'files' && (
+                                <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                              )}
+                            </div>
+                          </th>
+                          <th
+                            onClick={() => handleSortToggle('health')}
+                            className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <span>Health</span>
+                              {sortField === 'health' && (
+                                <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                              )}
+                            </div>
+                          </th>
+                          <th
+                            onClick={() => handleSortToggle('popularity')}
+                            className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <span>Popularity</span>
+                              {sortField === 'popularity' && (
+                                <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                              )}
+                            </div>
+                          </th>
+                          <th
+                            onClick={() => handleSortToggle('verified_at')}
+                            className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <span>Verified</span>
+                              {sortField === 'verified_at' && (
+                                <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                              )}
+                            </div>
+                          </th>
+                          <th className="py-3 px-4 font-normal text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#141414] font-mono text-[11px]">
+                        {torrentsData?.data?.map((t) => {
+                          const displayName = t.name && t.name.trim().length > 0 ? t.name : `payload-${t.infohash.slice(0, 8)}`;
+                          const isMultiFile = (t.file_count || 1) > 1;
+                          const sizeFormatted = formatBytes(t.total_size);
+                          const timeAgo = t.verified_at ? formatTime(t.verified_at) : '—';
+                          const cat = t.category;
+                          const catColor = cat ? (CATEGORY_COLORS[cat] || CATEGORY_COLORS.Other) : null;
+
+                          return (
+                            <tr
+                              key={t.infohash}
+                              onClick={() => handleInspectTorrent(t)}
+                              className="hover:bg-[#0f0f0f] cursor-pointer transition-colors group"
+                            >
+                              <td className="py-3 px-4">
+                                <div className="font-sans font-medium text-[#ededed] group-hover:text-white flex items-center gap-2">
+                                  <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                                  <span className="truncate max-w-md" title={displayName}>
+                                    {displayName}
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-[#666] font-mono mt-0.5 pl-4">
+                                  {isMultiFile ? `${t.file_count} files` : 'Single file'} · verified in cluster
+                                </div>
+                              </td>
+
+                              <td className="py-3 px-4">
+                                <span className="text-[#888] group-hover:text-[#ccc] transition-colors">
+                                  {t.infohash.slice(0, 10)}...{t.infohash.slice(-8)}
+                                </span>
+                              </td>
+
+                              <td className="py-3 px-4 whitespace-nowrap">
+                                {cat ? (
+                                  <span className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded border ${catColor}`}>
+                                    {cat}
+                                    {t.category_confidence ? (
+                                      <span className="opacity-60 ml-1">
+                                        {Math.round(t.category_confidence * 100)}%
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                ) : (
+                                  <span className="text-[#444] text-[10px] font-mono">—</span>
+                                )}
+                              </td>
+
+                              <td className="py-3 px-4 text-[#aaa] whitespace-nowrap">
+                                {sizeFormatted}
+                              </td>
+
+                              <td className="py-3 px-4 text-[#888] whitespace-nowrap">
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#141414] text-[#aaa] border border-[#242424]">
+                                  {t.file_count || 1}
+                                </span>
+                              </td>
+
+                              <td className="py-3 px-4 whitespace-nowrap">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full ${
+                                        (t.health_score ?? 0) >= 70
+                                          ? 'bg-emerald-400'
+                                          : (t.health_score ?? 0) >= 40
+                                          ? 'bg-amber-400'
+                                          : 'bg-rose-500'
+                                      }`}
+                                      style={{ width: `${Math.min(100, Math.max(0, t.health_score ?? 0))}%` }}
+                                    />
+                                  </div>
+                                  <span
+                                    className={`text-[11px] font-mono font-semibold ${
+                                      (t.health_score ?? 0) >= 70
+                                        ? 'text-emerald-400'
+                                        : (t.health_score ?? 0) >= 40
+                                        ? 'text-amber-400'
+                                        : 'text-rose-400'
+                                    }`}
+                                  >
+                                    {t.health_score ?? 0}%
+                                  </span>
+                                </div>
+                              </td>
+
+                              <td className="py-3 px-4 whitespace-nowrap">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
+                                    <div
+                                      className="h-full rounded-full bg-cyan-400"
+                                      style={{ width: `${Math.min(100, Math.max(0, t.popularity_score ?? 0))}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-[11px] font-mono text-cyan-400 font-semibold">
+                                    {t.popularity_score ?? 0}%
+                                  </span>
+                                </div>
+                              </td>
+
+                              <td className="py-3 px-4 text-[#888] whitespace-nowrap">
+                                {timeAgo}
+                              </td>
+
+                              <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
+                                <div className="flex items-center justify-end gap-1.5">
+                                  <button
+                                    onClick={() => copyToClipboard(generateMagnetLink(t), 'magnet')}
+                                    className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white hover:border-[#444] transition-colors"
+                                    title="Copy Magnet Link"
+                                  >
+                                    <DownloadCloud className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleInspectTorrent(t)}
+                                    className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white hover:border-[#444] transition-colors"
+                                    title="Inspect Metadata"
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Pagination Footer */}
+                  <div className="p-3 border-t border-[#181818] bg-[#0c0c0c] flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-mono text-[#777]">
+                    <div>
+                      Page <strong className="text-white">{torrentsPage}</strong> of{' '}
+                      <strong className="text-white">{torrentsData.pages || 1}</strong>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        disabled={torrentsPage <= 1 || torrentsLoading}
+                        onClick={() => setTorrentsPage(1)}
+                        className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        title="First Page"
+                      >
+                        <ChevronsLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        disabled={torrentsPage <= 1 || torrentsLoading}
+                        onClick={() => setTorrentsPage((p) => Math.max(1, p - 1))}
+                        className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        title="Previous Page"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        disabled={torrentsPage >= (torrentsData.pages || 1) || torrentsLoading}
+                        onClick={() => setTorrentsPage((p) => Math.min(torrentsData.pages, p + 1))}
+                        className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        title="Next Page"
+                      >
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        disabled={torrentsPage >= (torrentsData.pages || 1) || torrentsLoading}
+                        onClick={() => setTorrentsPage(torrentsData.pages)}
+                        className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        title="Last Page"
+                      >
+                        <ChevronsRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
-          </div>
-        )}
 
-        {/* ============================================================ */}
-        {/* TAB: ANALYSIS & TRENDING (Sightings, Velocity, Swarm Telemetry)*/}
-        {/* ============================================================ */}
-        {activeTab === 'analysis' && (
-          <AnalysisView
-            onInspectTorrent={handleInspectTorrent}
-            copyToClipboard={copyToClipboard}
-          />
+            {/* Submode 2: Swarm & Content Intelligence */}
+            {explorerMode === 'analytics' && (
+              <AnalysisView
+                onInspectTorrent={handleInspectTorrent}
+                copyToClipboard={copyToClipboard}
+              />
+            )}
+          </div>
         )}
 
         {/* ============================================================ */}
@@ -2275,41 +2242,27 @@ export default function App() {
               </div>
             </div>
 
-            {/* Interactive Peer Cache Tuner */}
-            <div className="rounded-xl border border-[#262626] bg-[#0a0a0a] p-5 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-[#1a1a1a]">
-                <div>
+            {/* Dead Peer Suppression Telemetry Card */}
+            <div className="rounded-xl border border-[#262626] bg-[#0a0a0a] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
                   <h3 className="text-sm font-semibold text-white">Dead Peer Suppression Cache</h3>
-                  <p className="text-xs text-[#888] mt-0.5">
-                    Quarantines offline/unreachable peers. Suppresses futile TCP/uTP connection attempts, protecting socket descriptors.
-                  </p>
+                  <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-[#16231b] text-emerald-400 border border-emerald-800/40">
+                    Active
+                  </span>
                 </div>
-                <div className="flex items-center gap-2 text-xs font-mono">
-                  <span className="text-[#666]">Production:</span>
-                  <span className="text-white font-bold">500,000 keys (~32 MB)</span>
-                  <span className="text-[#333]">·</span>
-                  <span className="text-emerald-400 font-bold">{metrics.peerCacheSize.toLocaleString()} active</span>
-                </div>
+                <p className="text-xs text-[#888] mt-1">
+                  Quarantines offline peers to protect socket descriptors. Eviction velocity: <strong className="text-white">{(metrics.peerCacheEvictions / 1000).toFixed(0)}k/hr</strong>.
+                </p>
               </div>
-
-              <div className="space-y-2">
-                <div className="flex justify-between text-xs font-mono">
-                  <span className="text-[#888]">Capacity & Memory Sizing Estimator:</span>
-                  <span className="text-white font-bold">{cacheAllocSize},000 keys (~{(cacheAllocSize * 0.064).toFixed(1)} MB RAM)</span>
+              <div className="flex items-center gap-4 text-xs font-mono shrink-0">
+                <div className="text-right">
+                  <div className="text-[#666] text-[10px] uppercase">Table Size</div>
+                  <div className="text-white font-bold">{metrics.peerCacheSize.toLocaleString()} / 500k</div>
                 </div>
-                <input
-                  type="range"
-                  min="100"
-                  max="1000"
-                  step="50"
-                  value={cacheAllocSize}
-                  onChange={(e) => setCacheAllocSize(Number(e.target.value))}
-                  className="w-full accent-white bg-[#222] h-1.5 rounded-lg cursor-pointer"
-                />
-                <div className="flex justify-between text-[10px] font-mono text-[#555]">
-                  <span>100k (Prior Baseline)</span>
-                  <span>500k (Active Production · High Throughput)</span>
-                  <span>1,000k (Heavy Enterprise Pool)</span>
+                <div className="text-right">
+                  <div className="text-[#666] text-[10px] uppercase">Evictions</div>
+                  <div className="text-emerald-400 font-bold">{(metrics.peerCacheEvictions / 1000).toFixed(1)}k/hr</div>
                 </div>
               </div>
             </div>
