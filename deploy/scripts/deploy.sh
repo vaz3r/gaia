@@ -86,12 +86,12 @@ if [ -f "$REPO_ROOT/apps/classifier/models/torrent_classifier_v2.joblib" ]; then
 fi
 
 # Ensure baseline anomaly models exist on remote host
-if [ -f "$REPO_ROOT/ml/anomalies/models_storage/isolation_forest.joblib" ]; then
+if [ -f "$REPO_ROOT/apps/ml/anomalies/models_storage/isolation_forest.joblib" ]; then
     if ! $SSH "[ -f ${DEPLOY_REMOTE_DATA}/anomalies/models/isolation_forest.joblib ]" >/dev/null 2>&1; then
         echo "Syncing baseline anomaly models to remote ${DEPLOY_HOST}..."
-        $SCP "$REPO_ROOT/ml/anomalies/models_storage/isolation_forest.joblib" "$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_REMOTE_DATA}/anomalies/models/"
-        $SCP "$REPO_ROOT/ml/anomalies/models_storage/autoencoder.joblib" "$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_REMOTE_DATA}/anomalies/models/"
-        $SCP "$REPO_ROOT/ml/anomalies/models_storage/supervised_classifier.joblib" "$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_REMOTE_DATA}/anomalies/models/"
+        $SCP "$REPO_ROOT/apps/ml/anomalies/models_storage/isolation_forest.joblib" "$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_REMOTE_DATA}/anomalies/models/"
+        $SCP "$REPO_ROOT/apps/ml/anomalies/models_storage/autoencoder.joblib" "$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_REMOTE_DATA}/anomalies/models/"
+        $SCP "$REPO_ROOT/apps/ml/anomalies/models_storage/supervised_classifier.joblib" "$DEPLOY_USER@$DEPLOY_HOST:${DEPLOY_REMOTE_DATA}/anomalies/models/"
         $SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S chmod -R 777 ${DEPLOY_REMOTE_DATA}/anomalies || true"
     fi
 fi

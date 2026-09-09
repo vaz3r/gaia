@@ -123,7 +123,7 @@ services:
 
   anomaly-worker:
     build:
-      context: ../../../ml/anomalies
+      context: ../../../apps/ml/anomalies
       dockerfile: Dockerfile
     image: gaia-anomaly-worker:${GIT_COMMIT:-latest}
     container_name: gaia-anomaly-worker

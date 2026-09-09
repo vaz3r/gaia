@@ -1,4 +1,4 @@
-# Crawler Operations Anomaly Detection (`ml/anomalies`)
+# Crawler Operations Anomaly Detection (`apps/ml/anomalies`)
 
 Production-grade machine learning anomaly detection system for 24/7 BitTorrent DHT crawler operations. It continuously monitors telemetry counters, routing table states, and verification pipeline latencies to catch operational degradation before it leads to crawler crashes, disk saturation, or network blocks.
 
@@ -25,7 +25,7 @@ The system combines:
 ## 2. Directory Layout
 
 ```
-ml/anomalies/
+apps/ml/anomalies/
 ├── README.md
 ├── requirements.txt
 ├── config.py                         # Telemetry definitions, DB settings, and thresholds
