@@ -66,7 +66,7 @@ export default function AnalysisView({ onInspectTorrent, copyToClipboard }) {
 
   useEffect(() => {
     fetchAnalysis(selectedCategory);
-    const timer = setInterval(() => fetchAnalysis(selectedCategory), 30000);
+    const timer = setInterval(() => fetchAnalysis(selectedCategory), 120000); // 2 minutes
     return () => clearInterval(timer);
   }, [selectedCategory]);
 

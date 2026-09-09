@@ -307,7 +307,7 @@ export default function App() {
     };
 
     fetchHistory();
-    const histInterval = setInterval(fetchHistory, 30000);
+    const histInterval = setInterval(fetchHistory, 120000); // 2 minutes (historical trend)
     return () => clearInterval(histInterval);
   }, []);
 
@@ -322,7 +322,7 @@ export default function App() {
       } catch {}
     };
     fetchReviewBadge();
-    const interval = setInterval(fetchReviewBadge, 20000);
+    const interval = setInterval(fetchReviewBadge, 60000); // 1 minute
     return () => clearInterval(interval);
   }, []);
 

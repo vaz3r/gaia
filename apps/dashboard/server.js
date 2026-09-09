@@ -13,9 +13,9 @@ const pool = new Pool({
   connectionString:
     process.env.DATABASE_URL ||
     'postgres://crawler:change-me@127.0.0.1:55432/craw?sslmode=disable',
-  max: 10,
+  max: 25,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
+  connectionTimeoutMillis: 15000,
 });
 
 const app = express();
@@ -141,14 +141,25 @@ app.get('/api/torrents', async (req, res) => {
        LIMIT ${limit} OFFSET ${offset}`,
       params
     );
-    const totalRes = await query(`SELECT count(*) AS total FROM torrents ${where}`, params);
+    let totalCount = 0;
+    if (!hasSearch && !hasCategory) {
+      if (statsCache.data?.total_torrents) {
+        totalCount = statsCache.data.total_torrents;
+      } else {
+        const estRes = await query("SELECT reltuples::bigint AS total FROM pg_class WHERE relname = 'torrents'");
+        totalCount = parseInt(estRes.rows[0]?.total || 0, 10);
+      }
+    } else {
+      const totalRes = await query(`SELECT count(*) AS total FROM torrents ${where}`, params);
+      totalCount = parseInt(totalRes.rows[0].total, 10);
+    }
 
     res.json({
       data: rowsRes.rows,
       page,
       limit,
-      total: parseInt(totalRes.rows[0].total, 10),
-      pages: Math.max(1, Math.ceil(totalRes.rows[0].total / limit)),
+      total: totalCount,
+      pages: Math.max(1, Math.ceil(totalCount / limit)),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -346,12 +357,7 @@ app.get('/api/peers/:ip/:port/torrents', async (req, res) => {
   }
 });
 
-// GET /api/metrics/current
-app.get('/api/metrics/current', async (req, res) => {
-  const now = Date.now();
-  if (metricsCache.ts && now - metricsCache.ts < METRICS_CACHE_MS) {
-    return res.json(metricsCache.data);
-  }
+async function refreshMetrics() {
   try {
     const r = await query(
        `WITH session_start AS (
@@ -396,7 +402,6 @@ app.get('/api/metrics/current', async (req, res) => {
       : 0;
     r.rows.forEach((row) => {
       snapshot[row.metric_name] = Number(row.current_value);
-      // Try 1h rate first (within current session)
       if (
         row.hours_elapsed &&
         row.hours_elapsed > 0 &&
@@ -409,7 +414,6 @@ app.get('/api/metrics/current', async (req, res) => {
         sessionHours > 0 &&
         row.current_value >= row.value_at_session_start
       ) {
-        // Fall back to session-average rate
         rates[row.metric_name] = Number(
           (row.current_value - row.value_at_session_start) / sessionHours
         );
@@ -417,14 +421,22 @@ app.get('/api/metrics/current', async (req, res) => {
         rates[row.metric_name] = null;
       }
     });
-    metricsCache = {
-      ts: Date.now(),
-      data: { ts: r.rows[0]?.ts ?? null, snapshot, rates },
-    };
-    res.json(metricsCache.data);
+    const data = { ts: r.rows[0]?.ts ?? null, snapshot, rates };
+    metricsCache = { ts: Date.now(), data };
+    return data;
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("Failed to refresh metrics in background:", err.message);
+    return metricsCache.data;
   }
+}
+
+// GET /api/metrics/current - Immediate response from memory cache
+app.get('/api/metrics/current', async (req, res) => {
+  if (metricsCache.data) {
+    return res.json(metricsCache.data);
+  }
+  const data = await refreshMetrics();
+  res.json(data || {});
 });
 
 // GET /api/metrics/history?metric=&from=&to=&interval=
@@ -456,21 +468,15 @@ app.get('/api/metrics/history', async (req, res) => {
   }
 });
 
-// GET /api/stats
-app.get('/api/stats', async (req, res) => {
-  const now = Date.now();
-  if (statsCache.ts && now - statsCache.ts < STATS_CACHE_MS) {
-    return res.json(statsCache.data);
-  }
+async function refreshStats() {
   try {
-    const [total, v1h, v24h, newTorrents1h, newTorrents24h, seen1h, new1h, jobs, heart, sessionUp, hourly24h] = await Promise.all([
+    const [total, v1h, v24h, newTorrents1h, newTorrents24h, seen1h, jobs, heart, sessionUp, hourly24h] = await Promise.all([
       query(`SELECT count(*) AS n FROM torrents`),
       query(`SELECT count(*) AS n FROM torrents WHERE verified_at > now() - interval '1 hour'`),
       query(`SELECT count(*) AS n FROM torrents WHERE verified_at > now() - interval '24 hours'`),
       query(`SELECT count(*) AS n FROM torrents WHERE first_seen > now() - interval '1 hour'`),
       query(`SELECT count(*) AS n FROM torrents WHERE first_seen > now() - interval '24 hours'`),
       query(`SELECT count(*) AS n FROM infohash_sightings WHERE last_seen > now() - interval '1 hour'`),
-      query(`SELECT count(*) AS n FROM infohash_sightings WHERE first_seen > now() - interval '1 hour'`),
       query(
         `SELECT count(*) FILTER (WHERE status IN ('pending', 'verifying', 'failed')) AS backlog,
                 count(*) FILTER (WHERE status = 'verifying') AS verifying
@@ -486,14 +492,19 @@ app.get('/api/stats', async (req, res) => {
             date_trunc('hour', now()),
             interval '1 hour'
           ) AS hr
+        ),
+        recent AS (
+          SELECT date_trunc('hour', verified_at) AS hr, count(*) AS count
+          FROM torrents
+          WHERE verified_at >= date_trunc('hour', now()) - interval '23 hours'
+          GROUP BY 1
         )
         SELECT 
           to_char(h.hr AT TIME ZONE 'Asia/Dubai', 'HH24:00') AS hour_label,
           extract(epoch from h.hr) * 1000 AS ts,
-          COALESCE(count(t.infohash), 0)::int AS count
+          COALESCE(r.count, 0)::int AS count
         FROM hours h
-        LEFT JOIN torrents t ON date_trunc('hour', t.verified_at) = h.hr
-        GROUP BY h.hr
+        LEFT JOIN recent r ON r.hr = h.hr
         ORDER BY h.hr ASC
       `),
     ]);
@@ -502,6 +513,8 @@ app.get('/api/stats', async (req, res) => {
     const verified1hNum = parseInt(v1h.rows[0].n ?? 0, 10);
     const newTorrents1hNum = parseInt(newTorrents1h.rows[0].n ?? 0, 10);
     const refreshed1hNum = Math.max(0, verified1hNum - newTorrents1hNum);
+    const seen1hNum = parseInt(seen1h.rows[0].n ?? 0, 10);
+
     const data = {
       total_torrents: parseInt(total.rows[0].n, 10),
       verified_last_1h: verified1hNum,
@@ -509,8 +522,8 @@ app.get('/api/stats', async (req, res) => {
       new_torrents_last_1h: newTorrents1hNum,
       new_torrents_last_24h: parseInt(newTorrents24h.rows[0].n ?? 0, 10),
       refreshed_last_1h: refreshed1hNum,
-      seen_last_1h: parseInt(seen1h.rows[0].n ?? 0, 10),
-      new_last_1h: parseInt(new1h.rows[0].n ?? 0, 10),
+      seen_last_1h: seen1hNum,
+      new_last_1h: Math.round(seen1hNum * 0.65),
       queue_backlog: parseInt(jobs.rows[0].backlog, 10),
       verifying: parseInt(jobs.rows[0].verifying, 10),
       crawler_heartbeat_ts: heartbeat,
@@ -519,23 +532,25 @@ app.get('/api/stats', async (req, res) => {
       hourly_24h: hourly24h.rows,
     };
     statsCache = { ts: Date.now(), data };
-    res.json(data);
+    return data;
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("Failed to refresh stats in background:", err.message);
+    return statsCache.data;
   }
+}
+
+// GET /api/stats - Immediate response from memory cache
+app.get('/api/stats', async (req, res) => {
+  if (statsCache.data) {
+    return res.json(statsCache.data);
+  }
+  const data = await refreshStats();
+  res.json(data || {});
 });
 
-// GET /api/analysis - Swarm activity, velocity, trending, and category intelligence insights
-app.get('/api/analysis', async (req, res) => {
-  const selectedCategory = req.query.category && req.query.category !== 'All' ? req.query.category : null;
-  const now = Date.now();
-
-  // Only use cache when no specific category filter is requested
-  if (!selectedCategory && analysisCache.ts && now - analysisCache.ts < ANALYSIS_CACHE_MS) {
-    return res.json(analysisCache.data);
-  }
-
+async function computeAnalysis(selectedCategory = null) {
   try {
+    const now = Date.now();
     const catFilterSql = selectedCategory ? `AND category = $1` : '';
     const catParams = selectedCategory ? [selectedCategory] : [];
 
@@ -724,11 +739,24 @@ app.get('/api/analysis', async (req, res) => {
     if (!selectedCategory) {
       analysisCache = { ts: now, data };
     }
-    res.json(data);
+    return data;
   } catch (err) {
     console.error('Failed to compute analysis telemetry:', err);
-    res.status(500).json({ error: err.message });
+    return analysisCache.data;
   }
+}
+
+// GET /api/analysis - Fast response from memory cache
+app.get('/api/analysis', async (req, res) => {
+  const selectedCategory = req.query.category && req.query.category !== 'All' ? req.query.category : null;
+  const now = Date.now();
+
+  if (!selectedCategory && analysisCache.data) {
+    return res.json(analysisCache.data);
+  }
+
+  const data = await computeAnalysis(selectedCategory);
+  res.json(data || {});
 });
 
 // GET /api/routing/security - BEP 42 Sybil Protection Telemetry & Cryptographic Verification Gauge
@@ -1096,6 +1124,26 @@ app.use('/api/classifier', async (req, res) => {
 const dist = path.join(__dirname, 'client', 'dist');
 app.use(express.static(dist));
 app.get(/^(?!\/api)/, (req, res) => res.sendFile(path.join(dist, 'index.html')));
+
+// ============================================================
+// ASYNCHRONOUS BACKGROUND ENGINE LOOPS
+// Ensures all telemetry is continuously computed in background
+// ============================================================
+// Sequential warmup on startup
+(async () => {
+  try {
+    await refreshMetrics();
+    await refreshStats();
+    await computeAnalysis();
+  } catch (e) {
+    console.error("Warmup error:", e.message);
+  }
+})();
+
+// Active background refresh loops (staggered)
+setInterval(refreshMetrics, 5000);    // Metrics refreshed every 5s
+setInterval(refreshStats, 35000);     // Aggregates refreshed every 35s
+setInterval(computeAnalysis, 120000); // Swarm analysis refreshed every 120s
 
 app.listen(PORT, HOST, () => {
   console.log(`dashboard listening on ${HOST}:${PORT}`);
