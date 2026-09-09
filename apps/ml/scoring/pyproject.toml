@@ -1,0 +1,23 @@
+[project]
+name = "gaia-scoring"
+version = "1.0.0"
+description = "Dual-stage Torrent Quality, Trust & Availability Scoring system"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "psycopg2-binary>=2.9.0",
+    "numpy>=1.26.0",
+    "pandas>=2.0.0",
+    "scikit-learn>=1.3.0",
+    "scipy>=1.11.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.22.0",
+    "pydantic>=2.0.0",
+]
+
+[project.scripts]
+gaia-scorer = "src.worker:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

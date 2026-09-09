@@ -150,3 +150,26 @@ services:
       - /home/${DEPLOY_USER:-core}/gaia-data/anomalies/models:/app/models_storage
       - /home/${DEPLOY_USER:-core}/gaia-data/anomalies/data:/app/data
 
+  scoring-worker:
+    build:
+      context: ../../../apps/ml/scoring
+      dockerfile: Dockerfile
+    image: gaia-scoring-worker:${GIT_COMMIT:-latest}
+    container_name: gaia-scoring-worker
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      DB_HOST: localhost
+      PG_PORT: ${PG_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-crawler}
+      POSTGRES_DB: ${POSTGRES_DB:-craw}
+      PG_PASSWORD: ${PG_PASSWORD}
+      BATCH_SIZE: 500
+      POLL_INTERVAL: 5
+      RETRAIN_INTERVAL_HOURS: 168
+      AVAILABILITY_REFRESH_HOURS: 24
+      LOG_LEVEL: INFO
+    volumes:
+      - /home/${DEPLOY_USER:-core}/gaia-data/scoring/models:/app/model_registry
+      - /home/${DEPLOY_USER:-core}/gaia-data/scoring/reports:/app/reports
+

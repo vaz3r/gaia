@@ -1,0 +1,41 @@
+{
+  "policy_version": "v1.0.0",
+  "tiers": {
+    "safe_threshold": 80,
+    "review_threshold": 50,
+    "suspicious_threshold": 20
+  },
+  "actions": {
+    "allow_threshold": 70,
+    "downrank_threshold": 40,
+    "review_min_prob": 0.40,
+    "review_max_prob": 0.60
+  },
+  "weights": {
+    "composite_integrity": 0.50,
+    "composite_quality": 0.20,
+    "composite_availability": 0.30
+  },
+  "invariants": {
+    "empty_payload_max_bytes": 1024,
+    "max_acceptable_path_depth": 8,
+    "max_junk_extension_share": 0.35,
+    "deceptive_extensions": [
+      ".mp4.exe", ".avi.exe", ".mkv.exe", ".wmv.exe",
+      ".mp3.exe", ".flac.exe", ".zip.exe", ".rar.exe",
+      ".mp4.scr", ".avi.scr", ".mkv.scr", ".wmv.scr",
+      ".mp4.bat", ".avi.bat", ".mkv.vbs", ".pdf.exe"
+    ],
+    "password_trap_filenames": [
+      "password.txt", "passwords.txt", "password_unlock.txt",
+      "unlock_key.txt", "readme_password.txt", "how_to_open.txt"
+    ]
+  },
+  "quality_penalties": {
+    "missing_scene_or_standard_name": 15,
+    "low_primary_payload_share": 20,
+    "excessive_path_depth": 10,
+    "high_junk_file_ratio": 15,
+    "unusual_extension_diversity": 10
+  }
+}

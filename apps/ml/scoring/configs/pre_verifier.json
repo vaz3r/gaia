@@ -1,0 +1,32 @@
+{
+  "model_version": "pre_verifier_v1.0.0",
+  "budget": {
+    "outcome_a_budget_seconds": 900,
+    "max_attempts_budget": 3,
+    "max_socket_seconds": 30,
+    "negative_min_observation_hours": 24,
+    "negative_min_attempts": 3,
+    "negative_min_nodes": 2,
+    "outcome_b_window_hours": 72
+  },
+  "queue_policy": {
+    "exploration_traffic_ratio": 0.10,
+    "cost_floor_seconds": 2.0,
+    "retry_penalty_multiplier": 0.15,
+    "novelty_bonus": 0.25
+  },
+  "features": [
+    "seconds_since_first_sighting",
+    "seconds_since_last_sighting",
+    "announce_recency_seconds",
+    "announce_to_get_peers_ratio",
+    "sighting_count_before_t",
+    "unique_nodes_count",
+    "sighting_interarrival_mean",
+    "sighting_interarrival_stddev",
+    "attempt_count_before_t",
+    "seconds_since_last_attempt",
+    "hour_of_day",
+    "day_of_week"
+  ]
+}

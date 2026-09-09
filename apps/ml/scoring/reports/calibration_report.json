@@ -1,0 +1,46 @@
+{
+  "model_version": "trust_classifier_v1.0.0",
+  "trained_at": "2026-09-09T08:39:39.495757+00:00",
+  "test_metrics": {
+    "accuracy": 0.9985,
+    "brier_score": 0.0014,
+    "expected_calibration_error": 0.0006,
+    "meets_ece_gate": "True",
+    "suppress_precision": 0.9939,
+    "false_suppression_rate": 0.00038
+  },
+  "gold_benchmark_results": {
+    "malicious_recall": 0.9867,
+    "clean_retention": 1.0
+  },
+  "calibration_bins": [
+    {
+      "range": "[0.0, 0.1)",
+      "count": 493,
+      "mean_predicted_prob": 0.0,
+      "empirical_accuracy": 0.0061,
+      "diff": 0.0061
+    },
+    {
+      "range": "[0.6, 0.7)",
+      "count": 6,
+      "mean_predicted_prob": 0.6667,
+      "empirical_accuracy": 0.6667,
+      "diff": 0.0
+    },
+    {
+      "range": "[0.8, 0.9)",
+      "count": 10,
+      "mean_predicted_prob": 0.8257,
+      "empirical_accuracy": 0.9,
+      "diff": 0.0743
+    },
+    {
+      "range": "[0.9, 1.0)",
+      "count": 46,
+      "mean_predicted_prob": 0.9643,
+      "empirical_accuracy": 0.9348,
+      "diff": 0.0295
+    }
+  ]
+}
