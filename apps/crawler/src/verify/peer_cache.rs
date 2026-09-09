@@ -78,14 +78,7 @@ impl PeerCache {
             return;
         }
         let excess = self.bad.len() - self.max_entries;
-        let target_remove = (excess / 8).max(1);
-        let mut to_remove = Vec::with_capacity(target_remove);
-        for entry in self.bad.iter() {
-            if to_remove.len() >= target_remove {
-                break;
-            }
-            to_remove.push(*entry.key());
-        }
+        let to_remove: Vec<SocketAddr> = self.bad.iter().take(excess).map(|e| *e.key()).collect();
         for key in to_remove {
             self.bad.remove(&key);
         }

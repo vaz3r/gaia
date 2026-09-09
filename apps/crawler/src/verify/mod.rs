@@ -72,8 +72,7 @@ impl AnnouncePeerCache {
             .retain(|_, (_, ts)| now.duration_since(*ts) < self.ttl);
         if self.inner.len() > self.max_entries {
             let excess = self.inner.len() - self.max_entries;
-            let target = (excess / 4).max(100);
-            let to_remove: Vec<_> = self.inner.iter().take(target).map(|e| *e.key()).collect();
+            let to_remove: Vec<_> = self.inner.iter().take(excess).map(|e| *e.key()).collect();
             for k in to_remove {
                 self.inner.remove(&k);
             }
@@ -148,14 +147,8 @@ impl ConnLimiter {
             return;
         }
         let excess = self.inner.len() - self.max_entries;
-        let target_remove = (excess / 8).max(1);
-        let mut to_remove = Vec::with_capacity(target_remove);
-        for entry in self.inner.iter() {
-            if to_remove.len() >= target_remove {
-                break;
-            }
-            to_remove.push(*entry.key());
-        }
+        let to_remove: Vec<std::net::IpAddr> =
+            self.inner.iter().take(excess).map(|e| *e.key()).collect();
         for key in to_remove {
             self.inner.remove(&key);
         }

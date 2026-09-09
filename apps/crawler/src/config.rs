@@ -273,8 +273,8 @@ impl Default for StorageConfig {
             sighting_flush_interval_ms: 500,
             sighting_chunk_size: 256,
             metrics_flush_interval_secs: 60,
-            peer_outcomes_flush_interval_secs: 30,
-            peer_outcomes_chunk_size: 256,
+            peer_outcomes_flush_interval_secs: 2,
+            peer_outcomes_chunk_size: 1000,
             janitor_interval_secs: 1800,
             janitor_dead_retention_secs: 86400,
             janitor_verified_retention_secs: 3600,
@@ -512,6 +512,14 @@ impl Config {
         self.storage.janitor_sightings_max_retention_secs = env_u64(
             "CRAW_JANITOR_SIGHTINGS_MAX_RETENTION_SECS",
             self.storage.janitor_sightings_max_retention_secs,
+        );
+        self.storage.peer_outcomes_flush_interval_secs = env_u64(
+            "CRAW_PEER_OUTCOMES_FLUSH_INTERVAL_SECS",
+            self.storage.peer_outcomes_flush_interval_secs,
+        );
+        self.storage.peer_outcomes_chunk_size = env_usize(
+            "CRAW_PEER_OUTCOMES_CHUNK_SIZE",
+            self.storage.peer_outcomes_chunk_size,
         );
 
         // fetch (tcp/utp timeout)

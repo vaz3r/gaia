@@ -34,11 +34,13 @@ impl PeerOutcomeWriter {
         }
     }
 
+    const MAX_QUEUE_LEN: usize = 10_000;
+
     pub fn push(&self, outcome: PeerOutcome) {
-        self.buf
-            .lock()
-            .expect("peer outcome writer poisoned")
-            .push(outcome);
+        let mut buf = self.buf.lock().expect("peer outcome writer poisoned");
+        if buf.len() < Self::MAX_QUEUE_LEN {
+            buf.push(outcome);
+        }
     }
 
     pub fn written(&self) -> u64 {

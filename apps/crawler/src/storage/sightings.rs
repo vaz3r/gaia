@@ -23,11 +23,13 @@ impl SightingWriter {
         }
     }
 
+    const MAX_QUEUE_LEN: usize = 25_000;
+
     pub fn push(&self, ih: Infohash, source: Source) {
-        self.buf
-            .lock()
-            .expect("sighting writer poisoned")
-            .push((ih, source));
+        let mut buf = self.buf.lock().expect("sighting writer poisoned");
+        if buf.len() < Self::MAX_QUEUE_LEN {
+            buf.push((ih, source));
+        }
     }
 
     pub fn written(&self) -> u64 {
