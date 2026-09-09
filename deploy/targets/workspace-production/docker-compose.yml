@@ -43,8 +43,13 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-crawler}
       POSTGRES_DB: ${POSTGRES_DB:-craw}
       POSTGRES_PASSWORD: ${PG_PASSWORD}
+    networks:
+      default:
+        aliases:
+          - postgres
+          - gaia-postgres
     volumes:
-      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/postgres:/var/lib/postgresql/data
+      - /home/${DEPLOY_USER:-core}/gaia-data/postgres:/var/lib/postgresql/data
       - ../../../deploy/postgres/postgresql.workspace-production.conf:/etc/postgresql/production.conf
     command: ["postgres", "-c", "config_file=/etc/postgresql/production.conf"]
 
@@ -77,10 +82,10 @@ services:
       RCLONE_REMOTE_PATH: "gdrive:/"
       BACKUP_CRON: "0 2 * * *"
       BACKUP_KEEP_COUNT: "2"
-    depends_on:
-      - postgres
+    networks:
+      - default
     volumes:
-      - /home/${DEPLOY_USER:-ubuntu}/gaia-data/rclone:/root/.config/rclone
+      - /home/${DEPLOY_USER:-core}/gaia-data/rclone:/root/.config/rclone
 
   classifier-api:
     build:
