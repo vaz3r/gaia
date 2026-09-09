@@ -85,9 +85,8 @@ export default function App() {
   // Realtime push stream via SSE (/api/live/stream)
   const { telemetry: streamData, connected: streamConnected } = useTelemetryStream();
 
-  // Navigation & Primary Views: 'overview' | 'browser' | 'classifier' | 'routing' | 'diagnostics'
+  // Navigation & Primary Views: 'overview' | 'browser' | 'classifier' | 'content_intelligence' | 'routing' | 'diagnostics'
   const [activeTab, setActiveTab] = useState('overview');
-  const [explorerMode, setExplorerMode] = useState('catalog'); // 'catalog' | 'analytics'
   const [classifierReviewCount, setClassifierReviewCount] = useState(null);
   const [classifierTotalClassified, setClassifierTotalClassified] = useState(null);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -672,6 +671,7 @@ export default function App() {
                         : (classifierTotalClassified / 1000).toFixed(0) + 'k')
                     : (classifierReviewCount != null && classifierReviewCount > 0 ? `${classifierReviewCount.toLocaleString()}` : null),
                 },
+                { id: 'content_intelligence', label: 'Content Intelligence' },
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -1203,407 +1203,371 @@ export default function App() {
         )}
 
         {/* ============================================================ */}
-        {/* TAB 2: EXPLORER & SWARM ANALYTICS (Merged Catalog & Intelligence) */}
+        {/* TAB 2: EXPLORER (Pure Catalog Browser & Metadata Inspection) */}
         {/* ============================================================ */}
         {activeTab === 'browser' && (
           <div className="space-y-4">
-            {/* View Submode Switcher */}
-            <div className="flex items-center justify-between border-b border-[#1c1c1c] pb-3">
-              <div className="flex items-center gap-1.5 bg-[#090909] border border-[#1e1e1e] p-1 rounded-lg">
-                <button
-                  onClick={() => setExplorerMode('catalog')}
-                  className={`px-3 py-1.5 text-xs font-mono rounded-md transition-colors flex items-center gap-2 ${
-                    explorerMode === 'catalog'
-                      ? 'bg-[#1a1a1a] text-white font-medium border border-[#333]'
-                      : 'text-[#888] hover:text-[#ededed] hover:bg-[#111]'
-                  }`}
-                >
-                  <Search className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Catalog Browser</span>
-                </button>
-                <button
-                  onClick={() => setExplorerMode('analytics')}
-                  className={`px-3 py-1.5 text-xs font-mono rounded-md transition-colors flex items-center gap-2 ${
-                    explorerMode === 'analytics'
-                      ? 'bg-[#1a1a1a] text-white font-medium border border-[#333]'
-                      : 'text-[#888] hover:text-[#ededed] hover:bg-[#111]'
-                  }`}
-                >
-                  <BarChart3 className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Swarm & Content Intelligence</span>
-                </button>
+            {/* Search & Filter Bar */}
+            <div className="p-4 rounded-xl border border-[#222] bg-[#090909] flex flex-col sm:flex-row gap-3 items-center justify-between">
+              {/* Server Search */}
+              <div className="relative w-full sm:w-96">
+                <Search className="w-3.5 h-3.5 text-[#666] absolute left-3 top-3" />
+                <input
+                  type="text"
+                  placeholder="Search 1.8M+ torrents by title, keyword, or hex infohash..."
+                  value={searchInput}
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                  className="w-full bg-[#000] border border-[#222] rounded-lg pl-9 pr-8 py-2 text-xs text-white placeholder-[#555] focus:outline-none focus:border-[#444] font-mono transition-colors"
+                />
+                {searchInput && (
+                  <button
+                    onClick={handleClearSearch}
+                    className="absolute right-2.5 top-2.5 text-[#666] hover:text-white"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
 
-              <div className="hidden sm:flex items-center gap-2 text-xs font-mono text-[#666]">
-                <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                <span>{metrics.totalVerified} infohashes indexed</span>
+              {/* Sorting & Page Size Controls */}
+              <div className="flex items-center gap-3 w-full sm:w-auto justify-end text-xs">
+                {/* Category Filter */}
+                <div className="flex items-center gap-1.5 font-mono text-xs">
+                  <span className="text-[#666]">Category:</span>
+                  <select
+                    value={categoryFilter}
+                    onChange={(e) => {
+                      setCategoryFilter(e.target.value);
+                      setTorrentsPage(1);
+                    }}
+                    className="bg-[#000] border border-[#222] rounded-lg px-2.5 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+                  >
+                    <option value="">All Categories</option>
+                    {CANONICAL_CATEGORIES.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Sort Order Selector */}
+                <div className="flex items-center gap-1.5 font-mono text-xs">
+                  <span className="text-[#666]">Sort:</span>
+                  <select
+                    value={`${sortField}:${sortOrder}`}
+                    onChange={(e) => {
+                      const [f, o] = e.target.value.split(':');
+                      setSortField(f);
+                      setSortOrder(o);
+                      setTorrentsPage(1);
+                    }}
+                    className="bg-[#000] border border-[#222] rounded-lg px-2.5 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+                  >
+                    {searchQuery && <option value="relevance:desc">Best Match (Relevance)</option>}
+                    <option value="verified_at:desc">Newest Verified</option>
+                    <option value="verified_at:asc">Oldest Verified</option>
+                    <option value="popularity:desc">Highest Trending Score</option>
+                    <option value="sightings:desc">Most Active Swarms (Sightings)</option>
+                    <option value="size:desc">Largest Size</option>
+                    <option value="size:asc">Smallest Size</option>
+                    <option value="files:desc">Most Files</option>
+                    <option value="name:asc">Name (A-Z)</option>
+                  </select>
+                </div>
+
+                {/* Page Limit Selector */}
+                <div className="flex items-center gap-1.5 font-mono text-xs">
+                  <span className="text-[#666]">Show:</span>
+                  <select
+                    value={torrentsLimit}
+                    onChange={(e) => {
+                      setTorrentsLimit(Number(e.target.value));
+                      setTorrentsPage(1);
+                    }}
+                    className="bg-[#000] border border-[#222] rounded-lg px-2 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+                  >
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                </div>
               </div>
             </div>
 
-            {/* Submode 1: Catalog Browser */}
-            {explorerMode === 'catalog' && (
-              <div className="space-y-4">
-                {/* Search & Filter Bar */}
-                <div className="p-4 rounded-xl border border-[#222] bg-[#090909] flex flex-col sm:flex-row gap-3 items-center justify-between">
-                  {/* Server Search */}
-                  <div className="relative w-full sm:w-96">
-                    <Search className="w-3.5 h-3.5 text-[#666] absolute left-3 top-3" />
-                    <input
-                      type="text"
-                      placeholder="Search 1.8M+ torrents by title, keyword, or hex infohash..."
-                      value={searchInput}
-                      onChange={(e) => handleSearchChange(e.target.value)}
-                      className="w-full bg-[#000] border border-[#222] rounded-lg pl-9 pr-8 py-2 text-xs text-white placeholder-[#555] focus:outline-none focus:border-[#444] font-mono transition-colors"
-                    />
-                    {searchInput && (
-                      <button
-                        onClick={handleClearSearch}
-                        className="absolute right-2.5 top-2.5 text-[#666] hover:text-white"
+            {/* Results Counter & Active Stats */}
+            <div className="flex items-center justify-between text-xs text-[#666] px-1 font-mono">
+              <span className="flex items-center gap-2">
+                {torrentsLoading ? (
+                  <RefreshCw className="w-3 h-3 animate-spin text-emerald-400" />
+                ) : (
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                )}
+                Showing {torrentsData?.total > 0 ? (torrentsPage - 1) * torrentsLimit + 1 : 0} –{' '}
+                {Math.min(torrentsPage * torrentsLimit, torrentsData?.total || 0).toLocaleString()} of{' '}
+                <strong className="text-white">{(torrentsData?.total || 0).toLocaleString()}</strong> verified payloads
+              </span>
+              <span>{totalCatalogedStr}</span>
+            </div>
+
+            {/* Torrents Table */}
+            <div className="rounded-xl border border-[#1e1e1e] bg-[#090909] overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-[#181818] text-[#666] font-mono text-[11px]">
+                      <th
+                        onClick={() => handleSortToggle('name')}
+                        className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
                       >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Sorting & Page Size Controls */}
-                  <div className="flex items-center gap-3 w-full sm:w-auto justify-end text-xs">
-                    {/* Category Filter */}
-                    <div className="flex items-center gap-1.5 font-mono text-xs">
-                      <span className="text-[#666]">Category:</span>
-                      <select
-                        value={categoryFilter}
-                        onChange={(e) => {
-                          setCategoryFilter(e.target.value);
-                          setTorrentsPage(1);
-                        }}
-                        className="bg-[#000] border border-[#222] rounded-lg px-2.5 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+                        <div className="flex items-center gap-1.5">
+                          <span>Payload Description</span>
+                          {sortField === 'name' && (
+                            <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                          )}
+                        </div>
+                      </th>
+                      <th className="py-3 px-4 font-normal">Infohash (Hex)</th>
+                      <th className="py-3 px-4 font-normal">Category</th>
+                      <th
+                        onClick={() => handleSortToggle('size')}
+                        className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
                       >
-                        <option value="">All Categories</option>
-                        {CANONICAL_CATEGORIES.map((c) => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Sort Order Selector */}
-                    <div className="flex items-center gap-1.5 font-mono text-xs">
-                      <span className="text-[#666]">Sort:</span>
-                      <select
-                        value={`${sortField}:${sortOrder}`}
-                        onChange={(e) => {
-                          const [f, o] = e.target.value.split(':');
-                          setSortField(f);
-                          setSortOrder(o);
-                          setTorrentsPage(1);
-                        }}
-                        className="bg-[#000] border border-[#222] rounded-lg px-2.5 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+                        <div className="flex items-center gap-1.5">
+                          <span>Size</span>
+                          {sortField === 'size' && (
+                            <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                          )}
+                        </div>
+                      </th>
+                      <th
+                        onClick={() => handleSortToggle('files')}
+                        className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
                       >
-                        {searchQuery && <option value="relevance:desc">Best Match (Relevance)</option>}
-                        <option value="verified_at:desc">Newest Verified</option>
-                        <option value="verified_at:asc">Oldest Verified</option>
-                        <option value="popularity:desc">Highest Trending Score</option>
-                        <option value="sightings:desc">Most Active Swarms (Sightings)</option>
-                        <option value="size:desc">Largest Size</option>
-                        <option value="size:asc">Smallest Size</option>
-                        <option value="files:desc">Most Files</option>
-                        <option value="name:asc">Name (A-Z)</option>
-                      </select>
-                    </div>
-
-                    {/* Page Limit Selector */}
-                    <div className="flex items-center gap-1.5 font-mono text-xs">
-                      <span className="text-[#666]">Show:</span>
-                      <select
-                        value={torrentsLimit}
-                        onChange={(e) => {
-                          setTorrentsLimit(Number(e.target.value));
-                          setTorrentsPage(1);
-                        }}
-                        className="bg-[#000] border border-[#222] rounded-lg px-2 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+                        <div className="flex items-center gap-1.5">
+                          <span>Files</span>
+                          {sortField === 'files' && (
+                            <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                          )}
+                        </div>
+                      </th>
+                      <th
+                        onClick={() => handleSortToggle('health')}
+                        className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
                       >
-                        <option value={25}>25</option>
-                        <option value={50}>50</option>
-                        <option value={100}>100</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
+                        <div className="flex items-center gap-1.5">
+                          <span>Health</span>
+                          {sortField === 'health' && (
+                            <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                          )}
+                        </div>
+                      </th>
+                      <th
+                        onClick={() => handleSortToggle('popularity')}
+                        className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span>Popularity</span>
+                          {sortField === 'popularity' && (
+                            <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                          )}
+                        </div>
+                      </th>
+                      <th
+                        onClick={() => handleSortToggle('verified_at')}
+                        className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span>Verified</span>
+                          {sortField === 'verified_at' && (
+                            <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                          )}
+                        </div>
+                      </th>
+                      <th className="py-3 px-4 font-normal text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#141414] font-mono text-[11px]">
+                    {torrentsData?.data?.map((t) => {
+                      const displayName = t.name && t.name.trim().length > 0 ? t.name : `payload-${t.infohash.slice(0, 8)}`;
+                      const isMultiFile = (t.file_count || 1) > 1;
+                      const sizeFormatted = formatBytes(t.total_size);
+                      const timeAgo = t.verified_at ? formatTime(t.verified_at) : '—';
+                      const cat = t.category;
+                      const catColor = cat ? (CATEGORY_COLORS[cat] || CATEGORY_COLORS.Other) : null;
 
-                {/* Results Counter & Active Stats */}
-                <div className="flex items-center justify-between text-xs text-[#666] px-1 font-mono">
-                  <span className="flex items-center gap-2">
-                    {torrentsLoading ? (
-                      <RefreshCw className="w-3 h-3 animate-spin text-emerald-400" />
-                    ) : (
-                      <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                    )}
-                    Showing {torrentsData?.total > 0 ? (torrentsPage - 1) * torrentsLimit + 1 : 0} –{' '}
-                    {Math.min(torrentsPage * torrentsLimit, torrentsData?.total || 0).toLocaleString()} of{' '}
-                    <strong className="text-white">{(torrentsData?.total || 0).toLocaleString()}</strong> verified payloads
-                  </span>
-                  <span>{totalCatalogedStr}</span>
-                </div>
+                      return (
+                        <tr
+                          key={t.infohash}
+                          onClick={() => handleInspectTorrent(t)}
+                          className="hover:bg-[#0f0f0f] cursor-pointer transition-colors group"
+                        >
+                          <td className="py-3 px-4">
+                            <div className="font-sans font-medium text-[#ededed] group-hover:text-white flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                              <span className="truncate max-w-md" title={displayName}>
+                                {displayName}
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-[#666] font-mono mt-0.5 pl-4">
+                              {isMultiFile ? `${t.file_count} files` : 'Single file'} · verified in cluster
+                            </div>
+                          </td>
 
-                {/* Torrents Table */}
-                <div className="rounded-xl border border-[#1e1e1e] bg-[#090909] overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead>
-                        <tr className="border-b border-[#181818] text-[#666] font-mono text-[11px]">
-                          <th
-                            onClick={() => handleSortToggle('name')}
-                            className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
-                          >
-                            <div className="flex items-center gap-1.5">
-                              <span>Payload Description</span>
-                              {sortField === 'name' && (
-                                <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
-                              )}
+                          <td className="py-3 px-4">
+                            <span className="text-[#888] group-hover:text-[#ccc] transition-colors">
+                              {t.infohash.slice(0, 10)}...{t.infohash.slice(-8)}
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {cat ? (
+                              <span className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded border ${catColor}`}>
+                                {cat}
+                                {t.category_confidence ? (
+                                  <span className="opacity-60 ml-1">
+                                    {Math.round(t.category_confidence * 100)}%
+                                  </span>
+                                ) : null}
+                              </span>
+                            ) : (
+                              <span className="text-[#444] text-[10px] font-mono">—</span>
+                            )}
+                          </td>
+
+                          <td className="py-3 px-4 text-[#aaa] whitespace-nowrap">
+                            {sizeFormatted}
+                          </td>
+
+                          <td className="py-3 px-4 text-[#888] whitespace-nowrap">
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#141414] text-[#aaa] border border-[#242424]">
+                              {t.file_count || 1}
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
+                              <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full ${
+                                    (t.health_score ?? 0) >= 70
+                                      ? 'bg-emerald-400'
+                                      : (t.health_score ?? 0) >= 40
+                                      ? 'bg-amber-400'
+                                      : 'bg-rose-500'
+                                  }`}
+                                  style={{ width: `${Math.min(100, Math.max(0, t.health_score ?? 0))}%` }}
+                                />
+                              </div>
+                              <span
+                                className={`text-[11px] font-mono font-semibold ${
+                                  (t.health_score ?? 0) >= 70
+                                    ? 'text-emerald-400'
+                                    : (t.health_score ?? 0) >= 40
+                                    ? 'text-amber-400'
+                                    : 'text-rose-400'
+                                }`}
+                              >
+                                {t.health_score ?? 0}%
+                              </span>
                             </div>
-                          </th>
-                          <th className="py-3 px-4 font-normal">Infohash (Hex)</th>
-                          <th className="py-3 px-4 font-normal">Category</th>
-                          <th
-                            onClick={() => handleSortToggle('size')}
-                            className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
-                          >
-                            <div className="flex items-center gap-1.5">
-                              <span>Size</span>
-                              {sortField === 'size' && (
-                                <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
-                              )}
+                          </td>
+
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
+                              <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-cyan-400"
+                                  style={{ width: `${Math.min(100, Math.max(0, t.popularity_score ?? 0))}%` }}
+                                />
+                              </div>
+                              <span className="text-[11px] font-mono text-cyan-400 font-semibold">
+                                {t.popularity_score ?? 0}%
+                              </span>
                             </div>
-                          </th>
-                          <th
-                            onClick={() => handleSortToggle('files')}
-                            className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
-                          >
-                            <div className="flex items-center gap-1.5">
-                              <span>Files</span>
-                              {sortField === 'files' && (
-                                <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
-                              )}
+                          </td>
+
+                          <td className="py-3 px-4 text-[#888] whitespace-nowrap">
+                            {timeAgo}
+                          </td>
+
+                          <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => copyToClipboard(generateMagnetLink(t), 'magnet')}
+                                className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white hover:border-[#444] transition-colors"
+                                title="Copy Magnet Link"
+                              >
+                                <DownloadCloud className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleInspectTorrent(t)}
+                                className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white hover:border-[#444] transition-colors"
+                                title="Inspect Metadata"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                              </button>
                             </div>
-                          </th>
-                          <th
-                            onClick={() => handleSortToggle('health')}
-                            className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
-                          >
-                            <div className="flex items-center gap-1.5">
-                              <span>Health</span>
-                              {sortField === 'health' && (
-                                <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
-                              )}
-                            </div>
-                          </th>
-                          <th
-                            onClick={() => handleSortToggle('popularity')}
-                            className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
-                          >
-                            <div className="flex items-center gap-1.5">
-                              <span>Popularity</span>
-                              {sortField === 'popularity' && (
-                                <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
-                              )}
-                            </div>
-                          </th>
-                          <th
-                            onClick={() => handleSortToggle('verified_at')}
-                            className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
-                          >
-                            <div className="flex items-center gap-1.5">
-                              <span>Verified</span>
-                              {sortField === 'verified_at' && (
-                                <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
-                              )}
-                            </div>
-                          </th>
-                          <th className="py-3 px-4 font-normal text-right">Action</th>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody className="divide-y divide-[#141414] font-mono text-[11px]">
-                        {torrentsData?.data?.map((t) => {
-                          const displayName = t.name && t.name.trim().length > 0 ? t.name : `payload-${t.infohash.slice(0, 8)}`;
-                          const isMultiFile = (t.file_count || 1) > 1;
-                          const sizeFormatted = formatBytes(t.total_size);
-                          const timeAgo = t.verified_at ? formatTime(t.verified_at) : '—';
-                          const cat = t.category;
-                          const catColor = cat ? (CATEGORY_COLORS[cat] || CATEGORY_COLORS.Other) : null;
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
 
-                          return (
-                            <tr
-                              key={t.infohash}
-                              onClick={() => handleInspectTorrent(t)}
-                              className="hover:bg-[#0f0f0f] cursor-pointer transition-colors group"
-                            >
-                              <td className="py-3 px-4">
-                                <div className="font-sans font-medium text-[#ededed] group-hover:text-white flex items-center gap-2">
-                                  <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
-                                  <span className="truncate max-w-md" title={displayName}>
-                                    {displayName}
-                                  </span>
-                                </div>
-                                <div className="text-[10px] text-[#666] font-mono mt-0.5 pl-4">
-                                  {isMultiFile ? `${t.file_count} files` : 'Single file'} · verified in cluster
-                                </div>
-                              </td>
+              {/* Pagination Footer */}
+              <div className="p-3 border-t border-[#181818] bg-[#0c0c0c] flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-mono text-[#777]">
+                <div>
+                  Page <strong className="text-white">{torrentsPage}</strong> of{' '}
+                  <strong className="text-white">{torrentsData.pages || 1}</strong>
+                </div>
 
-                              <td className="py-3 px-4">
-                                <span className="text-[#888] group-hover:text-[#ccc] transition-colors">
-                                  {t.infohash.slice(0, 10)}...{t.infohash.slice(-8)}
-                                </span>
-                              </td>
-
-                              <td className="py-3 px-4 whitespace-nowrap">
-                                {cat ? (
-                                  <span className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded border ${catColor}`}>
-                                    {cat}
-                                    {t.category_confidence ? (
-                                      <span className="opacity-60 ml-1">
-                                        {Math.round(t.category_confidence * 100)}%
-                                      </span>
-                                    ) : null}
-                                  </span>
-                                ) : (
-                                  <span className="text-[#444] text-[10px] font-mono">—</span>
-                                )}
-                              </td>
-
-                              <td className="py-3 px-4 text-[#aaa] whitespace-nowrap">
-                                {sizeFormatted}
-                              </td>
-
-                              <td className="py-3 px-4 text-[#888] whitespace-nowrap">
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#141414] text-[#aaa] border border-[#242424]">
-                                  {t.file_count || 1}
-                                </span>
-                              </td>
-
-                              <td className="py-3 px-4 whitespace-nowrap">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
-                                    <div
-                                      className={`h-full rounded-full ${
-                                        (t.health_score ?? 0) >= 70
-                                          ? 'bg-emerald-400'
-                                          : (t.health_score ?? 0) >= 40
-                                          ? 'bg-amber-400'
-                                          : 'bg-rose-500'
-                                      }`}
-                                      style={{ width: `${Math.min(100, Math.max(0, t.health_score ?? 0))}%` }}
-                                    />
-                                  </div>
-                                  <span
-                                    className={`text-[11px] font-mono font-semibold ${
-                                      (t.health_score ?? 0) >= 70
-                                        ? 'text-emerald-400'
-                                        : (t.health_score ?? 0) >= 40
-                                        ? 'text-amber-400'
-                                        : 'text-rose-400'
-                                    }`}
-                                  >
-                                    {t.health_score ?? 0}%
-                                  </span>
-                                </div>
-                              </td>
-
-                              <td className="py-3 px-4 whitespace-nowrap">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
-                                    <div
-                                      className="h-full rounded-full bg-cyan-400"
-                                      style={{ width: `${Math.min(100, Math.max(0, t.popularity_score ?? 0))}%` }}
-                                    />
-                                  </div>
-                                  <span className="text-[11px] font-mono text-cyan-400 font-semibold">
-                                    {t.popularity_score ?? 0}%
-                                  </span>
-                                </div>
-                              </td>
-
-                              <td className="py-3 px-4 text-[#888] whitespace-nowrap">
-                                {timeAgo}
-                              </td>
-
-                              <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
-                                <div className="flex items-center justify-end gap-1.5">
-                                  <button
-                                    onClick={() => copyToClipboard(generateMagnetLink(t), 'magnet')}
-                                    className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white hover:border-[#444] transition-colors"
-                                    title="Copy Magnet Link"
-                                  >
-                                    <DownloadCloud className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    onClick={() => handleInspectTorrent(t)}
-                                    className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white hover:border-[#444] transition-colors"
-                                    title="Inspect Metadata"
-                                  >
-                                    <Eye className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Pagination Footer */}
-                  <div className="p-3 border-t border-[#181818] bg-[#0c0c0c] flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-mono text-[#777]">
-                    <div>
-                      Page <strong className="text-white">{torrentsPage}</strong> of{' '}
-                      <strong className="text-white">{torrentsData.pages || 1}</strong>
-                    </div>
-
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        disabled={torrentsPage <= 1 || torrentsLoading}
-                        onClick={() => setTorrentsPage(1)}
-                        className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                        title="First Page"
-                      >
-                        <ChevronsLeft className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        disabled={torrentsPage <= 1 || torrentsLoading}
-                        onClick={() => setTorrentsPage((p) => Math.max(1, p - 1))}
-                        className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                        title="Previous Page"
-                      >
-                        <ChevronLeft className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        disabled={torrentsPage >= (torrentsData.pages || 1) || torrentsLoading}
-                        onClick={() => setTorrentsPage((p) => Math.min(torrentsData.pages, p + 1))}
-                        className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                        title="Next Page"
-                      >
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        disabled={torrentsPage >= (torrentsData.pages || 1) || torrentsLoading}
-                        onClick={() => setTorrentsPage(torrentsData.pages)}
-                        className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                        title="Last Page"
-                      >
-                        <ChevronsRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    disabled={torrentsPage <= 1 || torrentsLoading}
+                    onClick={() => setTorrentsPage(1)}
+                    className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    title="First Page"
+                  >
+                    <ChevronsLeft className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    disabled={torrentsPage <= 1 || torrentsLoading}
+                    onClick={() => setTorrentsPage((p) => Math.max(1, p - 1))}
+                    className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    title="Previous Page"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    disabled={torrentsPage >= (torrentsData.pages || 1) || torrentsLoading}
+                    onClick={() => setTorrentsPage((p) => Math.min(torrentsData.pages, p + 1))}
+                    className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    title="Next Page"
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    disabled={torrentsPage >= (torrentsData.pages || 1) || torrentsLoading}
+                    onClick={() => setTorrentsPage(torrentsData.pages)}
+                    className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    title="Last Page"
+                  >
+                    <ChevronsRight className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
-            )}
-
-            {/* Submode 2: Swarm & Content Intelligence */}
-            {explorerMode === 'analytics' && (
-              <AnalysisView
-                onInspectTorrent={handleInspectTorrent}
-                copyToClipboard={copyToClipboard}
-              />
-            )}
+            </div>
           </div>
+        )}
+
+        {/* ============================================================ */}
+        {/* TAB: CONTENT & SWARM INTELLIGENCE                            */}
+        {/* ============================================================ */}
+        {activeTab === 'content_intelligence' && (
+          <AnalysisView
+            onInspectTorrent={handleInspectTorrent}
+            copyToClipboard={copyToClipboard}
+          />
         )}
 
         {/* ============================================================ */}
