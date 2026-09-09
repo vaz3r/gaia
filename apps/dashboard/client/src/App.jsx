@@ -662,7 +662,7 @@ export default function App() {
             <nav className="flex items-center gap-1">
               {[
                 { id: 'overview', label: 'Overview' },
-                { id: 'browser', label: 'Explorer & Analytics', badge: `${metrics.totalVerified}` },
+                { id: 'browser', label: 'Explorer', badge: `${metrics.totalVerified}` },
                 {
                   id: 'classifier',
                   label: 'Classifier',

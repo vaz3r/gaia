@@ -19,7 +19,6 @@ import {
   HardDrive,
   Users,
   Activity,
-  Filter,
   CheckCircle2,
   AlertTriangle
 } from 'lucide-react';
@@ -292,43 +291,6 @@ export default function AnalysisView({ onInspectTorrent, copyToClipboard }) {
                 <span>Refresh</span>
               </button>
             </div>
-          </div>
-
-          {/* Category Filter Pills */}
-          <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-[#141414]">
-            <div className="flex items-center gap-1 text-[11px] font-mono text-[#666] mr-1">
-              <Filter className="w-3 h-3" />
-              <span>Filter:</span>
-            </div>
-            <button
-              onClick={() => handleCategorySelect('All')}
-              className={`px-2.5 py-1 rounded text-xs font-mono transition-colors ${
-                selectedCategory === 'All'
-                  ? 'bg-cyan-600 text-white font-semibold'
-                  : 'bg-[#121212] text-[#888] hover:text-white border border-[#222]'
-              }`}
-            >
-              All Categories
-            </button>
-            {categories.map((c) => {
-              const isSelected = selectedCategory === c.category;
-              return (
-                <button
-                  key={c.category}
-                  onClick={() => handleCategorySelect(c.category)}
-                  className={`px-2 py-1 rounded text-xs font-mono transition-colors flex items-center gap-1.5 ${
-                    isSelected
-                      ? 'bg-cyan-600 text-white font-semibold'
-                      : 'bg-[#121212] text-[#888] hover:text-[#ccc] border border-[#202020]'
-                  }`}
-                >
-                  <span>{c.category}</span>
-                  <span className={`text-[10px] ${isSelected ? 'text-cyan-200' : 'text-[#555]'}`}>
-                    {c.pct}%
-                  </span>
-                </button>
-              );
-            })}
           </div>
         </div>
 
