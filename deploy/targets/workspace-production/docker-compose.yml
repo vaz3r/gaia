@@ -144,6 +144,4 @@ services:
     volumes:
       - /home/${DEPLOY_USER:-core}/gaia-data/anomalies/models:/app/models_storage
       - /home/${DEPLOY_USER:-core}/gaia-data/anomalies/data:/app/data
-    depends_on:
-      - postgres
 
