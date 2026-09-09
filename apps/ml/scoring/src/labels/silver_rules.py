@@ -72,29 +72,65 @@ def check_deceptive_double_extension(files: Optional[List[Dict[str, Any]]] = Non
     return len(flagged) > 0, flagged[:5]
 
 
-def check_password_trap(files: Optional[List[Dict[str, Any]]] = None) -> Tuple[bool, List[str]]:
-    """Flag presence of password lock/unlock instructions."""
+def check_password_trap(files: Optional[List[Dict[str, Any]]] = None) -> Tuple[bool, bool, List[str]]:
+    """
+    Flag presence of password lock/unlock instructions.
+    Returns: (has_external_trap, has_local_note, trap_files)
+    """
     if not files:
-        return False, []
-    traps = []
+        return False, False, []
+    
+    external_traps = []
+    local_notes = []
+
     for f in files:
         p = _get_path_str(f).lower()
         basename = p.split("/")[-1]
-        if basename in PASSWORD_TRAP_FILENAMES or "password" in basename and (basename.endswith(".txt") or basename.endswith(".url")):
-            traps.append(basename)
-    return len(traps) > 0, traps[:3]
+        
+        # 1. External phishing / unlock link traps (.url, .lnk, .website)
+        if basename.endswith((".url", ".lnk", ".website")) and any(k in basename for k in ("password", "unlock", "key", "survey")):
+            external_traps.append(basename)
+        # 2. Local archive password note (.txt, .nfo)
+        elif basename in PASSWORD_TRAP_FILENAMES or ("password" in basename and basename.endswith(".txt")):
+            local_notes.append(basename)
+
+    return len(external_traps) > 0, len(local_notes) > 0, (external_traps + local_notes)[:3]
 
 
 def check_homoglyph_spoofing(text: Optional[str] = None) -> bool:
-    """Detect suspicious Cyrillic-Latin homoglyph mixing within single words."""
+    """
+    Detect suspicious Cyrillic-Latin homoglyph mixing within single words.
+    Correctly exempts bilingual release conventions (2хRus, томI, TVOЁ).
+    """
     if not text:
         return False
-    words = re.findall(r"[A-Za-z\u0400-\u04FF]+", text)
+
+    words = re.findall(r"[A-Za-z\u0400-\u04FF\d]+", text)
     for word in words:
-        has_latin = bool(re.search(r"[A-Za-z]", word))
-        has_cyrillic = bool(re.search(r"[\u0400-\u04FF]", word))
-        if has_latin and has_cyrillic:
+        # Exemptions for standard release tags and volume Roman numerals
+        if re.match(r"^\d+[хx][A-Za-z]+$", word, re.IGNORECASE):
+            continue
+        if re.match(r"^(том|вып|ч|часть)[IVXLCDM]+$", word, re.IGNORECASE):
+            continue
+        if word in ("TVOЁ", "DVOЁ", "MVOЁ", "БеZ"):
+            continue
+
+        latin_chars = [c for c in word if ("A" <= c <= "Z") or ("a" <= c <= "z")]
+        cyrillic_chars = [c for c in word if "\u0400" <= c <= "\u04FF"]
+
+        if not latin_chars or not cyrillic_chars:
+            continue
+
+        # Must contain at least one visual lookalike character
+        lookalikes = [c for c in cyrillic_chars if c in CYRILLIC_LOOKALIKES]
+        if not lookalikes:
+            continue
+
+        # Must be primarily Latin with minority lookalike substitution (e.g. Вdrip, Cambridgе, .prо)
+        ratio = len(latin_chars) / len(word)
+        if ratio >= 0.60:
             return True
+
     return False
 
 
@@ -125,10 +161,13 @@ def evaluate_silver_invariants(
         reasons.append(ReasonCode.DECEPTIVE_DOUBLE_EXTENSION)
         details["deceptive_extensions"] = flagged_exts
 
-    has_pw, pw_files = check_password_trap(files)
-    if has_pw:
+    has_ext_trap, has_loc_note, pw_files = check_password_trap(files)
+    if has_ext_trap:
         reasons.append(ReasonCode.PASSWORD_TRAP_SUSPECTED)
         details["password_traps"] = pw_files
+    elif has_loc_note:
+        reasons.append(ReasonCode.LOCAL_PASSWORD_NOTE)
+        details["local_password_notes"] = pw_files
 
     if check_homoglyph_spoofing(name):
         reasons.append(ReasonCode.HOMOGLYPH_PATH_SPOOFING)

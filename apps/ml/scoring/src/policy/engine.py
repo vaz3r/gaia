@@ -205,6 +205,9 @@ def evaluate_policy(
 
         if ReasonCode.PASSWORD_TRAP_SUSPECTED in triggered_reasons:
             deductions += 40
+        elif ReasonCode.LOCAL_PASSWORD_NOTE in triggered_reasons:
+            deductions += 15
+
         if ReasonCode.HOMOGLYPH_PATH_SPOOFING in triggered_reasons:
             deductions += 50
 

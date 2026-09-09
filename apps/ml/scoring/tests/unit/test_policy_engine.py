@@ -56,7 +56,8 @@ def test_malicious_fake_suppression():
 
 
 def test_password_trap_deduction():
-    res = evaluate_policy(
+    # External phishing trap
+    res_ext = evaluate_policy(
         infohash=b"\x03" * 20,
         model_safe_probability=0.95,
         name="Photoshop.2024.Crack.Pre-Activated",
@@ -64,11 +65,27 @@ def test_password_trap_deduction():
         file_count=3,
         files=[
             {"path": ["setup.exe"], "length": 1999900000},
-            {"path": ["instructions", "password.txt"], "length": 50},
+            {"path": ["instructions", "unlock_key.url"], "length": 50},
         ],
         category="Applications",
     )
 
-    assert res.integrity_score <= 55 # 95 - 40 (pw) - 20 (spam kw)
-    assert res.risk_tier in (RiskTier.REVIEW, RiskTier.SUSPICIOUS)
-    assert res.policy_action in (PolicyAction.DOWNRANK, PolicyAction.REVIEW)
+    assert res_ext.integrity_score <= 40 # 95 - 40 (pw trap) - 20 (spam kw) = 35
+    assert res_ext.policy_action in (PolicyAction.DOWNRANK, PolicyAction.REVIEW)
+
+    # Harmless local archive note
+    res_loc = evaluate_policy(
+        infohash=b"\x04" * 20,
+        model_safe_probability=1.0,
+        name="Jimmy_Awkward_Adventures",
+        total_size=2000000000,
+        file_count=2,
+        files=[
+            {"path": ["game.exe"], "length": 1999900000},
+            {"path": ["Archive password.txt"], "length": 50},
+        ],
+        category="Games",
+    )
+    assert res_loc.integrity_score == 85 # 100 - 15 = 85 (keeps SAFE tier!)
+    assert res_loc.risk_tier == RiskTier.SAFE
+    assert res_loc.policy_action == PolicyAction.ALLOW

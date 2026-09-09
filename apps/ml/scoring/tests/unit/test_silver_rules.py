@@ -36,14 +36,21 @@ def test_deceptive_double_extension():
 
 
 def test_password_trap():
-    files = [{"path": ["Instructions", "password.txt"], "length": 42}]
-    flagged, traps = check_password_trap(files)
-    assert flagged is True
-    assert "password.txt" in traps
+    files_ext = [{"path": ["Instructions", "unlock_key.url"], "length": 42}]
+    has_ext, has_loc, traps = check_password_trap(files_ext)
+    assert has_ext is True
+    assert "unlock_key.url" in traps
+
+    files_loc = [{"path": ["Instructions", "password.txt"], "length": 42}]
+    has_ext2, has_loc2, traps2 = check_password_trap(files_loc)
+    assert has_ext2 is False
+    assert has_loc2 is True
+    assert "password.txt" in traps2
 
     files_clean = [{"path": ["README.nfo"], "length": 1024}]
-    flagged_clean, _ = check_password_trap(files_clean)
-    assert flagged_clean is False
+    has_ext_clean, has_loc_clean, _ = check_password_trap(files_clean)
+    assert has_ext_clean is False
+    assert has_loc_clean is False
 
 
 def test_homoglyph_detection():
