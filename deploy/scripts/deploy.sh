@@ -43,8 +43,8 @@ set +a
 # SSH Configuration
 if [ -n "${DEPLOY_PASSWORD:-}" ]; then
     # Use sshpass for password authentication
-    SSH="sshpass -p $DEPLOY_PASSWORD ssh -o StrictHostKeyChecking=no $DEPLOY_USER@$DEPLOY_HOST"
-    SCP="sshpass -p $DEPLOY_PASSWORD scp -o StrictHostKeyChecking=no"
+    SSH="sshpass -p $DEPLOY_PASSWORD ssh -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no $DEPLOY_USER@$DEPLOY_HOST"
+    SCP="sshpass -p $DEPLOY_PASSWORD scp -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no"
 elif [ -n "${DEPLOY_SSH_KEY:-}" ]; then
     # Use SSH key authentication
     SSH="ssh -i $DEPLOY_SSH_KEY -o StrictHostKeyChecking=no $DEPLOY_USER@$DEPLOY_HOST"
