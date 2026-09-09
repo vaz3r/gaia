@@ -23,7 +23,11 @@ def get_pool() -> pool.SimpleConnectionPool:
             port=PG_PORT,
             user=POSTGRES_USER,
             password=PG_PASSWORD,
-            dbname=POSTGRES_DB
+            dbname=POSTGRES_DB,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5
         )
     return _connection_pool
 
@@ -83,16 +87,18 @@ def get_torrents(
                     rows = []
                     total = 0
             elif needs_review is True:
-                cur.execute("SELECT count(*) FROM torrents WHERE needs_review = TRUE;")
-                total = cur.fetchone()[0]
+                # Use cached metrics review queue count to avoid repetitive count queries
+                metrics = get_queue_metrics()
+                total = metrics.get("review_queue_depth", 0)
 
+                # Order by popularity_score DESC to perfectly match idx_torrents_review_queue index scan
                 cur.execute(
                     """
                     SELECT infohash, name, total_size, file_count, (files IS NOT NULL) AS has_manifest, first_seen, last_seen, verified_at,
                            category, category_confidence, needs_review, classified_at
                     FROM torrents
                     WHERE needs_review = TRUE
-                    ORDER BY popularity_score DESC NULLS LAST
+                    ORDER BY popularity_score DESC
                     OFFSET %s LIMIT %s;
                     """,
                     (offset, limit)
@@ -527,15 +533,16 @@ _metrics_cache: Optional[Dict[str, Any]] = None
 _metrics_cache_ts: float = 0.0
 
 def get_queue_metrics() -> Dict[str, Any]:
-    """Return live review queue and classification metrics with a 10s TTL cache."""
+    """Return live review queue and classification metrics with a 30s TTL cache."""
     global _metrics_cache, _metrics_cache_ts
     now = time.time()
-    if _metrics_cache is not None and (now - _metrics_cache_ts) < 10.0:
+    if _metrics_cache is not None and (now - _metrics_cache_ts) < 30.0:
         return _metrics_cache
 
     p = get_pool()
-    conn = p.getconn()
+    conn = None
     try:
+        conn = p.getconn()
         with conn.cursor() as cur:
             cur.execute("SELECT reltuples::bigint FROM pg_class WHERE relname = 'torrents';")
             total = cur.fetchone()[0] or 0
@@ -592,5 +599,13 @@ def get_queue_metrics() -> Dict[str, Any]:
             _metrics_cache = res
             _metrics_cache_ts = now
             return res
+    except Exception as e:
+        if _metrics_cache is not None:
+            return _metrics_cache
+        raise e
     finally:
-        p.putconn(conn)
+        if conn:
+            try:
+                p.putconn(conn)
+            except Exception:
+                pass

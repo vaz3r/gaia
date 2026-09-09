@@ -111,85 +111,99 @@ class ReclassifyManager:
 
     def _run_worker(self, batch_size: int, limit: Optional[int], dry_run: bool, target_count: int):
         t_start = time.time()
-        p = db.get_pool()
-        conn = None
-        cur = None
         service = TorrentClassifierService.get_instance()
 
         try:
-            conn = p.getconn()
-            cursor_name = f"reclass_bg_{int(time.time()*1000)}"
-            cur = conn.cursor(name=cursor_name)
-            cur.itersize = batch_size
-
-            query = """
-                SELECT t.infohash, t.name, t.total_size, t.file_count, t.files, t.category
-                FROM torrents t
-                WHERE t.needs_review = true
-                  AND NOT EXISTS (
-                      SELECT 1 FROM labeled_results lr WHERE lr.infohash = t.infohash
-                  )
-            """
-            if limit:
-                query += f" LIMIT {int(limit)}"
-
-            cur.execute(query)
-
             processed = 0
             accepted_count = 0
             still_flagged_count = 0
             category_shifts: Dict[str, int] = {}
-            batch_items: List[Dict[str, Any]] = []
-            old_categories: List[str] = []
+            last_infohash: Optional[bytes] = None
 
-            for r in cur:
-                if self._cancel_requested.is_set():
+            while not self._cancel_requested.is_set():
+                if limit and processed >= limit:
                     break
 
-                ih_bytes = r[0]
-                ih_hex = db.bytea_to_hex(ih_bytes)
-                name = r[1] or ""
-                total_size = r[2] or 0
-                file_count = r[3] or 1
-                files = r[4]
-                old_cat = r[5]
+                current_batch_size = batch_size
+                if limit and (processed + current_batch_size) > limit:
+                    current_batch_size = limit - processed
 
-                if isinstance(files, str):
-                    try:
-                        files = json.loads(files)
-                    except Exception:
-                        files = []
-                if isinstance(files, list):
-                    files = files[:40]
+                # Keyset pagination to prevent memory growth or long-lived named cursors
+                p = db.get_pool()
+                conn = p.getconn()
+                batch_rows = []
+                try:
+                    with conn.cursor() as cur:
+                        if last_infohash is None:
+                            query = """
+                                SELECT t.infohash, t.name, t.total_size, t.file_count, t.files, t.category
+                                FROM torrents t
+                                WHERE t.needs_review = true
+                                  AND NOT EXISTS (
+                                      SELECT 1 FROM labeled_results lr WHERE lr.infohash = t.infohash
+                                  )
+                                ORDER BY t.infohash
+                                LIMIT %s;
+                            """
+                            cur.execute(query, (current_batch_size,))
+                        else:
+                            query = """
+                                SELECT t.infohash, t.name, t.total_size, t.file_count, t.files, t.category
+                                FROM torrents t
+                                WHERE t.needs_review = true
+                                  AND t.infohash > %s
+                                  AND NOT EXISTS (
+                                      SELECT 1 FROM labeled_results lr WHERE lr.infohash = t.infohash
+                                  )
+                                ORDER BY t.infohash
+                                LIMIT %s;
+                            """
+                            cur.execute(query, (last_infohash, current_batch_size))
+                        batch_rows = cur.fetchall()
+                finally:
+                    p.putconn(conn)
 
-                batch_items.append({
-                    "infohash": ih_hex,
-                    "infohash_bytes": ih_bytes,
-                    "name": name,
-                    "total_size": total_size,
-                    "file_count": file_count,
-                    "files": files or []
-                })
-                old_categories.append(old_cat)
+                if not batch_rows:
+                    break
 
-                if len(batch_items) >= batch_size:
-                    acc, flag = self._process_batch(service, batch_items, old_categories, category_shifts, dry_run=dry_run)
-                    processed += len(batch_items)
-                    accepted_count += acc
-                    still_flagged_count += flag
-                    batch_items = []
-                    old_categories = []
-                    self._update_progress(processed, accepted_count, still_flagged_count, category_shifts, t_start, target_count)
+                # Prepare items for classification
+                batch_items: List[Dict[str, Any]] = []
+                old_categories: List[str] = []
 
-            if batch_items and not self._cancel_requested.is_set():
+                for r in batch_rows:
+                    ih_bytes = r[0]
+                    last_infohash = ih_bytes
+                    ih_hex = db.bytea_to_hex(ih_bytes)
+                    name = r[1] or ""
+                    total_size = r[2] or 0
+                    file_count = r[3] or 1
+                    files = r[4]
+                    old_cat = r[5]
+
+                    if isinstance(files, str):
+                        try:
+                            files = json.loads(files)
+                        except Exception:
+                            files = []
+                    if isinstance(files, list):
+                        files = files[:40]
+
+                    batch_items.append({
+                        "infohash": ih_hex,
+                        "infohash_bytes": ih_bytes,
+                        "name": name,
+                        "total_size": total_size,
+                        "file_count": file_count,
+                        "files": files or []
+                    })
+                    old_categories.append(old_cat)
+
+                # Process batch through model
                 acc, flag = self._process_batch(service, batch_items, old_categories, category_shifts, dry_run=dry_run)
                 processed += len(batch_items)
                 accepted_count += acc
                 still_flagged_count += flag
                 self._update_progress(processed, accepted_count, still_flagged_count, category_shifts, t_start, target_count)
-
-            cur.close()
-            conn.commit()
 
             with self._lock:
                 total_elapsed = time.time() - t_start
@@ -209,18 +223,6 @@ class ReclassifyManager:
             with self._lock:
                 self._status["is_running"] = False
                 self._status["last_error"] = str(e)
-        finally:
-            if cur:
-                try:
-                    cur.close()
-                except Exception:
-                    pass
-            if conn:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                p.putconn(conn)
 
     def _update_progress(
         self,
@@ -270,11 +272,14 @@ class ReclassifyManager:
             else:
                 flagged += 1
 
+            meta = res.get("meta", {})
+
             update_records.append({
                 "infohash": item["infohash_bytes"],
                 "category": cat,
                 "category_confidence": conf,
                 "needs_review": needs_review,
+                "classification_meta": json.dumps(meta) if meta else None,
             })
 
         if not dry_run and update_records:
@@ -293,17 +298,19 @@ class ReclassifyManager:
                         category = v.category,
                         category_confidence = v.category_confidence,
                         needs_review = v.needs_review,
-                        classified_at = now()
-                    FROM (VALUES %s) AS v(infohash, category, category_confidence, needs_review)
+                        classified_at = now(),
+                        classification_meta = v.classification_meta::jsonb
+                    FROM (VALUES %s) AS v(infohash, category, category_confidence, needs_review, classification_meta)
                     WHERE t.infohash = v.infohash;
                 """
-                template = "(%s, %s, %s, %s)"
+                template = "(%s, %s, %s, %s, %s)"
                 vals = [
                     (
                         r["infohash"],
                         r["category"],
                         r["category_confidence"],
-                        r["needs_review"]
+                        r["needs_review"],
+                        r["classification_meta"]
                     )
                     for r in records
                 ]
