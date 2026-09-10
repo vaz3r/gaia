@@ -211,46 +211,56 @@ app.get('/api/torrents', async (req, res) => {
         .filter((t) => t.length > 1 || /^\d+$/.test(t));
 
       if (tokens.length > 1) {
-        // Multi-word search: all significant tokens must match (GIN trigram accelerated)
+        // Multi-word search: AND-chain all tokens via GIN trigram index (fast).
+        // IMPORTANT: skip fuzzy similarity operator (name % ?) on multi-word — on 2.9M rows
+        // it causes a 69k-row scan costing 800ms+ alone, making queries take 6+ seconds.
         const tokenClauses = [];
         tokens.forEach((tok) => {
           params.push(`%${escapeLike(tok)}%`);
           tokenClauses.push(`name ILIKE $${params.length} ESCAPE '\\'`);
         });
 
-        // Exact phrase parameter
+        whereClauses.push(`(${tokenClauses.join(' AND ')})`);
+
+        // Exact phrase parameter for ORDER BY ranking boost only (pushed after WHERE is set)
         params.push(`%${escapeLike(search)}%`);
         const fullPhraseParam = `$${params.length}`;
-
-        // Trigram similarity parameter
-        params.push(search);
-        const simParam = `$${params.length}`;
-
-        whereClauses.push(`((${tokenClauses.join(' AND ')}) OR name ILIKE ${fullPhraseParam} ESCAPE '\\' OR name % ${simParam})`);
+        // Track number of WHERE-only params so count query can use a subset
+        const whereParamCount = params.length - 1; // all except the last fullPhrase param
 
         if (!sort) {
           orderBy = `ORDER BY 
             CASE 
               WHEN name ILIKE ${fullPhraseParam} ESCAPE '\\' THEN 200
-              WHEN (${tokenClauses.join(' AND ')}) THEN 100
-              ELSE 50
+              ELSE 100
             END DESC,
-            similarity(name, ${simParam}) DESC,
             verified_at DESC`;
         }
+
+        // Store where-only param slice for count query
+        params._whereCount = whereParamCount;
       } else {
-        // Single word or short search
+        // Single word search: ILIKE is fast via GIN index.
+        // Add fuzzy similarity only for longer tokens (≥4 chars) where it adds value.
         params.push(`%${escapeLike(search)}%`);
         const likeParam = `$${params.length}`;
-        params.push(search);
-        const simParam = `$${params.length}`;
+        const singleToken = tokens[0] || search;
 
-        whereClauses.push(`(name ILIKE ${likeParam} ESCAPE '\\' OR name % ${simParam})`);
-        if (!sort) {
-          orderBy = `ORDER BY 
-            CASE WHEN name ILIKE ${likeParam} ESCAPE '\\' THEN 100 ELSE 50 END DESC,
-            similarity(name, ${simParam}) DESC,
-            verified_at DESC`;
+        if (singleToken.length >= 4) {
+          params.push(singleToken);
+          const simParam = `$${params.length}`;
+          whereClauses.push(`(name ILIKE ${likeParam} ESCAPE '\\' OR name % ${simParam})`);
+          if (!sort) {
+            orderBy = `ORDER BY 
+              CASE WHEN name ILIKE ${likeParam} ESCAPE '\\' THEN 100 ELSE 50 END DESC,
+              similarity(name, ${simParam}) DESC,
+              verified_at DESC`;
+          }
+        } else {
+          whereClauses.push(`name ILIKE ${likeParam} ESCAPE '\\'`);
+          if (!sort) {
+            orderBy = `ORDER BY verified_at DESC`;
+          }
         }
       }
     }
@@ -277,8 +287,21 @@ app.get('/api/torrents', async (req, res) => {
         totalCount = parseInt(estRes.rows[0]?.total || 0, 10);
       }
     } else {
-      const totalRes = await query(`SELECT count(*) AS total FROM torrents ${where}`, params);
-      totalCount = parseInt(totalRes.rows[0].total, 10);
+      // Smart count: avoid full COUNT(*) sequential scan.
+      const resultCount = rowsRes.rows.length;
+      if (resultCount < limit) {
+        // Fewer results than page size = we're on last page, compute exact
+        totalCount = offset + resultCount;
+      } else {
+        // Use WHERE-only params (exclude ORDER BY-only params like fullPhraseParam)
+        const whereParams = params._whereCount !== undefined ? params.slice(0, params._whereCount) : params;
+        // Cap at 10000 to avoid seq scan; paginator will show "10000+" if needed
+        const totalRes = await query(
+          `SELECT count(*) AS total FROM (SELECT 1 FROM torrents ${where} LIMIT 10000) sub`,
+          whereParams
+        );
+        totalCount = parseInt(totalRes.rows[0].total, 10);
+      }
     }
 
     res.json({
