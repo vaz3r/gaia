@@ -327,7 +327,7 @@ app.post('/api/torrents/:infohash/refresh-health', async (req, res) => {
   }
   try {
     const r = await query(
-      `SELECT encode(t.infohash, 'hex') AS infohash, t.last_seen, t.swarm_peers, t.health_score, t.total_seen
+      `SELECT encode(t.infohash, 'hex') AS infohash, t.last_seen, t.swarm_peers, t.health_score, t.total_seen, t.seed_confirmed
        FROM torrents t
        WHERE t.infohash = decode($1, 'hex')`,
       [ih]
@@ -335,11 +335,14 @@ app.post('/api/torrents/:infohash/refresh-health', async (req, res) => {
     if (r.rows.length === 0) return res.status(404).json({ error: 'not found' });
 
     const row = r.rows[0];
-    const lastSeenDate = new Date(row.last_seen);
+    const lastSeenDate = row.last_seen ? new Date(row.last_seen) : new Date();
     const now = new Date();
     const hoursDecay = Math.max(0, (now.getTime() - lastSeenDate.getTime()) / 3600000);
     const peersCount = row.swarm_peers || 0;
-    const seedConfirmed = peersCount > 0 && hoursDecay <= 48.0;
+    
+    // Seed is confirmed if swarm has active peers, or previously confirmed within 14-day window
+    const hasPeers = peersCount > 0;
+    const seedConfirmed = hasPeers || (Boolean(row.seed_confirmed) && hoursDecay <= 336.0);
 
     // Popularity formulation
     const totalSeen = Number(row.total_seen || 1);
@@ -349,13 +352,13 @@ app.post('/api/torrents/:infohash/refresh-health', async (req, res) => {
     const newPop = Math.min(100, Math.max(0, Math.round(100 * (0.40 * popBase + 0.35 * vel + 0.25 * pSat))));
 
     // Calibrated Swarm Health & Availability (Unified Formulation)
-    // S_seed: 50 pts if confirmed active seed present
+    // S_seed: 50 pts if confirmed active seed or peers present
     const sSeed = seedConfirmed ? 50 : 0;
     // S_peer: 0-30 pts logarithmic peer saturation
-    const sPeer = peersCount > 0 ? Math.min(30, Math.floor(6.0 * Math.log2(1.0 + peersCount))) : 0;
-    // S_recency: 0-20 pts decay curve (72h half-life)
+    const sPeer = hasPeers ? Math.min(30, Math.floor(6.0 * Math.log2(1.0 + peersCount))) : 0;
+    // S_recency: 0-20 pts decay curve (14-day exponential half-life)
     const deltaDays = hoursDecay / 24.0;
-    const sRecency = row.last_seen ? Math.floor(20.0 * Math.exp(-deltaDays / 7.0)) : 0;
+    const sRecency = row.last_seen ? Math.max(2, Math.floor(20.0 * Math.exp(-deltaDays / 14.0))) : 0;
     const unifiedHealth = Math.min(100, Math.max(0, sSeed + sPeer + sRecency));
 
     let newAvailState = 'UNKNOWN';
