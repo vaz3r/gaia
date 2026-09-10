@@ -227,6 +227,10 @@ export default function App() {
     }
   };
 
+  // Diagnostics & Routing state
+  const [logFilter, setLogFilter] = useState('ALL');
+  const [routingSecurity, setRoutingSecurity] = useState(null);
+
   // Realtime tick pulse
   const [tick, setTick] = useState(0);
   useEffect(() => {
