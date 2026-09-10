@@ -814,54 +814,60 @@ export default function App() {
             </nav>
           </div>
 
-          {/* Right Controls */}
-          <div className="flex items-center gap-3">
-            {/* Operational Incident Status Pill (gaia-anomaly-worker) */}
-            <button
-              onClick={() => {
-                setActiveTab('diagnostics');
-                setSelectedTorrent(null);
-                setMoreMenuOpen(false);
-              }}
-              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border transition-colors ${
-                alertsSummary?.active_critical > 0
-                  ? 'bg-rose-950/80 border-rose-700 text-rose-300 hover:bg-rose-900'
-                  : alertsSummary?.active_warning > 0
-                  ? 'bg-amber-950/80 border-amber-700 text-amber-300 hover:bg-amber-900'
-                  : 'bg-[#0c0c0c] border-[#222] text-[#888] hover:text-white hover:border-[#333]'
-              }`}
-              title="Operational health monitor (gaia-anomaly-worker)"
-            >
-              <ShieldAlert className={`w-3 h-3 ${
-                alertsSummary?.active_critical > 0
-                  ? 'text-rose-400 animate-pulse'
-                  : alertsSummary?.active_warning > 0
-                  ? 'text-amber-400'
-                  : 'text-emerald-400'
-              }`} />
-              <span className="text-white font-medium">
-                {alertsSummary?.active > 0
-                  ? `${alertsSummary.active} ${alertsSummary.active === 1 ? 'incident' : 'incidents'}`
-                  : 'Operational'}
-              </span>
-            </button>
+          {/* Right Controls: Unified Minimal Status Capsule */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 bg-[#0c0c0c] border border-[#222] hover:border-[#333] px-2.5 py-1 rounded-full text-[11px] font-mono transition-colors">
+              {/* Incidents / Health Segment */}
+              <button
+                onClick={() => {
+                  setActiveTab('diagnostics');
+                  setSelectedTorrent(null);
+                  setMoreMenuOpen(false);
+                }}
+                className="flex items-center gap-1.5 hover:text-white transition-colors"
+                title={alertsSummary?.active > 0 ? `${alertsSummary.active} active incidents — click to view in Diagnostics` : 'Operational — click to view Diagnostics'}
+              >
+                <ShieldAlert className={`w-3 h-3 ${
+                  alertsSummary?.active_critical > 0
+                    ? 'text-rose-400 animate-pulse'
+                    : alertsSummary?.active_warning > 0
+                    ? 'text-amber-400'
+                    : 'text-emerald-400'
+                }`} />
+                <span className={
+                  alertsSummary?.active_critical > 0
+                    ? 'text-rose-400 font-semibold'
+                    : alertsSummary?.active_warning > 0
+                    ? 'text-amber-300 font-medium'
+                    : 'text-emerald-400 font-medium'
+                }>
+                  {alertsSummary?.active > 0
+                    ? `${alertsSummary.active} ${alertsSummary.active === 1 ? 'incident' : 'incidents'}`
+                    : 'Operational'}
+                </span>
+              </button>
 
-            {/* Timezone Indicator */}
-            <div className="hidden sm:flex items-center gap-1.5 bg-[#0c0c0c] border border-[#222] px-2.5 py-1 rounded-full text-[11px] font-mono text-[#888]">
-              <Clock className="w-3 h-3 text-[#666]" />
-              <span className="text-[#ededed]">{formatDubaiTimeHM(Date.now())}</span>
-              <span className="text-[#555]">GST (UTC+4)</span>
-            </div>
+              <span className="text-[#333]">│</span>
 
-            {/* Live SSE Stream Indicator */}
-            <div className="flex items-center gap-2 bg-[#0c0c0c] border border-[#222] px-2.5 py-1 rounded-full text-[11px] text-[#888]">
-              <span className="relative flex h-2 w-2">
-                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-60 ${streamConnected ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
-                <span className={`relative inline-flex rounded-full h-2 w-2 ${streamConnected ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
+              {/* Timezone Segment */}
+              <span className="flex items-center gap-1 text-[#888]" title="Gulf Standard Time (UTC+4)">
+                <Clock className="w-2.5 h-2.5 text-[#555]" />
+                <span className="text-[#ddd]">{formatDubaiTimeHM(Date.now())}</span>
+                <span className="text-[#555] hidden md:inline">GST</span>
               </span>
-              <span className="text-[#ededed] font-mono">{streamConnected ? 'live stream' : 'polling'}</span>
-              <span className="text-[#444]">·</span>
-              <span className="font-mono text-[#666]">{metrics.latency}ms</span>
+
+              <span className="text-[#333]">│</span>
+
+              {/* Live SSE / Polling & Latency Segment */}
+              <span className="flex items-center gap-1.5 text-[#888]" title={`Telemetry stream: ${streamConnected ? 'connected (SSE push)' : 'polling'}`}>
+                <span className="relative flex h-1.5 w-1.5">
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-60 ${streamConnected ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
+                  <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${streamConnected ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
+                </span>
+                <span className="text-[#aaa] hidden sm:inline">{streamConnected ? 'live' : 'poll'}</span>
+                <span className="text-[#555]">·</span>
+                <span className="text-[#777]">{metrics.latency}ms</span>
+              </span>
             </div>
           </div>
         </div>
@@ -2662,8 +2668,7 @@ export default function App() {
           <ClassifierView
             copyToClipboard={copyToClipboard}
             onInspectTorrent={(t) => {
-              setSelectedTorrent(t);
-              setActiveTab('browser');
+              handleInspectTorrent(t);
             }}
           />
         )}

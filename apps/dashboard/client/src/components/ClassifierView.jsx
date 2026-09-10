@@ -30,6 +30,7 @@ import {
   ShieldAlert,
   CheckCircle,
   Ban,
+  Eye,
 } from 'lucide-react';
 import { api, magnetFrom } from '../api.js';
 import { formatBytes, formatNum, formatTime, formatDubaiDate } from '../utils.js';
@@ -662,13 +663,17 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                           : 'bg-emerald-950/60 text-emerald-300 border-emerald-800/50';
 
                       return (
-                        <tr key={item.infohash} className="hover:bg-[#0c0c0c] transition-colors">
+                        <tr
+                          key={item.infohash}
+                          onClick={() => onInspectTorrent && onInspectTorrent(item)}
+                          className="hover:bg-[#0c0c0c] cursor-pointer transition-colors group"
+                        >
                           <td className="py-3 px-4 max-w-sm">
-                            <div className="text-white font-sans truncate font-medium" title={item.name}>
+                            <div className="text-white font-sans truncate font-medium group-hover:text-white" title={item.name}>
                               {item.name || `payload-${item.infohash.slice(0, 8)}`}
                             </div>
-                            <div className="text-[10px] text-[#555] flex items-center gap-2 mt-0.5">
-                              <span>{item.infohash.slice(0, 12)}...</span>
+                            <div className="text-[10px] text-[#555] flex items-center gap-2 mt-0.5 font-mono">
+                              <span className="text-[#888]">{item.infohash.slice(0, 12)}...</span>
                               <span>·</span>
                               <span>{item.category || 'Unclassified'}</span>
                               <span>·</span>
@@ -716,8 +721,16 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
                             {item.decision_source || 'MODEL'}
                           </td>
 
-                          <td className="py-3 px-4 text-right whitespace-nowrap">
+                          <td className="py-3 px-4 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => onInspectTorrent && onInspectTorrent(item)}
+                                className="p-1 rounded bg-[#141414] hover:bg-[#202020] border border-[#262626] text-[#888] hover:text-white transition-colors mr-1"
+                                title="Inspect Full Metadata & Files"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                              </button>
+
                               <button
                                 disabled={isActing}
                                 onClick={() => handleScoringOverride(item.infohash, 'ALLOW', 'Manual clearance via Adjudication Studio')}
