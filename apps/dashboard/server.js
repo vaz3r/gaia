@@ -61,6 +61,9 @@ app.get('/api/torrents', async (req, res) => {
   try {
     const search = (req.query.search || '').trim();
     const category = (req.query.category || '').trim();
+    const risk = (req.query.risk || '').trim().toUpperCase();
+    const availability = (req.query.availability || '').trim().toUpperCase();
+    const policy = (req.query.policy || '').trim().toUpperCase();
     const sort = SORTS[req.query.sort] || null;
     const orderDir = req.query.order === 'asc' ? 'ASC' : 'DESC';
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
@@ -68,6 +71,9 @@ app.get('/api/torrents', async (req, res) => {
     const offset = (page - 1) * limit;
     const hasSearch = search.length > 0;
     const hasCategory = category.length > 0;
+    const hasRisk = ['SAFE', 'REVIEW', 'SUSPICIOUS', 'BLOCKED'].includes(risk);
+    const hasAvailability = ['ACTIVE', 'DEGRADED', 'STALE', 'UNKNOWN'].includes(availability);
+    const hasPolicy = ['ALLOW', 'DOWNRANK', 'REVIEW', 'SUPPRESS'].includes(policy);
 
     const params = [];
     const whereClauses = [];
@@ -76,6 +82,21 @@ app.get('/api/torrents', async (req, res) => {
     if (hasCategory) {
       params.push(category);
       whereClauses.push(`category = $${params.length}`);
+    }
+
+    if (hasRisk) {
+      params.push(risk);
+      whereClauses.push(`risk_tier = $${params.length}`);
+    }
+
+    if (hasAvailability) {
+      params.push(availability);
+      whereClauses.push(`availability_state = $${params.length}`);
+    }
+
+    if (hasPolicy) {
+      params.push(policy);
+      whereClauses.push(`policy_action = $${params.length}`);
     }
 
     if (hasSearch) {
@@ -144,7 +165,7 @@ app.get('/api/torrents', async (req, res) => {
       params
     );
     let totalCount = 0;
-    if (!hasSearch && !hasCategory) {
+    if (!hasSearch && !hasCategory && !hasRisk && !hasAvailability && !hasPolicy) {
       if (statsCache.data?.total_torrents) {
         totalCount = statsCache.data.total_torrents;
       } else {
@@ -180,7 +201,9 @@ app.get('/api/torrents/:infohash', async (req, res) => {
               t.file_count, t.files, t.fetch_attempts, t.verified_at,
               t.first_seen, t.last_seen, t.total_seen,
               t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed, t.last_health_check,
-              t.category, t.category_confidence, t.needs_review, t.classified_at, t.classification_meta
+              t.category, t.category_confidence, t.needs_review, t.classified_at, t.classification_meta,
+              t.integrity_score, t.policy_action, t.risk_tier, t.decision_source,
+              t.metadata_quality_score, t.availability_score, t.availability_state, t.scored_at
        FROM torrents t
        WHERE t.infohash = decode($1, 'hex')`,
       [ih]
@@ -1282,6 +1305,77 @@ app.get('/api/scoring/stats', async (req, res) => {
     res.json(countsRes.rows[0]);
   } catch (err) {
     console.error('Error fetching scoring stats:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// OPERATIONAL ALERTS & ANOMALIES API (apps/ml/anomalies)
+// Fetches telemetry incidents recorded by gaia-anomaly-worker
+// ============================================================
+// GET /api/alerts?status=all|active|resolved&limit=25
+app.get('/api/alerts', async (req, res) => {
+  try {
+    const status = (req.query.status || 'all').toLowerCase();
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25));
+
+    let whereClause = '';
+    if (status === 'active') {
+      whereClause = 'WHERE resolved_at IS NULL';
+    } else if (status === 'resolved') {
+      whereClause = 'WHERE resolved_at IS NOT NULL';
+    }
+
+    const [alertsRes, countRes] = await Promise.all([
+      query(`
+        SELECT id, ts, anomaly_score, severity, incident_type, confidence, top_features, guidance, resolved_at
+        FROM operational_alerts
+        ${whereClause}
+        ORDER BY ts DESC
+        LIMIT $1
+      `, [limit]),
+      query(`
+        SELECT 
+          COUNT(*) AS total,
+          COUNT(*) FILTER (WHERE resolved_at IS NULL) AS active,
+          COUNT(*) FILTER (WHERE resolved_at IS NULL AND severity = 'CRITICAL') AS active_critical,
+          COUNT(*) FILTER (WHERE resolved_at IS NULL AND severity = 'WARNING') AS active_warning
+        FROM operational_alerts
+      `)
+    ]);
+
+    res.json({
+      alerts: alertsRes.rows,
+      summary: countRes.rows[0] || { total: 0, active: 0, active_critical: 0, active_warning: 0 }
+    });
+  } catch (err) {
+    console.error('Error fetching operational alerts:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/alerts/:id/resolve
+app.post('/api/alerts/:id/resolve', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id) || id <= 0) {
+      return res.status(400).json({ error: 'Valid numeric alert ID is required' });
+    }
+
+    const r = await query(`
+      UPDATE operational_alerts
+      SET resolved_at = now()
+      WHERE id = $1
+      RETURNING id, ts, severity, incident_type, resolved_at
+    `, [id]);
+
+    if (r.rows.length === 0) {
+      return res.status(404).json({ error: 'Alert not found' });
+    }
+
+    res.json({ success: true, alert: r.rows[0] });
+  } catch (err) {
+    console.error('Error resolving operational alert:', err);
     res.status(500).json({ error: err.message });
   }
 });

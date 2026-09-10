@@ -46,7 +46,10 @@ import {
   ArrowUpDown,
   Flame,
   BarChart3,
-  Tag
+  Tag,
+  ShieldAlert,
+  Ban,
+  AlertTriangle
 } from 'lucide-react';
 import { api, loadTrackers, magnetFrom } from './api.js';
 import { formatBytes, formatNum, formatTime, formatUptime, formatDubaiDate, formatDubaiTimeHM } from './utils.js';
@@ -154,9 +157,75 @@ export default function App() {
     }
   };
 
-  // Diagnostics state
-  const [logFilter, setLogFilter] = useState('ALL');
-  const [routingSecurity, setRoutingSecurity] = useState(null);
+  // Operational Alerts state (gaia-anomaly-worker)
+  const [alertsSummary, setAlertsSummary] = useState(null);
+  const [alertsList, setAlertsList] = useState([]);
+  const [alertsLoading, setAlertsLoading] = useState(false);
+  const [resolvingAlertId, setResolvingAlertId] = useState(null);
+
+  // Risk & Policy Filters for Explorer
+  const [riskFilter, setRiskFilter] = useState('');
+
+  // Human scoring override handler for Inspector Modal
+  const [modalOverriding, setModalOverriding] = useState(false);
+  const handleModalScoreOverride = async (infohash, action) => {
+    if (!infohash || modalOverriding) return;
+    setModalOverriding(true);
+    try {
+      const res = await api('/api/scoring/override', {
+        method: 'POST',
+        body: JSON.stringify({ infohash, action, notes: 'Inspector modal manual triage' })
+      });
+      if (res.success) {
+        setSelectedTorrent((prev) => prev && prev.infohash === infohash ? {
+          ...prev,
+          risk_tier: action === 'ALLOW' ? 'SAFE' : action === 'SUPPRESS' ? 'BLOCKED' : 'REVIEW',
+          policy_action: action,
+          decision_source: 'MANUAL'
+        } : prev);
+        setTorrentsData((prev) => ({
+          ...prev,
+          data: prev.data.map((t) => t.infohash === infohash ? {
+            ...t,
+            risk_tier: action === 'ALLOW' ? 'SAFE' : action === 'SUPPRESS' ? 'BLOCKED' : 'REVIEW',
+            policy_action: action,
+            decision_source: 'MANUAL'
+          } : t)
+        }));
+      }
+    } catch (err) {
+      alert(`Override failed: ${err.message}`);
+    } finally {
+      setModalOverriding(false);
+    }
+  };
+
+  const fetchAlerts = async () => {
+    setAlertsLoading(true);
+    try {
+      const res = await api('/api/alerts');
+      if (res?.summary) setAlertsSummary(res.summary);
+      if (res?.alerts) setAlertsList(res.alerts);
+    } catch (err) {
+      console.warn('Failed to load operational alerts:', err.message);
+    } finally {
+      setAlertsLoading(false);
+    }
+  };
+
+  const handleResolveAlert = async (id) => {
+    setResolvingAlertId(id);
+    try {
+      const res = await api(`/api/alerts/${id}/resolve`, { method: 'POST' });
+      if (res?.success) {
+        fetchAlerts();
+      }
+    } catch (err) {
+      alert(`Failed to resolve alert: ${err.message}`);
+    } finally {
+      setResolvingAlertId(null);
+    }
+  };
 
   // Realtime tick pulse
   const [tick, setTick] = useState(0);
@@ -235,6 +304,7 @@ export default function App() {
         if (res?.review_queue_depth != null) setClassifierReviewCount(res.review_queue_depth);
         if (res?.total_classified != null) setClassifierTotalClassified(res.total_classified);
       }).catch(() => {});
+      fetchAlerts();
     };
 
     fetchSupplemental();
@@ -340,6 +410,7 @@ export default function App() {
     }
     if (searchQuery) params.set('search', searchQuery);
     if (categoryFilter) params.set('category', categoryFilter);
+    if (riskFilter) params.set('risk', riskFilter);
 
     api(`/api/torrents?${params.toString()}`)
       .then((res) => {
@@ -356,7 +427,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [torrentsPage, torrentsLimit, sortField, sortOrder, searchQuery, categoryFilter]);
+  }, [torrentsPage, torrentsLimit, sortField, sortOrder, searchQuery, categoryFilter, riskFilter]);
 
   // Server-side Stable Peers data fetch
   useEffect(() => {
@@ -741,6 +812,36 @@ export default function App() {
 
           {/* Right Controls */}
           <div className="flex items-center gap-3">
+            {/* Operational Incident Status Pill (gaia-anomaly-worker) */}
+            <button
+              onClick={() => {
+                setActiveTab('diagnostics');
+                setSelectedTorrent(null);
+                setMoreMenuOpen(false);
+              }}
+              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border transition-colors ${
+                alertsSummary?.active_critical > 0
+                  ? 'bg-rose-950/80 border-rose-700 text-rose-300 hover:bg-rose-900'
+                  : alertsSummary?.active_warning > 0
+                  ? 'bg-amber-950/80 border-amber-700 text-amber-300 hover:bg-amber-900'
+                  : 'bg-[#0c0c0c] border-[#222] text-[#888] hover:text-white hover:border-[#333]'
+              }`}
+              title="Operational health monitor (gaia-anomaly-worker)"
+            >
+              <ShieldAlert className={`w-3 h-3 ${
+                alertsSummary?.active_critical > 0
+                  ? 'text-rose-400 animate-pulse'
+                  : alertsSummary?.active_warning > 0
+                  ? 'text-amber-400'
+                  : 'text-emerald-400'
+              }`} />
+              <span className="text-white font-medium">
+                {alertsSummary?.active > 0
+                  ? `${alertsSummary.active} ${alertsSummary.active === 1 ? 'incident' : 'incidents'}`
+                  : 'Operational'}
+              </span>
+            </button>
+
             {/* Timezone Indicator */}
             <div className="hidden sm:flex items-center gap-1.5 bg-[#0c0c0c] border border-[#222] px-2.5 py-1 rounded-full text-[11px] font-mono text-[#888]">
               <Clock className="w-3 h-3 text-[#666]" />
@@ -1249,6 +1350,24 @@ export default function App() {
                   </select>
                 </div>
 
+                {/* Risk Tier Filter */}
+                <div className="flex items-center gap-1.5 font-mono text-xs">
+                  <span className="text-[#666]">Risk:</span>
+                  <select
+                    value={riskFilter}
+                    onChange={(e) => {
+                      setRiskFilter(e.target.value);
+                      setTorrentsPage(1);
+                    }}
+                    className="bg-[#000] border border-[#222] rounded-lg px-2.5 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+                  >
+                    <option value="">All Tiers</option>
+                    <option value="SAFE">Safe (Allowed)</option>
+                    <option value="REVIEW">Review (Flagged)</option>
+                    <option value="BLOCKED">Blocked (Toxic)</option>
+                  </select>
+                </div>
+
                 {/* Sort Order Selector */}
                 <div className="flex items-center gap-1.5 font-mono text-xs">
                   <span className="text-[#666]">Sort:</span>
@@ -1371,6 +1490,7 @@ export default function App() {
                           )}
                         </div>
                       </th>
+                      <th className="py-3 px-4 font-normal">Trust & Avail</th>
                       <th
                         onClick={() => handleSortToggle('verified_at')}
                         className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
@@ -1482,6 +1602,31 @@ export default function App() {
                               <span className="text-[11px] font-mono text-cyan-400 font-semibold">
                                 {t.popularity_score ?? 0}%
                               </span>
+                            </div>
+                          </td>
+
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
+                                t.risk_tier === 'BLOCKED'
+                                  ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
+                                  : t.risk_tier === 'REVIEW'
+                                  ? 'bg-amber-950/60 text-amber-300 border-amber-800/50'
+                                  : 'bg-emerald-950/40 text-emerald-400 border-emerald-800/40'
+                              }`}>
+                                {t.risk_tier || 'SAFE'}
+                              </span>
+                              {t.availability_state && (
+                                <span className={`text-[9px] font-mono px-1 py-0.5 rounded border ${
+                                  t.availability_state === 'ACTIVE'
+                                    ? 'bg-emerald-950/30 text-emerald-400 border-emerald-800/30'
+                                    : t.availability_state === 'SPARSE'
+                                    ? 'bg-amber-950/30 text-amber-300 border-amber-800/30'
+                                    : 'bg-rose-950/30 text-rose-400 border-rose-800/30'
+                                }`}>
+                                  {t.availability_state}
+                                </span>
+                              )}
                             </div>
                           </td>
 
@@ -2173,6 +2318,149 @@ export default function App() {
         {/* ============================================================ */}
         {activeTab === 'diagnostics' && (
           <div className="space-y-6">
+            {/* Operational Incident Radar (gaia-anomaly-worker) */}
+            <div className="rounded-xl border border-[#1e1e1e] bg-[#090909] overflow-hidden">
+              <div className="p-4 border-b border-[#181818] bg-[#0c0c0c] flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <ShieldAlert className={`w-4 h-4 ${
+                    alertsSummary?.active > 0 ? 'text-amber-400' : 'text-emerald-400'
+                  }`} />
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-xs font-semibold text-white font-mono tracking-tight">
+                        Operational Incident Radar
+                      </h3>
+                      <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-[#161616] text-[#888] border border-[#262626]">
+                        gaia-anomaly-worker
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[#666] mt-0.5">
+                      Real-time telemetry anomaly detection (5 failure modes: Cascades, DHT Collapse, Saturation, DB Spikes, Restarts)
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 font-mono text-xs">
+                  <span className={`px-2 py-0.5 rounded text-[10px] border font-semibold ${
+                    alertsSummary?.active_critical > 0
+                      ? 'bg-rose-950/60 border-rose-800/60 text-rose-300'
+                      : alertsSummary?.active_warning > 0
+                      ? 'bg-amber-950/60 border-amber-800/60 text-amber-300'
+                      : 'bg-emerald-950/60 border-emerald-800/60 text-emerald-300'
+                  }`}>
+                    {alertsSummary?.active > 0
+                      ? `${alertsSummary.active} Active ${alertsSummary.active === 1 ? 'Incident' : 'Incidents'}`
+                      : '✓ All Telemetry Normal'}
+                  </span>
+                  <button
+                    onClick={fetchAlerts}
+                    className="p-1 text-[#666] hover:text-white transition-colors"
+                    title="Refresh alerts"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${alertsLoading ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {alertsList && alertsList.length > 0 ? (
+                <div className="divide-y divide-[#141414] font-mono text-xs">
+                  {alertsList.map((alert) => {
+                    const isResolved = Boolean(alert.resolved_at);
+                    const isResolving = resolvingAlertId === alert.id;
+                    const sevColor =
+                      alert.severity === 'CRITICAL'
+                        ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
+                        : 'bg-amber-950/60 text-amber-300 border-amber-800/50';
+
+                    return (
+                      <div
+                        key={alert.id}
+                        className={`p-4 transition-colors ${
+                          isResolved ? 'opacity-50 bg-[#060606]' : 'hover:bg-[#0c0c0c]'
+                        }`}
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${sevColor}`}>
+                              {alert.severity}
+                            </span>
+                            <span className="text-white font-semibold text-xs">
+                              {alert.incident_type}
+                            </span>
+                            <span className="text-[10px] text-[#666]">
+                              (Anomaly Score: {(alert.anomaly_score * 100).toFixed(0)}% · Conf: {(alert.confidence * 100).toFixed(0)}%)
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-3 text-[11px] text-[#666]">
+                            <span>{formatDubaiDate(alert.ts)}</span>
+                            {!isResolved && (
+                              <button
+                                disabled={isResolving}
+                                onClick={() => handleResolveAlert(alert.id)}
+                                className="px-2.5 py-1 rounded bg-[#161616] hover:bg-[#202020] border border-[#2a2a2a] hover:border-[#444] text-white text-[10px] flex items-center gap-1 transition-colors disabled:opacity-50"
+                              >
+                                {isResolving ? (
+                                  <>
+                                    <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                                    <span>Resolving...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Check className="w-2.5 h-2.5 text-emerald-400" />
+                                    <span>Mark Resolved</span>
+                                  </>
+                                )}
+                              </button>
+                            )}
+                            {isResolved && (
+                              <span className="text-emerald-500 text-[10px]">✓ Resolved</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Guidance text */}
+                        {alert.guidance && (
+                          <p className="text-xs text-[#bbb] mt-2 font-sans leading-relaxed">
+                            <strong className="text-[#888] font-mono text-[10px] uppercase mr-1.5">Guidance:</strong>
+                            {alert.guidance}
+                          </p>
+                        )}
+
+                        {/* Top Deviating Telemetry Features */}
+                        {alert.top_features && Array.isArray(alert.top_features) && alert.top_features.length > 0 && (
+                          <div className="mt-2.5 pt-2 border-t border-[#161616] flex flex-wrap gap-2 text-[10px]">
+                            <span className="text-[#666] self-center">Deviating Metrics:</span>
+                            {alert.top_features.map((feat, fIdx) => (
+                              <span
+                                key={fIdx}
+                                className="px-2 py-0.5 rounded bg-[#111] border border-[#222] text-[#aaa]"
+                              >
+                                <span className="text-white font-medium">{feat.feature}</span>
+                                <span className="text-amber-400 ml-1.5">
+                                  {typeof feat.current_value === 'number' ? feat.current_value.toLocaleString() : feat.current_value}
+                                </span>
+                                {feat.z_deviation != null && (
+                                  <span className="text-[#666] ml-1">
+                                    (z: {feat.z_deviation > 0 ? `+${feat.z_deviation.toFixed(1)}` : feat.z_deviation.toFixed(1)})
+                                  </span>
+                                )}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="p-8 text-center text-[#666] font-mono text-xs">
+                  <CheckCircle2 className="w-6 h-6 text-emerald-500 mx-auto mb-1 opacity-70" />
+                  <span>No operational anomalies detected across telemetry streams.</span>
+                </div>
+              )}
+            </div>
+
             {/* Engine Channel Backpressure */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="rounded-xl border border-[#1e1e1e] bg-[#090909] p-4">
@@ -2552,6 +2840,80 @@ export default function App() {
                   <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1 border-t border-[#141414]">
                     <span>Velocity: Active</span>
                     <span>{Number(selectedTorrent.total_seen || 1).toLocaleString()} Hits</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tripartite Quality, Trust & Availability Scoring (gaia-scoring-worker) */}
+              <div className="rounded-xl border border-[#1e1e1e] bg-[#0c0c0c] p-4 space-y-3 font-mono">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-emerald-400" />
+                    <span className="text-xs font-semibold text-white">Trust, Integrity & Availability</span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded border ${
+                      selectedTorrent.risk_tier === 'BLOCKED'
+                        ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
+                        : selectedTorrent.risk_tier === 'REVIEW'
+                        ? 'bg-amber-950/60 text-amber-300 border-amber-800/50'
+                        : 'bg-emerald-950/60 text-emerald-300 border-emerald-800/50'
+                    }`}>
+                      {selectedTorrent.risk_tier || 'SAFE'} ({selectedTorrent.policy_action || 'ALLOW'})
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-[#666]">
+                    Source: {selectedTorrent.decision_source || 'MODEL'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="p-2 rounded bg-[#141414] border border-[#222]">
+                    <div className="text-[10px] text-[#777] uppercase">Integrity</div>
+                    <div className="text-sm font-bold text-white mt-0.5">
+                      {selectedTorrent.integrity_score ?? 100}/100
+                    </div>
+                  </div>
+                  <div className="p-2 rounded bg-[#141414] border border-[#222]">
+                    <div className="text-[10px] text-[#777] uppercase">Meta Quality</div>
+                    <div className="text-sm font-bold text-white mt-0.5">
+                      {selectedTorrent.metadata_quality_score ?? 85}/100
+                    </div>
+                  </div>
+                  <div className="p-2 rounded bg-[#141414] border border-[#222]">
+                    <div className="text-[10px] text-[#777] uppercase">Availability</div>
+                    <div className="text-sm font-bold text-emerald-400 mt-0.5">
+                      {selectedTorrent.availability_score ?? 100}% ({selectedTorrent.availability_state || 'ACTIVE'})
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick 1-Click Human Triage Actions */}
+                <div className="pt-2 border-t border-[#181818] flex items-center justify-between text-xs">
+                  <span className="text-[#666] text-[10px]">Override policy tier:</span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      disabled={modalOverriding}
+                      onClick={() => handleModalScoreOverride(selectedTorrent.infohash || selectedTorrent.hash, 'ALLOW')}
+                      className="px-2 py-1 rounded bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-800/60 text-emerald-300 text-[10px] flex items-center gap-1 transition-colors disabled:opacity-40"
+                    >
+                      <Check className="w-2.5 h-2.5" />
+                      <span>Allow</span>
+                    </button>
+                    <button
+                      disabled={modalOverriding}
+                      onClick={() => handleModalScoreOverride(selectedTorrent.infohash || selectedTorrent.hash, 'DOWNRANK')}
+                      className="px-2 py-1 rounded bg-amber-950/60 hover:bg-amber-900 border border-amber-800/60 text-amber-300 text-[10px] flex items-center gap-1 transition-colors disabled:opacity-40"
+                    >
+                      <AlertTriangle className="w-2.5 h-2.5" />
+                      <span>Downrank</span>
+                    </button>
+                    <button
+                      disabled={modalOverriding}
+                      onClick={() => handleModalScoreOverride(selectedTorrent.infohash || selectedTorrent.hash, 'SUPPRESS')}
+                      className="px-2 py-1 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-800/60 text-rose-300 text-[10px] flex items-center gap-1 transition-colors disabled:opacity-40"
+                    >
+                      <Ban className="w-2.5 h-2.5" />
+                      <span>Suppress</span>
+                    </button>
                   </div>
                 </div>
               </div>

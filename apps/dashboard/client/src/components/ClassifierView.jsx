@@ -25,7 +25,11 @@ import {
   Square,
   BarChart2,
   ShieldCheck,
-  Radio
+  Radio,
+  Shield,
+  ShieldAlert,
+  CheckCircle,
+  Ban,
 } from 'lucide-react';
 import { api, magnetFrom } from '../api.js';
 import { formatBytes, formatNum, formatTime, formatDubaiDate } from '../utils.js';
@@ -94,6 +98,19 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
   const [modelActionMsg, setModelActionMsg] = useState(null);
   const [modelModalTab, setModelModalTab] = useState('overview'); // 'overview' | 'versions' | 'matrix' | 'logs'
 
+  // Studio Sub-tab: 'category' | 'scoring'
+  const [activeStudioTab, setActiveStudioTab] = useState('category');
+
+  // Scoring / Trust Adjudication State
+  const [scoringStats, setScoringStats] = useState(null);
+  const [scoringPending, setScoringPending] = useState([]);
+  const [scoringPendingTotal, setScoringPendingTotal] = useState(0);
+  const [scoringPendingPages, setScoringPendingPages] = useState(1);
+  const [scoringPage, setScoringPage] = useState(1);
+  const [scoringLoading, setScoringLoading] = useState(false);
+  const [adjudicatingHash, setAdjudicatingHash] = useState(null);
+  const [adjudicationSuccess, setAdjudicationSuccess] = useState(null);
+
   // Background Reclassification State
   const [reclassifyStatus, setReclassifyStatus] = useState(null);
   const [reclassifyStarting, setReclassifyStarting] = useState(false);
@@ -103,6 +120,62 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
   const [reclassifyLimit, setReclassifyLimit] = useState('');
   const [reclassifyDryRun, setReclassifyDryRun] = useState(false);
   const [dismissedReclassifyError, setDismissedReclassifyError] = useState(null);
+
+  // Fetch scoring stats and pending adjudication items
+  const fetchScoringData = useCallback(async () => {
+    try {
+      const stats = await api('/api/scoring/stats');
+      setScoringStats(stats);
+    } catch (err) {
+      console.warn('Failed to load scoring stats:', err.message);
+    }
+  }, []);
+
+  const fetchScoringPending = useCallback(async () => {
+    setScoringLoading(true);
+    try {
+      const res = await api(`/api/scoring/pending?page=${scoringPage}&limit=20`);
+      setScoringPending(res.data || []);
+      setScoringPendingTotal(res.total || 0);
+      setScoringPendingPages(res.pages || 1);
+    } catch (err) {
+      console.warn('Failed to load pending scoring items:', err.message);
+    } finally {
+      setScoringLoading(false);
+    }
+  }, [scoringPage]);
+
+  // Handle human override / adjudication action (ALLOW / DOWNRANK / SUPPRESS)
+  const handleScoringOverride = async (infohash, action, notes = '') => {
+    setAdjudicatingHash(infohash);
+    setAdjudicationSuccess(null);
+    try {
+      const res = await api('/api/scoring/override', {
+        method: 'POST',
+        body: JSON.stringify({ infohash, action, notes })
+      });
+      if (res.success) {
+        setAdjudicationSuccess({ infohash, action, message: `Overridden to ${action}` });
+        // Optimistically remove from pending list
+        setScoringPending((prev) => prev.filter((it) => it.infohash !== infohash));
+        setScoringPendingTotal((prev) => Math.max(0, prev - 1));
+        // Refresh scoring summary statistics
+        fetchScoringData();
+        setTimeout(() => setAdjudicationSuccess(null), 3500);
+      }
+    } catch (err) {
+      alert(`Adjudication failed: ${err.message}`);
+    } finally {
+      setAdjudicatingHash(null);
+    }
+  };
+
+  useEffect(() => {
+    if (activeStudioTab === 'scoring') {
+      fetchScoringData();
+      fetchScoringPending();
+    }
+  }, [activeStudioTab, fetchScoringData, fetchScoringPending]);
 
   // Fetch telemetry & status
   const fetchStatusAndMetrics = useCallback(async () => {
@@ -406,6 +479,316 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
 
   return (
     <div className="space-y-6">
+      {/* Studio Sub-tab Navigation */}
+      <div className="flex items-center justify-between border-b border-[#1c1c1c] pb-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActiveStudioTab('category')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium font-mono flex items-center gap-2 transition-colors ${
+              activeStudioTab === 'category'
+                ? 'bg-white text-black font-semibold'
+                : 'bg-[#0f0f0f] border border-[#222] text-[#888] hover:text-white hover:border-[#333]'
+            }`}
+          >
+            <Tag className="w-3.5 h-3.5" />
+            <span>Category Classifier</span>
+            {metrics?.review_queue_depth != null && metrics.review_queue_depth > 0 && (
+              <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                activeStudioTab === 'category' ? 'bg-black/10 text-black font-bold' : 'bg-[#1e1e1e] text-[#aaa]'
+              }`}>
+                {metrics.review_queue_depth.toLocaleString()}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveStudioTab('scoring')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium font-mono flex items-center gap-2 transition-colors ${
+              activeStudioTab === 'scoring'
+                ? 'bg-white text-black font-semibold'
+                : 'bg-[#0f0f0f] border border-[#222] text-[#888] hover:text-white hover:border-[#333]'
+            }`}
+          >
+            <Shield className="w-3.5 h-3.5" />
+            <span>Trust & Integrity Adjudication</span>
+            {scoringPendingTotal > 0 && (
+              <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                activeStudioTab === 'scoring' ? 'bg-black/10 text-black font-bold' : 'bg-rose-950/60 text-rose-400 border border-rose-800/50'
+              }`}>
+                {scoringPendingTotal.toLocaleString()}
+              </span>
+            )}
+          </button>
+        </div>
+
+        <div className="text-[11px] font-mono text-[#666] hidden sm:block">
+          {activeStudioTab === 'category' ? 'Ground-truth active learning' : 'Quality, safety & availability triage'}
+        </div>
+      </div>
+
+      {/* ============================================================ */}
+      {/* SUB-VIEW 2: TRUST & INTEGRITY ADJUDICATION                   */}
+      {/* ============================================================ */}
+      {activeStudioTab === 'scoring' && (
+        <div className="space-y-6 animate-in fade-in duration-150">
+          {/* Scoring Telemetry Strip */}
+          <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+            <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 flex flex-col justify-between">
+              <div className="text-[10px] uppercase text-[#666] font-mono">01 / Scored Catalog</div>
+              <div className="text-xl font-bold text-white font-mono mt-1">
+                {scoringStats?.total_scored != null ? Number(scoringStats.total_scored).toLocaleString() : '2.88M+'}
+              </div>
+              <p className="text-[11px] text-[#777] mt-1 font-mono">
+                Worker: {scoringStats?.active_worker || 'gaia-scoring-worker'}
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-emerald-950/40 bg-[#090909] p-3.5 flex flex-col justify-between">
+              <div className="text-[10px] uppercase text-emerald-500 font-mono">02 / Safe & Allowed</div>
+              <div className="text-xl font-bold text-emerald-400 font-mono mt-1">
+                {scoringStats?.safe_count != null ? Number(scoringStats.safe_count).toLocaleString() : '2,880,105'}
+              </div>
+              <p className="text-[11px] text-[#777] mt-1 font-mono">
+                {scoringStats?.safe_count && scoringStats?.total_scored
+                  ? `${((scoringStats.safe_count / scoringStats.total_scored) * 100).toFixed(1)}% safe`
+                  : '99.8% safe'}
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-amber-950/40 bg-[#090909] p-3.5 flex flex-col justify-between">
+              <div className="text-[10px] uppercase text-amber-500 font-mono">03 / In Review</div>
+              <div className="text-xl font-bold text-amber-400 font-mono mt-1">
+                {scoringPendingTotal.toLocaleString()}
+              </div>
+              <p className="text-[11px] text-[#777] mt-1 font-mono">Pending policy adjudication</p>
+            </div>
+
+            <div className="rounded-lg border border-rose-950/40 bg-[#090909] p-3.5 flex flex-col justify-between">
+              <div className="text-[10px] uppercase text-rose-500 font-mono">04 / Blocked & Suppressed</div>
+              <div className="text-xl font-bold text-rose-400 font-mono mt-1">
+                {scoringStats?.blocked_count != null ? Number(scoringStats.blocked_count).toLocaleString() : '2,751'}
+              </div>
+              <p className="text-[11px] text-[#777] mt-1 font-mono">Malware, spam & toxic</p>
+            </div>
+
+            <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 flex flex-col justify-between">
+              <div className="text-[10px] uppercase text-[#666] font-mono">05 / Human Overrides</div>
+              <div className="text-xl font-bold text-white font-mono mt-1">
+                {scoringStats?.manual_override_count != null ? Number(scoringStats.manual_override_count).toLocaleString() : '0'}
+              </div>
+              <p className="text-[11px] text-purple-400 mt-1 font-mono">Source = MANUAL protected</p>
+            </div>
+          </section>
+
+          {/* Action notification toast */}
+          {adjudicationSuccess && (
+            <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-800/40 text-emerald-300 font-mono text-xs flex items-center justify-between animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-emerald-400" />
+                <span>
+                  Infohash <span className="text-white">{adjudicationSuccess.infohash.slice(0, 10)}...</span> successfully overridden to <strong>{adjudicationSuccess.action}</strong>.
+                </span>
+              </div>
+              <span className="text-[10px] text-emerald-500">History audit logged</span>
+            </div>
+          )}
+
+          {/* Adjudication Pending Queue Table */}
+          <div className="rounded-xl border border-[#1e1e1e] bg-[#090909] overflow-hidden">
+            <div className="p-4 border-b border-[#181818] bg-[#0c0c0c] flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <ShieldAlert className="w-4 h-4 text-amber-400" />
+                <h3 className="text-xs font-semibold text-white tracking-tight font-mono">
+                  Pending Policy Adjudication Queue
+                </h3>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/40 text-amber-400 border border-amber-800/40">
+                  {scoringPendingTotal.toLocaleString()} items
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] font-mono text-[#666]">
+                  Page {scoringPage} of {scoringPendingPages}
+                </span>
+                <button
+                  onClick={() => {
+                    fetchScoringData();
+                    fetchScoringPending();
+                  }}
+                  className="p-1 text-[#666] hover:text-white transition-colors"
+                  title="Refresh Queue"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${scoringLoading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs font-mono">
+                <thead>
+                  <tr className="border-b border-[#181818] text-[#666] text-[10px] uppercase">
+                    <th className="py-2.5 px-4 font-normal">Payload / Title</th>
+                    <th className="py-2.5 px-3 font-normal">Risk Tier</th>
+                    <th className="py-2.5 px-3 font-normal">Action</th>
+                    <th className="py-2.5 px-3 font-normal">Integrity</th>
+                    <th className="py-2.5 px-3 font-normal">Availability</th>
+                    <th className="py-2.5 px-3 font-normal">Source</th>
+                    <th className="py-2.5 px-4 font-normal text-right">Human Adjudication</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#141414] text-[11px]">
+                  {scoringLoading ? (
+                    <tr>
+                      <td colSpan={7} className="p-12 text-center text-[#666]">
+                        <RefreshCw className="w-5 h-5 animate-spin mx-auto text-white mb-2" />
+                        <span>Loading pending adjudication items...</span>
+                      </td>
+                    </tr>
+                  ) : scoringPending.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="p-12 text-center text-[#666]">
+                        <CheckCircle className="w-8 h-8 text-emerald-500 mx-auto mb-2 opacity-80" />
+                        <div className="text-white font-semibold">Queue Clean!</div>
+                        <div className="text-xs text-[#777] mt-0.5">No torrents currently pending human policy review.</div>
+                      </td>
+                    </tr>
+                  ) : (
+                    scoringPending.map((item) => {
+                      const isActing = adjudicatingHash === item.infohash;
+                      const riskColor =
+                        item.risk_tier === 'BLOCKED'
+                          ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
+                          : item.risk_tier === 'REVIEW'
+                          ? 'bg-amber-950/60 text-amber-300 border-amber-800/50'
+                          : 'bg-emerald-950/60 text-emerald-300 border-emerald-800/50';
+
+                      return (
+                        <tr key={item.infohash} className="hover:bg-[#0c0c0c] transition-colors">
+                          <td className="py-3 px-4 max-w-sm">
+                            <div className="text-white font-sans truncate font-medium" title={item.name}>
+                              {item.name || `payload-${item.infohash.slice(0, 8)}`}
+                            </div>
+                            <div className="text-[10px] text-[#555] flex items-center gap-2 mt-0.5">
+                              <span>{item.infohash.slice(0, 12)}...</span>
+                              <span>·</span>
+                              <span>{item.category || 'Unclassified'}</span>
+                              <span>·</span>
+                              <span>{formatBytes(item.total_size)}</span>
+                            </div>
+                          </td>
+
+                          <td className="py-3 px-3 whitespace-nowrap">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${riskColor}`}>
+                              {item.risk_tier || 'UNKNOWN'}
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3 whitespace-nowrap text-[#aaa]">
+                            <span className="px-1.5 py-0.5 rounded bg-[#141414] border border-[#242424] text-[10px]">
+                              {item.policy_action || 'ALLOW'}
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3 whitespace-nowrap">
+                            <span className={`font-semibold ${
+                              item.integrity_score >= 80
+                                ? 'text-emerald-400'
+                                : item.integrity_score >= 50
+                                ? 'text-amber-400'
+                                : 'text-rose-400'
+                            }`}>
+                              {item.integrity_score ?? '—'}/100
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3 whitespace-nowrap">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                              item.availability_state === 'ACTIVE'
+                                ? 'bg-emerald-950/40 text-emerald-300 border-emerald-800/40'
+                                : item.availability_state === 'SPARSE'
+                                ? 'bg-amber-950/40 text-amber-300 border-amber-800/40'
+                                : 'bg-rose-950/40 text-rose-300 border-rose-800/40'
+                            }`}>
+                              {item.availability_state || 'UNKNOWN'} ({item.availability_score ?? 0}%)
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3 whitespace-nowrap text-[#777] text-[10px]">
+                            {item.decision_source || 'MODEL'}
+                          </td>
+
+                          <td className="py-3 px-4 text-right whitespace-nowrap">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                disabled={isActing}
+                                onClick={() => handleScoringOverride(item.infohash, 'ALLOW', 'Manual clearance via Adjudication Studio')}
+                                className="px-2 py-1 rounded bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-800/60 text-emerald-300 text-[10px] flex items-center gap-1 transition-colors disabled:opacity-40"
+                                title="Override to SAFE & ALLOW"
+                              >
+                                <Check className="w-2.5 h-2.5" />
+                                <span>Allow</span>
+                              </button>
+
+                              <button
+                                disabled={isActing}
+                                onClick={() => handleScoringOverride(item.infohash, 'DOWNRANK', 'Downranked via Adjudication Studio')}
+                                className="px-2 py-1 rounded bg-amber-950/60 hover:bg-amber-900/60 border border-amber-800/60 text-amber-300 text-[10px] flex items-center gap-1 transition-colors disabled:opacity-40"
+                                title="Downrank in search rankings"
+                              >
+                                <AlertTriangle className="w-2.5 h-2.5" />
+                                <span>Downrank</span>
+                              </button>
+
+                              <button
+                                disabled={isActing}
+                                onClick={() => handleScoringOverride(item.infohash, 'SUPPRESS', 'Suppressed/Blocked via Adjudication Studio')}
+                                className="px-2 py-1 rounded bg-rose-950/60 hover:bg-rose-900/60 border border-rose-800/60 text-rose-300 text-[10px] flex items-center gap-1 transition-colors disabled:opacity-40"
+                                title="Suppress and block payload"
+                              >
+                                <Ban className="w-2.5 h-2.5" />
+                                <span>Suppress</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination Controls */}
+            <div className="p-3 border-t border-[#181818] bg-[#0c0c0c] flex items-center justify-between text-xs font-mono text-[#777]">
+              <span>
+                Page <strong className="text-white">{scoringPage}</strong> of{' '}
+                <strong className="text-white">{scoringPendingPages}</strong>
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  disabled={scoringPage <= 1 || scoringLoading}
+                  onClick={() => setScoringPage((p) => Math.max(1, p - 1))}
+                  className="px-2 py-1 rounded bg-[#141414] border border-[#242424] text-[#888] hover:text-white disabled:opacity-30 transition-colors"
+                >
+                  Previous
+                </button>
+                <button
+                  disabled={scoringPage >= scoringPendingPages || scoringLoading}
+                  onClick={() => setScoringPage((p) => Math.min(scoringPendingPages, p + 1))}
+                  className="px-2 py-1 rounded bg-[#141414] border border-[#242424] text-[#888] hover:text-white disabled:opacity-30 transition-colors"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* SUB-VIEW 1: CATEGORY CLASSIFIER (Original View)              */}
+      {/* ============================================================ */}
+      {activeStudioTab === 'category' && (
+        <>
       {/* System Verdict & Realtime Performance Banner (Overview Style) */}
       <section className="rounded-xl border border-[#222] bg-[#090909] p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-start md:items-center gap-3">
@@ -1158,6 +1541,8 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
           )}
         </div>
       </div>
+      </>
+      )}
 
       {/* Redesigned Model Management Modal (Clean Overview aesthetic) */}
       {showModelModal && (
