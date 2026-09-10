@@ -27,6 +27,43 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 const API_PERF_BUFFER_LIMIT = 500;
 const apiPerfLog = [];
 
+// Directory and file stream for shipping API performance logs
+// Default to writable /app/logs inside container so log-shipper can pick it up
+const API_LOGS_DIR = path.join(__dirname, 'logs');
+try {
+  fs.mkdirSync(API_LOGS_DIR, { recursive: true });
+} catch (e) {
+  console.error('Could not create API_LOGS_DIR:', e.message);
+}
+
+let currentLogDate = new Date().toISOString().slice(0, 10);
+let apiLogStream = null;
+
+function getApiLogStream() {
+  const today = new Date().toISOString().slice(0, 10);
+  if (!apiLogStream || today !== currentLogDate) {
+    if (apiLogStream) {
+      try { apiLogStream.end(); } catch {}
+    }
+    try {
+      fs.mkdirSync(API_LOGS_DIR, { recursive: true });
+    } catch {}
+    currentLogDate = today;
+    const logFilePath = path.join(API_LOGS_DIR, `crawler-api-${currentLogDate}.jsonl`);
+    try {
+      apiLogStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+      apiLogStream.on('error', (err) => {
+        console.error('apiLogStream write error:', err.message);
+        apiLogStream = null;
+      });
+    } catch (err) {
+      console.error('Failed to create apiLogStream:', err.message);
+      apiLogStream = null;
+    }
+  }
+  return apiLogStream;
+}
+
 // API Response Time Logging Middleware
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api') || req.path === '/api/live/stream') {
@@ -43,20 +80,40 @@ app.use((req, res, next) => {
     const statusCode = res.statusCode;
 
     const entry = {
+      level: roundedMs >= 500 ? 'warn' : 'info',
+      ts: new Date(startTime).toISOString(),
+      timestamp_ms: startTime,
+      service: 'dashboard-api',
+      message: roundedMs >= 500 ? 'slow api request' : 'api request',
+      method: req.method,
+      path: req.originalUrl || req.path,
+      route: req.route?.path || req.path,
+      status: statusCode,
+      duration_ms: roundedMs,
+      elapsed_secs: Math.round((roundedMs / 1000) * 1000) / 1000,
+    };
+
+    apiPerfLog.push({
       ts: startTime,
       method: req.method,
       path: req.originalUrl || req.path,
       route: req.route?.path || req.path,
       status: statusCode,
       durationMs: roundedMs,
-    };
-
-    apiPerfLog.push(entry);
+    });
     if (apiPerfLog.length > API_PERF_BUFFER_LIMIT) {
       apiPerfLog.shift();
     }
 
-    // Log slow queries (> 500ms) with a warning tag, standard queries with info
+    // Write structured JSONL line to file for log-shipper and log-analyzer
+    try {
+      const stream = getApiLogStream();
+      stream.write(JSON.stringify(entry) + '\n');
+    } catch (err) {
+      console.error('Failed writing API log to file:', err.message);
+    }
+
+    // Console output for real-time docker logs
     if (roundedMs >= 500) {
       console.warn(`[API SLOW] ${req.method} ${req.originalUrl || req.path} -> ${statusCode} in ${roundedMs}ms`);
     } else {
