@@ -23,6 +23,50 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+// Ring buffer for tracking API performance
+const API_PERF_BUFFER_LIMIT = 500;
+const apiPerfLog = [];
+
+// API Response Time Logging Middleware
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api') || req.path === '/api/live/stream') {
+    return next();
+  }
+
+  const startHr = process.hrtime.bigint();
+  const startTime = Date.now();
+
+  res.on('finish', () => {
+    const endHr = process.hrtime.bigint();
+    const durationMs = Number(endHr - startHr) / 1e6;
+    const roundedMs = Math.round(durationMs * 100) / 100;
+    const statusCode = res.statusCode;
+
+    const entry = {
+      ts: startTime,
+      method: req.method,
+      path: req.originalUrl || req.path,
+      route: req.route?.path || req.path,
+      status: statusCode,
+      durationMs: roundedMs,
+    };
+
+    apiPerfLog.push(entry);
+    if (apiPerfLog.length > API_PERF_BUFFER_LIMIT) {
+      apiPerfLog.shift();
+    }
+
+    // Log slow queries (> 500ms) with a warning tag, standard queries with info
+    if (roundedMs >= 500) {
+      console.warn(`[API SLOW] ${req.method} ${req.originalUrl || req.path} -> ${statusCode} in ${roundedMs}ms`);
+    } else {
+      console.log(`[API PERF] ${req.method} ${req.originalUrl || req.path} -> ${statusCode} in ${roundedMs}ms`);
+    }
+  });
+
+  next();
+});
+
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const METRICS_CACHE_MS = parseInt(process.env.METRICS_CACHE_MS || '15000', 10);
@@ -907,6 +951,38 @@ setInterval(async () => {
 }, 2500);
 
 app.get('/api/health', (req, res) => res.json({ ok: true, now: new Date().toISOString() }));
+
+// GET /api/performance
+// Returns recent API latencies and summary statistics (p50, p95, max, slow count)
+app.get('/api/performance', (req, res) => {
+  const limit = Math.min(API_PERF_BUFFER_LIMIT, Math.max(1, parseInt(req.query.limit, 10) || 100));
+  const recent = apiPerfLog.slice(-limit).reverse();
+  
+  if (apiPerfLog.length === 0) {
+    return res.json({ count: 0, summary: {}, recent: [] });
+  }
+
+  const durations = apiPerfLog.map((e) => e.durationMs).sort((a, b) => a - b);
+  const p50 = durations[Math.floor(durations.length * 0.5)] || 0;
+  const p95 = durations[Math.floor(durations.length * 0.95)] || 0;
+  const p99 = durations[Math.floor(durations.length * 0.99)] || 0;
+  const avg = Math.round((durations.reduce((sum, d) => sum + d, 0) / durations.length) * 100) / 100;
+  const max = durations[durations.length - 1];
+  const slowCount = durations.filter((d) => d >= 500).length;
+
+  res.json({
+    count: apiPerfLog.length,
+    summary: {
+      avg_ms: avg,
+      p50_ms: p50,
+      p95_ms: p95,
+      p99_ms: p99,
+      max_ms: max,
+      slow_requests_count: slowCount,
+    },
+    recent,
+  });
+});
 
 // GET /api/logs?limit=50&level=ALL|INFO|WARN|DEBUG
 app.get('/api/logs', async (req, res) => {
