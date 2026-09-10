@@ -178,22 +178,36 @@ def _pick_target_category(cat_counts: dict) -> str:
     return target
 
 
-def fetch_unclassified_batch(limit: int, target_override: str = None, mode: str = "unclassified") -> tuple[list[dict], str]:
+def fetch_unclassified_batch(
+    limit: int,
+    target_override: str = None,
+    mode: str = "unclassified",
+    last_infohash: str = None
+) -> tuple[list[dict], str, Optional[str]]:
     """Fetch torrents from PostgreSQL.
     
     Args:
         limit: Number of torrents to fetch
         target_override: If set, force this category instead of auto-selecting
         mode: 'review_queue' (torrents where needs_review=true) or 'unclassified'
+        last_infohash: Hex infohash cursor for keyset pagination
     """
     conn = get_db()
+    next_cursor = None
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(SCHEMA_SQL)
 
-            # Review queue mode: fetch torrents flagged for review
+            # Review queue mode: fetch torrents flagged for review with fast keyset pagination
             if mode == "review_queue":
-                sql = """
+                where_cursor = ""
+                params = []
+                if last_infohash:
+                    where_cursor = "AND t.infohash > %s"
+                    params.append(hex_to_bytea(last_infohash))
+                params.append(limit)
+
+                sql = f"""
                 SELECT
                     encode(t.infohash, 'hex') AS infohash,
                     t.name,
@@ -253,10 +267,14 @@ def fetch_unclassified_batch(limit: int, target_override: str = None, mode: str 
                     END AS largest_files
                 FROM torrents t
                 WHERE t.needs_review = true
-                ORDER BY random()
+                  {where_cursor}
+                  AND NOT EXISTS (
+                      SELECT 1 FROM labeled_results lr WHERE lr.infohash = t.infohash
+                  )
+                ORDER BY t.infohash
                 LIMIT %s
                 """
-                cur.execute(sql, (limit,))
+                cur.execute(sql, tuple(params))
                 target_category = "review_queue"
             else:
                 # Get current category distribution
@@ -435,8 +453,11 @@ def fetch_unclassified_batch(limit: int, target_override: str = None, mode: str 
                 "largest_files": largest_files,
             })
 
+        if torrents:
+            next_cursor = torrents[-1]["infohash"]
+
         logger.info(f"Fetched {len(torrents)} unclassified torrents (target: {target_category})")
-        return torrents, target_category
+        return torrents, target_category, next_cursor
     finally:
         conn.close()
 
@@ -657,6 +678,9 @@ def main():
         args.loops = (len(file_infohashes) + args.batch - 1) // args.batch
         logger.info(f"Will process {args.loops} batches of {args.batch}")
 
+    # Keyset pagination cursor across batches
+    last_infohash = None
+
     for batch_num in range(1, args.loops + 1):
         logger.info(f"--- Batch {batch_num}/{args.loops} (size={args.batch}) ---")
 
@@ -694,7 +718,14 @@ def main():
             target_category = "file-based"
         else:
             target = args.target if args.target else None
-            torrents, target_category = fetch_unclassified_batch(args.batch, target_override=target, mode=args.mode)
+            torrents, target_category, next_cursor = fetch_unclassified_batch(
+                args.batch,
+                target_override=target,
+                mode=args.mode,
+                last_infohash=last_infohash
+            )
+            if next_cursor:
+                last_infohash = next_cursor
         if not torrents:
             logger.info("No more matching torrents. Done.")
             break
