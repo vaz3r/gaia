@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "gaia-classifier": {
+      "command": "/path/to/gaia/apps/classifier/tools/labeling/mcp/run.sh"
+    }
+  }
+}
