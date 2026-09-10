@@ -29,6 +29,16 @@ import {
 } from 'lucide-react';
 import { api, magnetFrom } from '../api.js';
 import { formatBytes, formatNum, formatTime } from '../utils.js';
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+} from 'recharts';
 
 const CATEGORY_THEMES = {
   Adult: { badge: 'bg-rose-500/10 text-rose-400 border-rose-500/30', bar: 'bg-rose-500', text: 'text-rose-400' },
@@ -50,7 +60,6 @@ export default function AnalysisView({ onInspectTorrent, copyToClipboard }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeSubTab, setActiveSubTab] = useState('trends'); // 'trends' | 'peer_geo' | 'survivability'
-  const [velocityMode, setVelocityMode] = useState('trending'); // 'trending' | 'fastest' | 'top'
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [copiedHash, setCopiedHash] = useState(null);
 
@@ -95,15 +104,6 @@ export default function AnalysisView({ onInspectTorrent, copyToClipboard }) {
   const classifiedPct = summary.total_torrents
     ? ((summary.classified_torrents / summary.total_torrents) * 100).toFixed(1)
     : '0.0';
-
-  // Determine active velocity torrents based on velocityMode
-  const getVelocityList = () => {
-    if (velocityMode === 'fastest') return data?.fastest_growing || [];
-    if (velocityMode === 'top') return data?.top_swarms || [];
-    return data?.trending || [];
-  };
-
-  const velocityList = getVelocityList();
 
   return (
     <div className="space-y-6">
@@ -357,97 +357,144 @@ export default function AnalysisView({ onInspectTorrent, copyToClipboard }) {
 
         {/* WORKSPACE 1: TEMPORAL INGESTION TRENDS (7D) */}
         {activeSubTab === 'trends' && (
-          <div className="p-5 space-y-4">
+          <div className="p-5 space-y-4 font-mono">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-[#181818]">
               <div>
-                <h4 className="text-sm font-semibold text-white font-mono flex items-center gap-2">
+                <h4 className="text-sm font-semibold text-white flex items-center gap-2">
                   <BarChart3 className="w-4 h-4 text-cyan-400" />
                   Category Ingestion Dynamics (Past 7 Days)
                 </h4>
-                <p className="text-xs text-[#777] mt-0.5 font-mono">
+                <p className="text-xs text-[#777] mt-0.5">
                   Daily verified torrent volume partitioned across content categories.
                 </p>
               </div>
-              <div className="flex flex-wrap items-center gap-3 text-[11px] font-mono text-[#888]">
-                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-xs bg-rose-500" /> Adult</span>
-                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-xs bg-purple-500" /> Television</span>
-                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-xs bg-blue-500" /> Movies</span>
-                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-xs bg-cyan-500" /> Music</span>
-                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-xs bg-pink-500" /> Anime</span>
-              </div>
             </div>
 
-            {/* Ingestion Timeline Chart */}
+            {/* Ingestion Timeline Visualization */}
             {(() => {
               const trends = data?.trends_7d || [];
               const daysMap = {};
+              const detectedCategories = new Set();
+              let grandTotal = 0;
+
               trends.forEach((t) => {
                 const dayKey = t.day ? new Date(t.day).toISOString().split('T')[0] : 'Unknown';
-                if (!daysMap[dayKey]) daysMap[dayKey] = {};
-                daysMap[dayKey][t.category] = t.count;
+                if (!daysMap[dayKey]) daysMap[dayKey] = { day: dayKey, total: 0 };
+                const cat = t.category || 'Other';
+                daysMap[dayKey][cat] = (daysMap[dayKey][cat] || 0) + t.count;
+                daysMap[dayKey].total += t.count;
+                detectedCategories.add(cat);
+                grandTotal += t.count;
               });
 
-              const days = Object.keys(daysMap).sort();
-              if (days.length === 0) {
+              const chartData = Object.values(daysMap).sort((a, b) => a.day.localeCompare(b.day));
+              const catList = Array.from(detectedCategories);
+
+              if (chartData.length === 0) {
                 return (
-                  <div className="p-8 text-center text-[#666] font-mono text-xs">
+                  <div className="p-8 text-center text-[#666] text-xs">
                     No ingestion trend data points recorded in the last 7 days.
                   </div>
                 );
               }
 
+              // Identify top category over past 7 days
+              const catTotals = {};
+              trends.forEach((t) => {
+                const cat = t.category || 'Other';
+                catTotals[cat] = (catTotals[cat] || 0) + t.count;
+              });
+              const topCategory = Object.entries(catTotals).sort((a, b) => b[1] - a[1])[0];
+              const peakDay = [...chartData].sort((a, b) => b.total - a.total)[0];
+
+              const PALETTE = {
+                Adult: '#f43f5e',
+                Television: '#a855f7',
+                Movies: '#3b82f6',
+                Music: '#06b6d4',
+                Anime: '#ec4899',
+                Games: '#84cc16',
+                'Books & Learning': '#14b8a6',
+                Applications: '#f59e0b',
+                Audiobooks: '#6366f1',
+                Documentaries: '#10b981',
+                Other: '#71717a',
+                Unclassified: '#52525b',
+              };
+
               return (
-                <div className="space-y-3 font-mono text-xs">
-                  {days.map((d) => {
-                    const catObj = daysMap[d];
-                    const dayTotal = Object.values(catObj).reduce((a, b) => a + b, 0);
+                <div className="space-y-4">
+                  {/* Summary Stat Pills */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="p-3 rounded-lg border border-[#1a1a1a] bg-[#070707] flex items-center justify-between">
+                      <span className="text-xs text-[#777]">7-Day Total Verified</span>
+                      <span className="text-sm font-bold text-cyan-400">{grandTotal.toLocaleString()}</span>
+                    </div>
+                    <div className="p-3 rounded-lg border border-[#1a1a1a] bg-[#070707] flex items-center justify-between">
+                      <span className="text-xs text-[#777]">Peak Ingestion Day</span>
+                      <span className="text-sm font-bold text-white">{peakDay ? `${peakDay.day} (${peakDay.total.toLocaleString()})` : '—'}</span>
+                    </div>
+                    <div className="p-3 rounded-lg border border-[#1a1a1a] bg-[#070707] flex items-center justify-between">
+                      <span className="text-xs text-[#777]">Dominant Category</span>
+                      <span className="text-sm font-bold text-purple-400">
+                        {topCategory ? `${topCategory[0]} (${Math.round((topCategory[1] / grandTotal) * 100)}%)` : '—'}
+                      </span>
+                    </div>
+                  </div>
 
-                    return (
-                      <div key={d} className="p-3.5 rounded-lg border border-[#181818] bg-[#070707] space-y-2">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-white font-semibold flex items-center gap-2">
-                            <Clock className="w-3.5 h-3.5 text-cyan-400" />
-                            {d}
-                          </span>
-                          <span className="text-[#aaa] font-bold">
-                            {dayTotal.toLocaleString()} verified releases
-                          </span>
-                        </div>
-
-                        {/* Stacked Proportional Bar */}
-                        <div className="h-3 w-full bg-[#141414] rounded overflow-hidden flex">
-                          {Object.entries(catObj).map(([cat, cnt]) => {
-                            const pct = ((cnt / dayTotal) * 100).toFixed(1);
-                            const theme = CATEGORY_THEMES[cat] || CATEGORY_THEMES.Other;
-                            return (
-                              <div
-                                key={cat}
-                                className={`h-full ${theme.bar} transition-all hover:brightness-125`}
-                                style={{ width: `${pct}%` }}
-                                title={`${cat}: ${cnt.toLocaleString()} (${pct}%)`}
-                              />
-                            );
-                          })}
-                        </div>
-
-                        {/* Category Badges for Day */}
-                        <div className="flex flex-wrap gap-2 text-[10px] pt-1">
-                          {Object.entries(catObj)
-                            .sort((a, b) => b[1] - a[1])
-                            .slice(0, 6)
-                            .map(([cat, cnt]) => {
-                              const theme = CATEGORY_THEMES[cat] || CATEGORY_THEMES.Other;
-                              return (
-                                <span key={cat} className={`px-2 py-0.5 rounded border ${theme.badge} flex items-center gap-1`}>
-                                  <span>{cat}:</span>
-                                  <span className="font-semibold text-white">{cnt.toLocaleString()}</span>
-                                </span>
-                              );
-                            })}
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {/* Chart Container */}
+                  <div className="p-4 rounded-xl border border-[#1a1a1a] bg-[#070707] h-80">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={chartData} margin={{ top: 15, right: 15, bottom: 5, left: 0 }}>
+                        <CartesianGrid stroke="#1a1a1a" strokeDasharray="3 3" vertical={false} />
+                        <XAxis
+                          dataKey="day"
+                          stroke="#555"
+                          fontSize={11}
+                          tickLine={false}
+                          tickFormatter={(d) => {
+                            const p = d.split('-');
+                            return p.length === 3 ? `${p[1]}/${p[2]}` : d;
+                          }}
+                        />
+                        <YAxis
+                          stroke="#555"
+                          fontSize={11}
+                          tickLine={false}
+                          axisLine={false}
+                          tickFormatter={(v) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v)}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: '#0c0c0c',
+                            borderColor: '#262626',
+                            borderRadius: '8px',
+                            fontSize: '11px',
+                            fontFamily: 'monospace',
+                            boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+                          }}
+                          itemStyle={{ padding: '1px 0' }}
+                          formatter={(value, name) => [value.toLocaleString(), name]}
+                          labelFormatter={(label) => `Date: ${label}`}
+                        />
+                        <Legend
+                          wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }}
+                          iconType="circle"
+                          iconSize={8}
+                        />
+                        {catList.map((cat) => (
+                          <Bar
+                            key={cat}
+                            dataKey={cat}
+                            name={cat}
+                            stackId="a"
+                            fill={PALETTE[cat] || '#888888'}
+                            radius={[0, 0, 0, 0]}
+                          />
+                        ))}
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
               );
             })()}
@@ -571,206 +618,6 @@ export default function AnalysisView({ onInspectTorrent, copyToClipboard }) {
             </div>
           </div>
         )}
-      </div>
-
-      {/* SECTION 4: Real-time Swarm Velocity & Radar Leaderboard */}
-      <div className="rounded-xl border border-[#1e1e1e] bg-[#090909] overflow-hidden space-y-0">
-        <div className="p-4 border-b border-[#181818] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <Activity className="w-4 h-4 text-emerald-400" />
-              <h3 className="text-sm font-semibold text-white font-mono">Swarm Velocity Radar & Real-Time Pulse</h3>
-              {selectedCategory !== 'All' && (
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-cyan-800/60 bg-cyan-950/40 text-cyan-400">
-                  Filtered by {selectedCategory}
-                </span>
-              )}
-            </div>
-            <p className="text-xs text-[#777] mt-0.5 font-mono">
-              Live swarm queries, release propagation velocity, and top DHT sightings.
-            </p>
-          </div>
-
-          {/* Velocity Mode Sub-selector */}
-          <div className="flex items-center gap-1.5 bg-[#050505] border border-[#1e1e1e] p-1 rounded-lg">
-            <button
-              onClick={() => setVelocityMode('trending')}
-              className={`px-2.5 py-1 text-xs font-mono rounded transition-colors flex items-center gap-1.5 ${
-                velocityMode === 'trending'
-                  ? 'bg-[#1a1a1a] text-white font-medium border border-[#333]'
-                  : 'text-[#777] hover:text-[#ededed] hover:bg-[#0f0f0f]'
-              }`}
-            >
-              <TrendingUp className="w-3 h-3 text-cyan-400" />
-              <span>Trending Swarms</span>
-            </button>
-            <button
-              onClick={() => setVelocityMode('fastest')}
-              className={`px-2.5 py-1 text-xs font-mono rounded transition-colors flex items-center gap-1.5 ${
-                velocityMode === 'fastest'
-                  ? 'bg-[#1a1a1a] text-white font-medium border border-[#333]'
-                  : 'text-[#777] hover:text-[#ededed] hover:bg-[#0f0f0f]'
-              }`}
-            >
-              <Zap className="w-3 h-3 text-amber-400" />
-              <span>New Releases (&lt;48h)</span>
-            </button>
-            <button
-              onClick={() => setVelocityMode('top')}
-              className={`px-2.5 py-1 text-xs font-mono rounded transition-colors flex items-center gap-1.5 ${
-                velocityMode === 'top'
-                  ? 'bg-[#1a1a1a] text-white font-medium border border-[#333]'
-                  : 'text-[#777] hover:text-[#ededed] hover:bg-[#0f0f0f]'
-              }`}
-            >
-              <Flame className="w-3 h-3 text-rose-400" />
-              <span>Top Sightings All-Time</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Velocity Torrents Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs font-mono">
-            <thead>
-              <tr className="border-b border-[#181818] text-[#666] text-[11px] bg-[#0c0c0c]">
-                <th className="py-2.5 px-4 font-normal">Payload Description</th>
-                <th className="py-2.5 px-4 font-normal">Infohash (Hex)</th>
-                <th className="py-2.5 px-4 font-normal">Category</th>
-                <th className="py-2.5 px-4 font-normal">Size</th>
-                <th className="py-2.5 px-4 font-normal">Health</th>
-                <th className="py-2.5 px-4 font-normal">Popularity</th>
-                <th className="py-2.5 px-4 font-normal">Velocity</th>
-                <th className="py-2.5 px-4 font-normal text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#141414] text-[11px]">
-              {velocityList.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="py-8 text-center text-[#666]">
-                    No torrents found matching the active velocity filter.
-                  </td>
-                </tr>
-              ) : (
-                velocityList.map((t) => {
-                  const displayName = t.name && t.name.trim().length > 0 ? t.name : `payload-${t.infohash.slice(0, 8)}`;
-                  const catTheme = CATEGORY_THEMES[t.category] || CATEGORY_THEMES.Other;
-                  const isCopied = copiedHash === t.infohash;
-
-                  return (
-                    <tr
-                      key={t.infohash}
-                      onClick={() => onInspectTorrent && onInspectTorrent(t)}
-                      className="hover:bg-[#0f0f0f] cursor-pointer transition-colors group"
-                    >
-                      <td className="py-3 px-4 max-w-sm">
-                        <div className="font-sans font-medium text-[#ededed] group-hover:text-white truncate" title={displayName}>
-                          {displayName}
-                        </div>
-                        <div className="text-[10px] text-[#666] mt-0.5">
-                          {t.file_count || 1} {t.file_count === 1 ? 'file' : 'files'} · {t.total_seen || 1} sightings
-                          {t.age_hours ? ` · ${t.age_hours}h ago` : ''}
-                        </div>
-                      </td>
-
-                      <td className="py-3 px-4 whitespace-nowrap text-[#888]">
-                        <span className="font-mono">{t.infohash.slice(0, 8)}...{t.infohash.slice(-6)}</span>
-                      </td>
-
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        {t.category ? (
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${catTheme.badge}`}>
-                            {t.category}
-                          </span>
-                        ) : (
-                          <span className="text-[#444]">—</span>
-                        )}
-                      </td>
-
-                      <td className="py-3 px-4 whitespace-nowrap text-[#aaa]">
-                        {formatBytes(t.total_size)}
-                      </td>
-
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="flex items-center gap-2">
-                          <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${
-                                (t.health_score ?? 0) >= 70
-                                  ? 'bg-emerald-400'
-                                  : (t.health_score ?? 0) >= 40
-                                  ? 'bg-amber-400'
-                                  : 'bg-rose-500'
-                              }`}
-                              style={{ width: `${Math.min(100, Math.max(0, t.health_score ?? 0))}%` }}
-                            />
-                          </div>
-                          <span
-                            className={`text-[11px] font-semibold ${
-                              (t.health_score ?? 0) >= 70
-                                ? 'text-emerald-400'
-                                : (t.health_score ?? 0) >= 40
-                                ? 'text-amber-400'
-                                : 'text-rose-400'
-                            }`}
-                          >
-                            {t.health_score ?? 0}%
-                          </span>
-                        </div>
-                      </td>
-
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="flex items-center gap-2">
-                          <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
-                            <div
-                              className="h-full rounded-full bg-cyan-400"
-                              style={{ width: `${Math.min(100, Math.max(0, t.popularity_score ?? 0))}%` }}
-                            />
-                          </div>
-                          <span className="text-cyan-400 font-semibold">
-                            {t.popularity_score ?? 0}%
-                          </span>
-                        </div>
-                      </td>
-
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <span className="text-emerald-400 font-semibold">
-                          +{t.velocity || '0'} / hr
-                        </span>
-                      </td>
-
-                      <td className="py-3 px-4 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => handleCopy(magnetFrom(t.infohash, t.name), 'magnet')}
-                            className="p-1.5 rounded bg-[#141414] border border-[#242424] text-[#888] hover:text-white hover:border-[#444] transition-colors"
-                            title="Copy Magnet URI"
-                          >
-                            <DownloadCloud className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleCopy(t.infohash, 'infohash')}
-                            className="p-1.5 rounded bg-[#141414] border border-[#242424] text-[#888] hover:text-white hover:border-[#444] transition-colors"
-                            title="Copy Infohash"
-                          >
-                            {isCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                          </button>
-                          <button
-                            onClick={() => onInspectTorrent && onInspectTorrent(t)}
-                            className="p-1.5 rounded bg-[#141414] border border-[#242424] text-[#888] hover:text-white hover:border-[#444] transition-colors"
-                            title="Inspect Metadata"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
       </div>
     </div>
   );

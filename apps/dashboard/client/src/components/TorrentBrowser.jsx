@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, magnetFrom } from '../api.js'
 import { formatBytes, formatTime } from '../utils.js'
+import { Flame, Zap, TrendingUp, Award, Layers } from 'lucide-react'
 import TorrentDetail from './TorrentDetail.jsx'
 
 const COLS = [
@@ -11,6 +12,7 @@ const COLS = [
 ]
 
 export default function TorrentBrowser() {
+  const [mode, setMode] = useState('all') // 'all' | 'trending' | 'new' | 'top'
   const [input, setInput] = useState('')
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState('verified_at')
@@ -22,6 +24,25 @@ export default function TorrentBrowser() {
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState(null)
   const debounce = useRef()
+
+  // Handle mode toggle changes
+  function handleModeChange(newMode) {
+    setMode(newMode)
+    setPage(1)
+    if (newMode === 'trending') {
+      setSort('popularity')
+      setOrder('desc')
+    } else if (newMode === 'new') {
+      setSort('first_seen')
+      setOrder('desc')
+    } else if (newMode === 'top') {
+      setSort('sightings')
+      setOrder('desc')
+    } else {
+      setSort('verified_at')
+      setOrder('desc')
+    }
+  }
 
   useEffect(() => {
     clearTimeout(debounce.current)
@@ -60,24 +81,83 @@ export default function TorrentBrowser() {
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4">
-        <div className="relative flex-1 max-w-md">
-          <svg
-            className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500"
-            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+      {/* Search and Swarm Velocity Toggles Bar */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+        {/* Swarm Mode Pill Selector */}
+        <div className="flex items-center gap-1.5 bg-ink-900 border border-ink-700/80 p-1 rounded-xl overflow-x-auto">
+          <button
+            type="button"
+            onClick={() => handleModeChange('all')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap ${
+              mode === 'all'
+                ? 'bg-ink-800 text-white shadow-xs border border-ink-600'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-ink-800/50'
+            }`}
           >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 10a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Fuzzy search by name…"
-            className="w-full rounded-lg bg-ink-800 border border-ink-700 pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent"
-          />
+            <Layers className="w-3.5 h-3.5 text-slate-400" />
+            <span>All Torrents</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleModeChange('trending')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap ${
+              mode === 'trending'
+                ? 'bg-ink-800 text-cyan-300 font-semibold shadow-xs border border-cyan-500/30'
+                : 'text-slate-400 hover:text-cyan-300 hover:bg-ink-800/50'
+            }`}
+          >
+            <TrendingUp className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Trending Swarms</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleModeChange('new')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap ${
+              mode === 'new'
+                ? 'bg-ink-800 text-amber-300 font-semibold shadow-xs border border-amber-500/30'
+                : 'text-slate-400 hover:text-amber-300 hover:bg-ink-800/50'
+            }`}
+          >
+            <Zap className="w-3.5 h-3.5 text-amber-400" />
+            <span>New Releases (&lt;48h)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleModeChange('top')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap ${
+              mode === 'top'
+                ? 'bg-ink-800 text-rose-300 font-semibold shadow-xs border border-rose-500/30'
+                : 'text-slate-400 hover:text-rose-300 hover:bg-ink-800/50'
+            }`}
+          >
+            <Flame className="w-3.5 h-3.5 text-rose-400" />
+            <span>Top Sightings All-Time</span>
+          </button>
         </div>
-        <span className="text-xs text-slate-400 whitespace-nowrap">
-          {loading ? 'loading…' : data ? `${data.total.toLocaleString()} results` : ''}
-        </span>
+
+        {/* Search Input & Status */}
+        <div className="flex items-center gap-3">
+          <div className="relative w-full md:w-72">
+            <svg
+              className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500"
+              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 10a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Fuzzy search by name…"
+              className="w-full rounded-lg bg-ink-800 border border-ink-700 pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+            />
+          </div>
+          <span className="text-xs text-slate-400 whitespace-nowrap min-w-[75px] text-right">
+            {loading ? 'loading…' : data ? `${data.total.toLocaleString()} results` : ''}
+          </span>
+        </div>
       </div>
 
       {error && (
