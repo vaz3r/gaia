@@ -271,12 +271,15 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
 
         if (!isMounted) return;
 
+        const rawFiles = detailed?.files || selectedTorrent.files || [];
+        const filesPayload = Array.isArray(rawFiles) ? rawFiles.slice(0, 200) : [];
+
         const payload = {
           infohash: selectedInfohash,
           name: detailed?.name || selectedTorrent.name,
           total_size: detailed?.total_size ?? selectedTorrent.total_size,
           file_count: detailed?.file_count ?? selectedTorrent.file_count,
-          files: detailed?.files || selectedTorrent.files || []
+          files: filesPayload
         };
 
         const res = await fetch('/api/classifier/classify', {

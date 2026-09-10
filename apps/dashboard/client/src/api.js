@@ -1,14 +1,20 @@
-export async function api(path) {
-  const r = await fetch(path)
-  if (!r.ok) {
-    let msg = `HTTP ${r.status}`
-    try {
-      const j = await r.json()
-      msg = j.error || msg
-    } catch {}
-    throw new Error(msg)
+export async function api(path, options = {}) {
+  const fetchOptions = { ...options };
+  if (fetchOptions.body && typeof fetchOptions.body === 'string' && !fetchOptions.headers) {
+    fetchOptions.headers = { 'Content-Type': 'application/json' };
+  } else if (fetchOptions.body && typeof fetchOptions.body === 'string' && fetchOptions.headers && !fetchOptions.headers['Content-Type']) {
+    fetchOptions.headers['Content-Type'] = 'application/json';
   }
-  return r.json()
+  const r = await fetch(path, fetchOptions);
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`;
+    try {
+      const j = await r.json();
+      msg = j.error || j.detail || msg;
+    } catch {}
+    throw new Error(msg);
+  }
+  return r.json();
 }
 
 let cachedTrackers = ''
