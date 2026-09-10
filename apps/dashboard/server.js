@@ -334,7 +334,6 @@ app.post('/api/torrents/:infohash/refresh-health', async (req, res) => {
     );
     if (r.rows.length === 0) return res.status(404).json({ error: 'not found' });
 
-    const row = r.rows[0];
     const lastSeenDate = new Date(row.last_seen);
     const now = new Date();
     const hoursDecay = Math.max(0, (now.getTime() - lastSeenDate.getTime()) / 3600000);
@@ -350,18 +349,37 @@ app.post('/api/torrents/:infohash/refresh-health', async (req, res) => {
     const vel = Math.exp(-hoursDecay / 168.0);
     const newPop = Math.min(100, Math.max(0, Math.round(100 * (0.40 * popBase + 0.35 * vel + 0.25 * pSat))));
 
+    // Synchronize ML Availability formulation (matches apps/ml/scoring/src/policy/engine.py)
+    const sSeed = seedConfirmed ? 50 : 0;
+    const sPeer = peersCount > 0 ? Math.min(30, Math.floor(6.0 * Math.log2(1.0 + peersCount))) : 0;
+    const deltaDays = hoursDecay / 24.0;
+    const sRecency = row.last_seen ? Math.floor(20.0 * Math.exp(-deltaDays / 7.0)) : 0;
+    const newAvailScore = Math.min(100, Math.max(0, sSeed + sPeer + sRecency));
+    let newAvailState = 'UNKNOWN';
+    if (newAvailScore >= 60) {
+      newAvailState = 'ACTIVE';
+    } else if (newAvailScore >= 25) {
+      newAvailState = 'DEGRADED';
+    } else if (newAvailScore > 0 || row.last_seen) {
+      newAvailState = 'STALE';
+    }
+
     await query(
       `UPDATE torrents 
-       SET health_score = $2, popularity_score = $3, seed_confirmed = $4, last_health_check = now() 
+       SET health_score = $2, popularity_score = $3, seed_confirmed = $4,
+           availability_score = $5, availability_state = $6, last_health_check = now() 
        WHERE infohash = decode($1, 'hex')`,
-      [ih, newHealth, newPop, seedConfirmed]
+      [ih, newHealth, newPop, seedConfirmed, newAvailScore, newAvailState]
     );
 
     const updated = await query(
       `SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.piece_length, t.total_size,
               t.file_count, t.files, t.fetch_attempts, t.verified_at,
               t.first_seen, t.last_seen, t.total_seen,
-              t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed, t.last_health_check
+              t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed, t.last_health_check,
+              t.category, t.category_confidence, t.needs_review,
+              t.integrity_score, t.policy_action, t.risk_tier, t.decision_source,
+              t.availability_score, t.availability_state, t.scored_at
        FROM torrents t
        WHERE t.infohash = decode($1, 'hex')`,
       [ih]
@@ -1346,6 +1364,202 @@ app.get('/api/scoring/pending', async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching pending torrent reviews:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/scoring/blocked?page=1&limit=25&search=
+// Returns blocked & suppressed torrents with reasons
+app.get('/api/scoring/blocked', async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25));
+    const offset = (page - 1) * limit;
+    const search = (req.query.search || '').trim();
+
+    const params = [];
+    const whereClauses = ["(t.policy_action = 'SUPPRESS' OR t.risk_tier = 'BLOCKED')"];
+
+    if (search.length > 0) {
+      params.push(`%${escapeLike(search)}%`);
+      const searchParam = `$${params.length}`;
+      if (/^[0-9a-fA-F]{8,40}$/.test(search)) {
+        params.push(search.toLowerCase());
+        const hashParam = `$${params.length}`;
+        whereClauses.push(`(t.name ILIKE ${searchParam} ESCAPE '\\' OR encode(t.infohash, 'hex') ILIKE '%' || ${hashParam} || '%')`);
+      } else {
+        whereClauses.push(`t.name ILIKE ${searchParam} ESCAPE '\\'`);
+      }
+    }
+
+    const where = `WHERE ${whereClauses.join(' AND ')}`;
+
+    const countRes = await query(
+      `SELECT count(*) AS total FROM torrents t ${where}`,
+      params
+    );
+    const total = parseInt(countRes.rows[0]?.total || 0, 10);
+
+    const dataParams = [...params, limit, offset];
+    const rowsRes = await query(
+      `SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.total_size, t.file_count, t.verified_at,
+              t.category, t.integrity_score, t.policy_action, t.risk_tier, t.decision_source,
+              t.availability_score, t.availability_state, t.scored_at,
+              COALESCE(
+                (SELECT h.reason_codes FROM torrent_score_history h 
+                 WHERE h.infohash = t.infohash ORDER BY h.scored_at DESC LIMIT 1),
+                '[]'::jsonb
+              ) AS reason_codes
+       FROM torrents t
+       ${where}
+       ORDER BY t.scored_at DESC NULLS LAST, t.verified_at DESC
+       LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+      dataParams
+    );
+
+    res.json({
+      data: rowsRes.rows,
+      page,
+      limit,
+      total,
+      pages: Math.max(1, Math.ceil(total / limit))
+    });
+  } catch (err) {
+    console.error('Error fetching blocked torrents:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/scoring/unblock
+// Body: { infohashes: string[], target_action?: 'ALLOW' | 'REVIEW', notes?: string }
+app.post('/api/scoring/unblock', async (req, res) => {
+  try {
+    const { infohashes, target_action = 'ALLOW', notes } = req.body;
+    if (!Array.isArray(infohashes) || infohashes.length === 0) {
+      return res.status(400).json({ error: 'Array of infohashes is required' });
+    }
+
+    const cleanHashes = infohashes
+      .filter((h) => typeof h === 'string' && h.trim().length === 40)
+      .map((h) => h.trim().toLowerCase());
+
+    if (cleanHashes.length === 0) {
+      return res.status(400).json({ error: 'At least one valid 40-hex infohash is required' });
+    }
+
+    const normAction = target_action.toUpperCase() === 'REVIEW' ? 'REVIEW' : 'ALLOW';
+    const finalTier = normAction === 'ALLOW' ? 'SAFE' : 'REVIEW';
+    const finalScore = normAction === 'ALLOW' ? 95 : 50;
+
+    let updatedCount = 0;
+    for (const ih of cleanHashes) {
+      const scoredAtValue = normAction === 'REVIEW' ? null : 'now()';
+      const r = await query(
+        `UPDATE torrents
+         SET policy_action = $1,
+             risk_tier = $2,
+             integrity_score = $3,
+             policy_integrity_score = $3,
+             decision_source = 'MANUAL',
+             scored_at = ${scoredAtValue}
+         WHERE infohash = decode($4, 'hex')
+         RETURNING encode(infohash, 'hex') AS infohash`,
+        [normAction, finalTier, finalScore, ih]
+      );
+
+      if (r.rowCount > 0) {
+        updatedCount++;
+        const reasonCodes = [`MANUAL_UNBLOCK:${normAction}`];
+        if (notes) reasonCodes.push(`NOTES:${notes.trim()}`);
+
+        await query(
+          `INSERT INTO torrent_score_history (
+             infohash, scoring_run_id, model_name, model_version,
+             model_safe_probability, policy_integrity_score, integrity_score,
+             metadata_quality_score, availability_score, risk_tier,
+             policy_action, decision_source, reason_codes, score_status, scored_at
+           ) VALUES (
+             decode($1, 'hex'), gen_random_uuid(), 'manual_unblock', 'dashboard_review_v1',
+             $2, $3, $3, 100, 100, $4, $5, 'MANUAL',
+             $6::jsonb, 'UNBLOCKED', now()
+           )`,
+          [ih, normAction === 'ALLOW' ? 1.0 : 0.5, finalScore, finalTier, normAction, JSON.stringify(reasonCodes)]
+        );
+      }
+    }
+
+    // Invalidate stats cache
+    scoringStatsCache = { ts: 0, data: null };
+
+    res.json({
+      success: true,
+      updated_count: updatedCount,
+      target_action: normAction,
+      message: `Successfully unblocked ${updatedCount} torrent(s) to ${normAction} (${finalTier}).`
+    });
+  } catch (err) {
+    console.error('Error unblocking torrents:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/scoring/batch-rescore
+// Body: { scope?: 'review' | 'stale' | 'unscored' | 'all_dynamic', category?: string, limit?: number }
+// Resets scored_at = NULL so gaia-scoring-worker picks them up immediately
+app.post('/api/scoring/batch-rescore', async (req, res) => {
+  try {
+    const scope = (req.body.scope || 'review').toLowerCase();
+    const category = (req.body.category || '').trim();
+    const limit = Math.min(10000, Math.max(1, parseInt(req.body.limit, 10) || 500));
+
+    const whereClauses = ["decision_source != 'MANUAL'"];
+    const params = [];
+
+    if (scope === 'review') {
+      whereClauses.push("(policy_action = 'REVIEW' OR risk_tier = 'REVIEW')");
+    } else if (scope === 'stale') {
+      whereClauses.push("scored_at < now() - interval '24 hours'");
+    } else if (scope === 'unscored') {
+      whereClauses.push("scored_at IS NULL");
+    } else if (scope === 'all_dynamic') {
+      // rescore any non-manual
+    }
+
+    if (category.length > 0) {
+      params.push(category);
+      whereClauses.push(`category = $${params.length}`);
+    }
+
+    params.push(limit);
+    const limitParam = `$${params.length}`;
+
+    const resetRes = await query(
+      `WITH candidates AS (
+         SELECT infohash FROM torrents
+         WHERE ${whereClauses.join(' AND ')}
+         ORDER BY verified_at DESC NULLS LAST
+         LIMIT ${limitParam}
+       )
+       UPDATE torrents t
+       SET scored_at = NULL
+       FROM candidates c
+       WHERE t.infohash = c.infohash
+       RETURNING encode(t.infohash, 'hex') AS infohash`,
+      params
+    );
+
+    // Invalidate stats cache
+    scoringStatsCache = { ts: 0, data: null };
+
+    res.json({
+      success: true,
+      queued_count: resetRes.rowCount,
+      scope,
+      category: category || 'all',
+      message: `Queued ${resetRes.rowCount} torrents for immediate scoring worker re-evaluation.`
+    });
+  } catch (err) {
+    console.error('Error triggering batch rescore:', err);
     res.status(500).json({ error: err.message });
   }
 });

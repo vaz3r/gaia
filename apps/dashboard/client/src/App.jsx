@@ -168,6 +168,10 @@ export default function App() {
 
   // Human scoring override handler for Inspector Modal
   const [modalOverriding, setModalOverriding] = useState(false);
+  const [modalRelabeling, setModalRelabeling] = useState(false);
+  const [modalCategorySelect, setModalCategorySelect] = useState('');
+  const [modalRelabelMsg, setModalRelabelMsg] = useState(null);
+
   const handleModalScoreOverride = async (infohash, action) => {
     if (!infohash || modalOverriding) return;
     setModalOverriding(true);
@@ -197,6 +201,50 @@ export default function App() {
       alert(`Override failed: ${err.message}`);
     } finally {
       setModalOverriding(false);
+    }
+  };
+
+  const handleModalSaveCategory = async () => {
+    const ih = selectedTorrent?.infohash || selectedTorrent?.hash;
+    if (!ih || !modalCategorySelect || modalRelabeling) return;
+    setModalRelabeling(true);
+    setModalRelabelMsg(null);
+    try {
+      const res = await fetch('/api/classifier/labels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          infohash: ih,
+          category: modalCategorySelect,
+          reason: 'Manual category relabel via Inspector modal'
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Failed to save label');
+
+      setSelectedTorrent((prev) => prev ? {
+        ...prev,
+        category: modalCategorySelect,
+        category_confidence: 1.0,
+        needs_review: false
+      } : prev);
+
+      setTorrentsData((prev) => ({
+        ...prev,
+        data: prev.data.map((t) => (t.infohash === ih ? {
+          ...t,
+          category: modalCategorySelect,
+          category_confidence: 1.0,
+          needs_review: false
+        } : t))
+      }));
+
+      setModalRelabelMsg({ type: 'success', text: `Saved "${modalCategorySelect}" as ground truth!` });
+      setTimeout(() => setModalRelabelMsg(null), 3000);
+    } catch (err) {
+      setModalRelabelMsg({ type: 'error', text: err.message });
+    } finally {
+      setModalRelabeling(false);
     }
   };
 
@@ -2763,10 +2811,14 @@ export default function App() {
                     />
                   </div>
                   <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1 border-t border-[#141414]">
-                    <span className={selectedTorrent.seed_confirmed && (selectedTorrent.health_score ?? 0) >= 40 ? 'text-emerald-400 font-semibold' : 'text-[#777]'}>
-                      {selectedTorrent.seed_confirmed && (selectedTorrent.health_score ?? 0) >= 40 ? '✓ Confirmed Active Seed' : 'Unconfirmed / Stale Swarm'}
+                    <span className={(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? 'text-emerald-400 font-semibold' : 'text-[#777]'}>
+                      {(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed
+                        ? '✓ Confirmed Active Swarm'
+                        : 'No Active Peers (Dormant Swarm)'}
                     </span>
-                    <span>{selectedTorrent.swarm_peers || 0} DHT Peers</span>
+                    <span className={(selectedTorrent.swarm_peers || 0) > 0 ? 'text-white' : 'text-[#777]'}>
+                      {selectedTorrent.swarm_peers || 0} DHT Peers
+                    </span>
                   </div>
                 </div>
 
@@ -2829,7 +2881,13 @@ export default function App() {
                   </div>
                   <div className="p-2 rounded bg-[#141414] border border-[#222]">
                     <div className="text-[10px] text-[#777] uppercase">Availability</div>
-                    <div className="text-sm font-bold text-emerald-400 mt-0.5">
+                    <div className={`text-sm font-bold mt-0.5 ${
+                      (selectedTorrent.availability_state === 'ACTIVE' || (selectedTorrent.availability_score ?? 100) >= 60)
+                        ? 'text-emerald-400'
+                        : (selectedTorrent.availability_state === 'DEGRADED' || (selectedTorrent.availability_score ?? 0) >= 25)
+                        ? 'text-amber-400'
+                        : 'text-rose-400'
+                    }`}>
                       {selectedTorrent.availability_score ?? 100}% ({selectedTorrent.availability_state || 'ACTIVE'})
                     </div>
                   </div>
@@ -2867,47 +2925,81 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Classification Card */}
-              {selectedTorrent.category && (
-                <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 space-y-2">
-                  <div className="flex items-center justify-between text-xs font-mono">
-                    <span className="text-[#888] flex items-center gap-1.5">
-                      <Tag className="w-3.5 h-3.5 text-purple-400" />
-                      <span>Category Classification</span>
-                    </span>
-                    <span className="text-purple-400 font-bold font-mono">
-                      {selectedTorrent.category}
-                    </span>
+              {/* Classification Card with 1-Click Relabel */}
+              <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 space-y-2.5">
+                <div className="flex items-center justify-between text-xs font-mono">
+                  <span className="text-[#888] flex items-center gap-1.5">
+                    <Tag className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Category Classification</span>
+                  </span>
+                  <span className="text-purple-400 font-bold font-mono">
+                    {selectedTorrent.category || 'Unclassified'}
+                  </span>
+                </div>
+
+                {selectedTorrent.category_confidence && (
+                  <div className="w-full bg-[#161616] rounded-full h-1.5 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-purple-400 transition-all"
+                      style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.category_confidence * 100))}%` }}
+                    />
                   </div>
-                  {selectedTorrent.category_confidence && (
-                    <>
-                      <div className="w-full bg-[#161616] rounded-full h-1.5 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-purple-400 transition-all"
-                          style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.category_confidence * 100))}%` }}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1 border-t border-[#141414]">
-                        <span>Model Confidence: {Math.round(selectedTorrent.category_confidence * 100)}%</span>
-                        <button
-                          onClick={() => {
-                            setSelectedTorrent(null);
-                            setActiveTab('classifier');
-                          }}
-                          className="text-purple-400 hover:text-purple-300 flex items-center gap-1"
-                        >
-                          <span>Inspect in Classifier Studio →</span>
-                        </button>
-                      </div>
-                    </>
-                  )}
-                  {selectedTorrent.needs_review && (
-                    <div className="text-[10px] font-mono px-2 py-1 rounded bg-amber-950/30 border border-amber-800/40 text-amber-300">
-                      ⚠ Flagged for human review — visit Classifier Studio
+                )}
+
+                {/* Interactive 1-Click Category Relabel Selector */}
+                <div className="pt-2 border-t border-[#141414] space-y-2 font-mono text-xs">
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={modalCategorySelect || selectedTorrent.category || ''}
+                      onChange={(e) => setModalCategorySelect(e.target.value)}
+                      className="flex-1 bg-[#121212] border border-[#262626] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-purple-500 font-mono"
+                    >
+                      <option value="" disabled>Select category to relabel...</option>
+                      {['Adult', 'Anime', 'Applications', 'Audiobooks', 'Books & Learning', 'Documentaries', 'Games', 'Movies', 'Music', 'Television', 'Other'].map((cat) => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
+
+                    <button
+                      disabled={modalRelabeling || !modalCategorySelect || modalCategorySelect === selectedTorrent.category}
+                      onClick={handleModalSaveCategory}
+                      className="px-2.5 py-1 rounded bg-purple-950/80 hover:bg-purple-900 border border-purple-800/80 text-purple-300 text-xs font-medium flex items-center gap-1 transition-colors disabled:opacity-40"
+                    >
+                      {modalRelabeling ? (
+                        <RefreshCw className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Check className="w-3 h-3" />
+                      )}
+                      <span>Save Ground Truth</span>
+                    </button>
+                  </div>
+
+                  {modalRelabelMsg && (
+                    <div className={`text-[10px] ${modalRelabelMsg.type === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {modalRelabelMsg.text}
                     </div>
                   )}
+
+                  <div className="flex items-center justify-between text-[10px] text-[#666] pt-1">
+                    <span>Model Confidence: {selectedTorrent.category_confidence ? `${Math.round(selectedTorrent.category_confidence * 100)}%` : '—'}</span>
+                    <button
+                      onClick={() => {
+                        setSelectedTorrent(null);
+                        setActiveTab('classifier');
+                      }}
+                      className="text-purple-400 hover:text-purple-300 flex items-center gap-1"
+                    >
+                      <span>Inspect in Classifier Studio →</span>
+                    </button>
+                  </div>
                 </div>
-              )}
+
+                {selectedTorrent.needs_review && (
+                  <div className="text-[10px] font-mono px-2 py-1 rounded bg-amber-950/30 border border-amber-800/40 text-amber-300">
+                    ⚠ Flagged for human review — visit Classifier Studio
+                  </div>
+                )}
+              </div>
 
               {/* Swarm Recency Alert if stale */}
               {(selectedTorrent.health_score ?? 0) < 30 && (

@@ -152,6 +152,98 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
     }
   }, [scoringPage]);
 
+  // Blocked & Suppressed Sub-tab State
+  const [blockedItems, setBlockedItems] = useState([]);
+  const [blockedTotal, setBlockedTotal] = useState(0);
+  const [blockedPages, setBlockedPages] = useState(1);
+  const [blockedPage, setBlockedPage] = useState(1);
+  const [blockedSearch, setBlockedSearch] = useState('');
+  const [blockedSearchInput, setBlockedSearchInput] = useState('');
+  const [blockedLoading, setBlockedLoading] = useState(false);
+  const [unblockingHash, setUnblockingHash] = useState(null);
+  const [blockedActionSuccess, setBlockedActionSuccess] = useState(null);
+
+  // Batch Rescore Modal State
+  const [showBatchRescoreModal, setShowBatchRescoreModal] = useState(false);
+  const [batchRescoreScope, setBatchRescoreScope] = useState('review');
+  const [batchRescoreCategory, setBatchRescoreCategory] = useState('');
+  const [batchRescoreLimit, setBatchRescoreLimit] = useState(500);
+  const [batchRescoreRunning, setBatchRescoreRunning] = useState(false);
+  const [batchRescoreMsg, setBatchRescoreMsg] = useState(null);
+
+  const fetchBlockedItems = useCallback(async () => {
+    setBlockedLoading(true);
+    try {
+      const q = new URLSearchParams({
+        page: String(blockedPage),
+        limit: '20'
+      });
+      if (blockedSearch.trim()) q.set('search', blockedSearch.trim());
+      const res = await api(`/api/scoring/blocked?${q.toString()}`);
+      setBlockedItems(res.data || []);
+      setBlockedTotal(res.total || 0);
+      setBlockedPages(res.pages || 1);
+    } catch (err) {
+      console.warn('Failed to load blocked items:', err.message);
+    } finally {
+      setBlockedLoading(false);
+    }
+  }, [blockedPage, blockedSearch]);
+
+  const handleUnblockTorrent = async (infohash, targetAction = 'ALLOW') => {
+    setUnblockingHash(infohash);
+    setBlockedActionSuccess(null);
+    try {
+      const res = await api('/api/scoring/unblock', {
+        method: 'POST',
+        body: JSON.stringify({
+          infohashes: [infohash],
+          target_action: targetAction,
+          notes: `Unblocked via Studio Blocked tab to ${targetAction}`
+        })
+      });
+      if (res.success) {
+        setBlockedActionSuccess(`Restored infohash to ${targetAction} (${targetAction === 'ALLOW' ? 'SAFE' : 'REVIEW'}).`);
+        setBlockedItems((prev) => prev.filter((it) => it.infohash !== infohash));
+        setBlockedTotal((prev) => Math.max(0, prev - 1));
+        fetchScoringData();
+        setTimeout(() => setBlockedActionSuccess(null), 3500);
+      }
+    } catch (err) {
+      alert(`Unblock failed: ${err.message}`);
+    } finally {
+      setUnblockingHash(null);
+    }
+  };
+
+  const handleTriggerBatchRescore = async () => {
+    setBatchRescoreRunning(true);
+    setBatchRescoreMsg(null);
+    try {
+      const res = await api('/api/scoring/batch-rescore', {
+        method: 'POST',
+        body: JSON.stringify({
+          scope: batchRescoreScope,
+          category: batchRescoreCategory,
+          limit: Number(batchRescoreLimit) || 500
+        })
+      });
+      if (res.success) {
+        setBatchRescoreMsg({ type: 'success', text: res.message });
+        fetchScoringData();
+        if (activeStudioTab === 'scoring') fetchScoringPending();
+        setTimeout(() => {
+          setShowBatchRescoreModal(false);
+          setBatchRescoreMsg(null);
+        }, 2500);
+      }
+    } catch (err) {
+      setBatchRescoreMsg({ type: 'error', text: err.message });
+    } finally {
+      setBatchRescoreRunning(false);
+    }
+  };
+
   // Handle human override / adjudication action (ALLOW / DOWNRANK / SUPPRESS)
   const handleScoringOverride = async (infohash, action, notes = '') => {
     setAdjudicatingHash(infohash);
@@ -181,8 +273,11 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
     if (activeStudioTab === 'scoring') {
       fetchScoringData();
       fetchScoringPending();
+    } else if (activeStudioTab === 'blocked') {
+      fetchScoringData();
+      fetchBlockedItems();
     }
-  }, [activeStudioTab, fetchScoringData, fetchScoringPending]);
+  }, [activeStudioTab, fetchScoringData, fetchScoringPending, fetchBlockedItems]);
 
   // Fetch telemetry & status
   const fetchStatusAndMetrics = useCallback(async () => {
@@ -529,10 +624,33 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
               </span>
             )}
           </button>
+
+          <button
+            onClick={() => setActiveStudioTab('blocked')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium font-mono flex items-center gap-2 transition-colors ${
+              activeStudioTab === 'blocked'
+                ? 'bg-white text-black font-semibold'
+                : 'bg-[#0f0f0f] border border-[#222] text-[#888] hover:text-white hover:border-[#333]'
+            }`}
+          >
+            <Ban className="w-3.5 h-3.5 text-rose-400" />
+            <span>Blocked & Suppressed</span>
+            {blockedTotal > 0 && (
+              <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                activeStudioTab === 'blocked' ? 'bg-black/10 text-black font-bold' : 'bg-rose-950/60 text-rose-400 border border-rose-800/50'
+              }`}>
+                {blockedTotal.toLocaleString()}
+              </span>
+            )}
+          </button>
         </div>
 
         <div className="text-[11px] font-mono text-[#666] hidden sm:block">
-          {activeStudioTab === 'category' ? 'Ground-truth active learning' : 'Quality, safety & availability triage'}
+          {activeStudioTab === 'category'
+            ? 'Ground-truth active learning'
+            : activeStudioTab === 'scoring'
+            ? 'Quality, safety & availability triage'
+            : 'Catalog governance & suppressed torrent audits'}
         </div>
       </div>
 
@@ -616,6 +734,14 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
                 </span>
               </div>
               <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setShowBatchRescoreModal(true)}
+                  className="px-2.5 py-1 rounded bg-[#181818] border border-[#2b2b2b] text-[#ededed] hover:border-[#444] hover:bg-[#202020] text-xs font-mono flex items-center gap-1.5 transition-colors"
+                  title="Trigger automated batch scoring / rescore on demand"
+                >
+                  <Sparkles className="w-3 h-3 text-amber-400" />
+                  <span>Batch Rescore</span>
+                </button>
                 <span className="text-[11px] font-mono text-[#666]">
                   Page {scoringPage} of {scoringPendingPages}
                 </span>
@@ -796,6 +922,254 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
                 <button
                   disabled={scoringPage >= scoringPendingPages || scoringLoading}
                   onClick={() => setScoringPage((p) => Math.min(scoringPendingPages, p + 1))}
+                  className="px-2 py-1 rounded bg-[#141414] border border-[#242424] text-[#888] hover:text-white disabled:opacity-30 transition-colors"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* SUB-VIEW 3: BLOCKED & SUPPRESSED CATALOG                     */}
+      {/* ============================================================ */}
+      {activeStudioTab === 'blocked' && (
+        <div className="space-y-6 animate-in fade-in duration-150">
+          {/* Action notification toast */}
+          {blockedActionSuccess && (
+            <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-800/40 text-emerald-300 font-mono text-xs flex items-center justify-between animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-emerald-400" />
+                <span>{blockedActionSuccess}</span>
+              </div>
+              <span className="text-[10px] text-emerald-500">History audit logged</span>
+            </div>
+          )}
+
+          {/* Blocked Summary Strip */}
+          <section className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="rounded-lg border border-rose-950/40 bg-[#090909] p-3.5 flex flex-col justify-between">
+              <div className="text-[10px] uppercase text-rose-400 font-mono">01 / Total Blocked & Suppressed</div>
+              <div className="text-xl font-bold text-rose-300 font-mono mt-1">
+                {blockedTotal.toLocaleString()}
+              </div>
+              <p className="text-[11px] text-[#777] mt-1 font-mono">
+                Policy = SUPPRESS or Risk = BLOCKED
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 flex flex-col justify-between">
+              <div className="text-[10px] uppercase text-[#666] font-mono">02 / Manual Overrides</div>
+              <div className="text-xl font-bold text-white font-mono mt-1">
+                {scoringStats?.manual_override_count != null ? Number(scoringStats.manual_override_count).toLocaleString() : '0'}
+              </div>
+              <p className="text-[11px] text-[#777] mt-1 font-mono">Operator protected decisions</p>
+            </div>
+
+            <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 flex flex-col justify-between">
+              <div className="text-[10px] uppercase text-[#666] font-mono">03 / Crawler Ingestion State</div>
+              <div className="text-xl font-bold text-emerald-400 font-mono mt-1">
+                PROTECTED
+              </div>
+              <p className="text-[11px] text-[#777] mt-1 font-mono">Tombstone active — zero re-crawl</p>
+            </div>
+          </section>
+
+          {/* Search & Filter Bar */}
+          <div className="rounded-xl border border-[#1e1e1e] bg-[#090909] p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setBlockedSearch(blockedSearchInput);
+                setBlockedPage(1);
+              }}
+              className="flex-1 flex items-center gap-2 w-full"
+            >
+              <div className="relative flex-1">
+                <Search className="w-3.5 h-3.5 text-[#555] absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={blockedSearchInput}
+                  onChange={(e) => setBlockedSearchInput(e.target.value)}
+                  placeholder="Search blocked torrents by name or infohash..."
+                  className="w-full bg-[#121212] border border-[#242424] rounded-lg pl-9 pr-8 py-1.5 text-xs text-white placeholder-[#555] focus:outline-none focus:border-[#444] font-mono"
+                />
+                {blockedSearchInput && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBlockedSearchInput('');
+                      setBlockedSearch('');
+                      setBlockedPage(1);
+                    }}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#666] hover:text-white"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+              <button
+                type="submit"
+                className="px-3 py-1.5 rounded-lg bg-[#1a1a1a] hover:bg-[#252525] border border-[#2e2e2e] text-xs font-mono text-white transition-colors"
+              >
+                Search
+              </button>
+            </form>
+
+            <button
+              onClick={() => fetchBlockedItems()}
+              className="p-1.5 rounded-lg border border-[#242424] bg-[#121212] text-[#888] hover:text-white transition-colors"
+              title="Refresh List"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${blockedLoading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+
+          {/* Blocked Items Table */}
+          <div className="rounded-xl border border-[#1e1e1e] bg-[#090909] overflow-hidden">
+            <div className="p-4 border-b border-[#181818] bg-[#0c0c0c] flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <Ban className="w-4 h-4 text-rose-400" />
+                <h3 className="text-xs font-semibold text-white tracking-tight font-mono">
+                  Blocked & Suppressed Torrents
+                </h3>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/40 text-rose-400 border border-rose-800/40">
+                  {blockedTotal.toLocaleString()} items
+                </span>
+              </div>
+              <span className="text-[11px] font-mono text-[#666]">
+                Page {blockedPage} of {blockedPages}
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs font-mono">
+                <thead>
+                  <tr className="border-b border-[#181818] text-[#666] text-[10px] uppercase">
+                    <th className="py-2.5 px-4 font-normal">Payload / Title</th>
+                    <th className="py-2.5 px-3 font-normal">Category</th>
+                    <th className="py-2.5 px-3 font-normal">Risk Tier</th>
+                    <th className="py-2.5 px-3 font-normal">Action</th>
+                    <th className="py-2.5 px-3 font-normal">Source</th>
+                    <th className="py-2.5 px-4 font-normal text-right">Audit & Restore Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#141414] text-[11px]">
+                  {blockedLoading ? (
+                    <tr>
+                      <td colSpan={6} className="p-12 text-center text-[#666]">
+                        <RefreshCw className="w-5 h-5 animate-spin mx-auto text-white mb-2" />
+                        <span>Loading blocked catalog...</span>
+                      </td>
+                    </tr>
+                  ) : blockedItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="p-12 text-center text-[#666]">
+                        <ShieldCheck className="w-8 h-8 text-emerald-500 mx-auto mb-2 opacity-80" />
+                        <div className="text-white font-semibold">No Blocked Torrents</div>
+                        <div className="text-xs text-[#777] mt-0.5">There are currently no items matching the suppressed filter.</div>
+                      </td>
+                    </tr>
+                  ) : (
+                    blockedItems.map((item) => {
+                      const isActing = unblockingHash === item.infohash;
+                      return (
+                        <tr
+                          key={item.infohash}
+                          onClick={() => onInspectTorrent && onInspectTorrent(item)}
+                          className="hover:bg-[#0c0c0c] cursor-pointer transition-colors group"
+                        >
+                          <td className="py-3 px-4 max-w-sm">
+                            <div className="text-white font-sans font-medium truncate group-hover:text-white" title={item.name}>
+                              {item.name || `payload-${item.infohash.slice(0, 10)}`}
+                            </div>
+                            <div className="text-[10px] text-[#666] font-mono mt-0.5 flex items-center gap-2">
+                              <span>{item.infohash.slice(0, 12)}...{item.infohash.slice(-8)}</span>
+                              <span>·</span>
+                              <span>{formatBytes(item.total_size)}</span>
+                            </div>
+                          </td>
+
+                          <td className="py-3 px-3 whitespace-nowrap">
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#141414] border border-[#222] text-[#aaa]">
+                              {item.category || 'Unclassified'}
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3 whitespace-nowrap">
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/60 text-rose-300 border border-rose-800/50">
+                              {item.risk_tier || 'BLOCKED'}
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3 whitespace-nowrap">
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/40 text-rose-400 border border-rose-800/40">
+                              {item.policy_action || 'SUPPRESS'}
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3 whitespace-nowrap text-[#888]">
+                            {item.decision_source || 'MANUAL'}
+                          </td>
+
+                          <td className="py-3 px-4 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => onInspectTorrent && onInspectTorrent(item)}
+                                className="p-1 rounded bg-[#141414] hover:bg-[#202020] border border-[#262626] text-[#888] hover:text-white transition-colors mr-1"
+                                title="Inspect Full Metadata & Files"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                              </button>
+
+                              <button
+                                disabled={isActing}
+                                onClick={() => handleUnblockTorrent(item.infohash, 'REVIEW')}
+                                className="px-2 py-1 rounded bg-amber-950/60 hover:bg-amber-900/60 border border-amber-800/60 text-amber-300 text-[10px] flex items-center gap-1 transition-colors disabled:opacity-40"
+                                title="Redo & Queue for Re-evaluation"
+                              >
+                                <RotateCcw className="w-2.5 h-2.5" />
+                                <span>Redo / Rescore</span>
+                              </button>
+
+                              <button
+                                disabled={isActing}
+                                onClick={() => handleUnblockTorrent(item.infohash, 'ALLOW')}
+                                className="px-2 py-1 rounded bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-800/60 text-emerald-300 text-[10px] flex items-center gap-1 transition-colors disabled:opacity-40"
+                                title="Unblock & Restore to SAFE / ALLOW"
+                              >
+                                <Check className="w-2.5 h-2.5" />
+                                <span>Unblock & Allow</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination Controls */}
+            <div className="p-3 border-t border-[#181818] bg-[#0c0c0c] flex items-center justify-between text-xs font-mono text-[#777]">
+              <span>
+                Page <strong className="text-white">{blockedPage}</strong> of{' '}
+                <strong className="text-white">{blockedPages}</strong>
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  disabled={blockedPage <= 1 || blockedLoading}
+                  onClick={() => setBlockedPage((p) => Math.max(1, p - 1))}
+                  className="px-2 py-1 rounded bg-[#141414] border border-[#242424] text-[#888] hover:text-white disabled:opacity-30 transition-colors"
+                >
+                  Previous
+                </button>
+                <button
+                  disabled={blockedPage >= blockedPages || blockedLoading}
+                  onClick={() => setBlockedPage((p) => Math.min(blockedPages, p + 1))}
                   className="px-2 py-1 rounded bg-[#141414] border border-[#242424] text-[#888] hover:text-white disabled:opacity-30 transition-colors"
                 >
                   Next
@@ -2144,6 +2518,109 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
                     <>
                       <Play className="w-3.5 h-3.5 fill-current" />
                       <span>Start Reclassification</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Rescore Modal */}
+      {showBatchRescoreModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-[#090909] border border-[#262626] rounded-2xl p-6 shadow-2xl space-y-5 animate-in fade-in">
+            <div className="flex items-center justify-between pb-3 border-b border-[#1c1c1c]">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <h3 className="text-sm font-semibold text-white font-mono">Run Auto-Scoring / Batch Rescore</h3>
+              </div>
+              <button
+                onClick={() => setShowBatchRescoreModal(false)}
+                className="p-1 rounded-lg border border-[#222] text-[#666] hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs font-mono">
+              <p className="text-[#888] leading-relaxed">
+                Trigger an on-demand scoring pass by queuing selected catalog records. The background daemon (<code className="text-emerald-400">gaia-scoring-worker</code>) will immediately evaluate them with zero downtime.
+              </p>
+
+              <div>
+                <label className="text-[11px] text-[#aaa] block mb-1.5 font-medium">Target Scope</label>
+                <select
+                  value={batchRescoreScope}
+                  onChange={(e) => setBatchRescoreScope(e.target.value)}
+                  className="w-full bg-[#121212] border border-[#262626] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-mono"
+                >
+                  <option value="review">Pending Adjudication Queue (Action = REVIEW or Risk = REVIEW)</option>
+                  <option value="stale">Stale Scores (Not scored within last 24 hours)</option>
+                  <option value="unscored">Unscored Arrivals (scored_at IS NULL)</option>
+                  <option value="all_dynamic">All Automated Catalog (Excludes manual overrides)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] text-[#aaa] block mb-1.5 font-medium">Category Filter (Optional)</label>
+                <select
+                  value={batchRescoreCategory}
+                  onChange={(e) => setBatchRescoreCategory(e.target.value)}
+                  className="w-full bg-[#121212] border border-[#262626] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-mono"
+                >
+                  <option value="">All Categories</option>
+                  {['Adult', 'Anime', 'Applications', 'Audiobooks', 'Books & Learning', 'Documentaries', 'Games', 'Movies', 'Music', 'Television', 'Other'].map((cat) => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] text-[#aaa] block mb-1.5 font-medium">Batch Batch Size (Max Records)</label>
+                <input
+                  type="number"
+                  min="50"
+                  max="10000"
+                  step="50"
+                  value={batchRescoreLimit}
+                  onChange={(e) => setBatchRescoreLimit(e.target.value)}
+                  className="w-full bg-[#121212] border border-[#262626] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-mono"
+                />
+              </div>
+
+              {batchRescoreMsg && (
+                <div className={`p-3 rounded-lg border text-xs ${
+                  batchRescoreMsg.type === 'success'
+                    ? 'bg-emerald-950/40 border-emerald-800/40 text-emerald-300'
+                    : 'bg-rose-950/40 border-rose-800/40 text-rose-300'
+                }`}>
+                  {batchRescoreMsg.text}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  onClick={() => setShowBatchRescoreModal(false)}
+                  className="px-3 py-1.5 rounded-lg border border-[#222] text-[#888] hover:text-white transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleTriggerBatchRescore}
+                  disabled={batchRescoreRunning}
+                  className="px-4 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-black font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                >
+                  {batchRescoreRunning ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Queuing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Queue Batch Rescore</span>
                     </>
                   )}
                 </button>

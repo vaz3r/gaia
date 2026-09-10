@@ -25,12 +25,23 @@ This playbook defines standard daily and weekly operating procedures to keep the
   - Read the automated guidance and deviating metrics.
   - Address any underlying network or host issue, then click **"Resolve Alert"**.
 
-### 3. Trust & Adjudication Spot-Check
+### 3. Trust, Adjudication & Batch Rescore Spot-Check
 - **Where**: **Classifier Studio Tab** -> Sub-tab: **Trust & Integrity**
 - **What to look for**:
-  - Review queue depth counter (`In Review`).
+  - Review queue depth counter (`Pending Policy Adjudication Queue`).
   - Spot-check 3–5 items at the top of the queue.
-  - You **DO NOT** have to manually review thousands of items! (See Section 3 below on Automated vs Manual Review).
+  - You **DO NOT** have to manually review thousands of items!
+  - **On-Demand Batch Rescore**: Use the **"Batch Rescore"** button to automatically re-score items queued for review, stale scores (>24h), or targeted categories using the vectorized XGBoost worker (`gaia-scoring-worker`).
+
+### 4. Blocked & Suppressed Catalog Audits
+- **Where**: **Classifier Studio Tab** -> Sub-tab: **Blocked & Suppressed**
+- **What to look for**:
+  - Monitor total blocked and suppressed torrents.
+  - Use search to review specific titles or infohashes.
+  - **Redo / Unblock**:
+    - **"Redo / Rescore"**: Resets `scored_at = NULL` to let the scoring worker re-evaluate cleanly.
+    - **"Unblock & Allow"**: 1-click override to restore a false-positive to `ALLOW` (SAFE).
+  - Torrents marked `SUPPRESS` act as permanent tombstones so the DHT crawler never wastes bandwidth re-crawling them.
 
 ---
 
@@ -43,14 +54,15 @@ This playbook defines standard daily and weekly operating procedures to keep the
   - **Dead Peer Suppression Cache**: Should show **Active**, holding ~70k–120k quarantined dead peers with an eviction velocity of **~200k–300k/hr**. This prevents socket starvation.
   - **Channel Backpressures**: Verify and Fresh channel buffers should read **"No Backpressure"** or **"Flowing"** (not maxed out).
 
-### 2. Category Intelligence & Open-Set Drift
-- **Where**: **Content Intelligence Tab**
+### 2. Category Intelligence & Modal Ground Truth Triage
+- **Where**: **Content Intelligence Tab** & **Explorer Tab**
 - **What to look for**:
   - Healthy category distribution across Movies, Television, Music, Games, Books, Applications, Anime, etc.
   - Check that **Unclassified** content remains low (< 2% of total verified torrents).
+  - In **Explorer**, open any ambiguous torrent and use the **1-Click Category Relabel Dropdown** to submit ground-truth labels directly without switching tabs.
 
 ### 3. Active Learning & Model Retraining
-- **Where**: **Classifier Studio Tab** -> Sub-tab: **Category Model**
+- **Where**: **Classifier Studio Tab** -> Sub-tab: **Category Classifier**
 - **What to look for**:
   - Label 10–20 ambiguous items from the Review Queue using the 1-click category buttons (`1-9`, `0`).
   - Click **"Model Management"** modal:
