@@ -305,7 +305,6 @@ export default function App() {
 
       // Supplementary telemetry polled at low frequency (60s)
       api('/api/routing/security').then((res) => { if (res) setRoutingSecurity(res); }).catch(() => {});
-      api(`/api/logs?limit=50&level=${logFilter}`).then((res) => { if (res?.logs) setLogsList(res.logs); }).catch(() => {});
       api('/api/classifier/metrics').then((res) => {
         if (res?.review_queue_depth != null) setClassifierReviewCount(res.review_queue_depth);
         if (res?.total_classified != null) setClassifierTotalClassified(res.total_classified);
@@ -315,7 +314,7 @@ export default function App() {
     fetchSupplemental();
     const interval = setInterval(fetchSupplemental, 60000);
     return () => clearInterval(interval);
-  }, [logFilter, streamConnected]);
+  }, [streamConnected]);
 
   // Click-outside listener for More menu dropdown
   useEffect(() => {
@@ -2596,52 +2595,6 @@ export default function App() {
                   <span>Alert Threshold: 1000ms</span>
                   <span className="text-emerald-400">Target: sqlx::query pool</span>
                 </div>
-              </div>
-            </div>
-
-            {/* Live Crawler Syslog / Stdout Stream */}
-            <div className="rounded-xl border border-[#1e1e1e] bg-[#080808] overflow-hidden">
-              <div className="px-4 py-3 border-b border-[#181818] flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Terminal className="w-3.5 h-3.5 text-[#666]" />
-                  <span className="text-xs font-semibold text-white">gaia-daemon Log Output</span>
-                </div>
-                <div className="flex items-center gap-1 text-[11px] font-mono text-[#666]">
-                  {['ALL', 'INFO', 'WARN', 'DEBUG'].map((lvl) => (
-                    <button
-                      key={lvl}
-                      onClick={() => setLogFilter(lvl)}
-                      className={`px-2 py-0.5 rounded transition-colors ${
-                        logFilter === lvl
-                          ? 'bg-[#1f1f1f] text-white'
-                          : 'text-[#666] hover:text-[#bbb]'
-                      }`}
-                    >
-                      {lvl}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="p-4 bg-[#000000] font-mono text-xs space-y-2 max-h-64 overflow-y-auto">
-                {logsList && logsList.length > 0 ? (
-                  logsList
-                    .filter((l) => logFilter === 'ALL' || l.level === logFilter)
-                    .map((log, idx) => (
-                      <div key={idx} className="flex items-start gap-3">
-                        <span className="text-[#555] shrink-0 text-[11px]">{log.time}</span>
-                        <span className={`text-[10px] px-1 rounded shrink-0 font-bold ${
-                          log.level === 'INFO' ? 'bg-[#13231b] text-emerald-400' :
-                          log.level === 'WARN' ? 'bg-[#291f0d] text-amber-400' : 'bg-[#181818] text-[#888]'
-                        }`}>
-                          {log.level}
-                        </span>
-                        <span className="text-[#ccc] text-[11px] leading-relaxed truncate">{log.msg}</span>
-                      </div>
-                    ))
-                ) : (
-                  <div className="text-[#555] text-[11px]">Streaming live daemon logs from cluster...</div>
-                )}
               </div>
             </div>
           </div>
