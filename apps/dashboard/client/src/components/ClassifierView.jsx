@@ -64,7 +64,7 @@ const ALL_CATEGORIES = [
   'Other',
 ];
 
-export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
+export default function ClassifierView({ onInspectTorrent, copyToClipboard, streamScoringStats }) {
   // Metrics & Status
   const [metrics, setMetrics] = useState(null);
   const [status, setStatus] = useState(null);
@@ -103,8 +103,14 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard }) {
   const [activeStudioTab, setActiveStudioTab] = useState('category');
 
   // Scoring / Trust Adjudication State
-  const [scoringStats, setScoringStats] = useState(null);
+  const [scoringStats, setScoringStats] = useState(streamScoringStats || null);
   const [scoringPending, setScoringPending] = useState([]);
+
+  useEffect(() => {
+    if (streamScoringStats) {
+      setScoringStats(streamScoringStats);
+    }
+  }, [streamScoringStats]);
   const [scoringPendingTotal, setScoringPendingTotal] = useState(0);
   const [scoringPendingPages, setScoringPendingPages] = useState(1);
   const [scoringPage, setScoringPage] = useState(1);

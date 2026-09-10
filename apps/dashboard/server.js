@@ -30,6 +30,8 @@ const STATS_CACHE_MS = parseInt(process.env.STATS_CACHE_MS || '30000', 10);
 const ANALYSIS_CACHE_MS = parseInt(process.env.ANALYSIS_CACHE_MS || '60000', 10);
 let metricsCache = { ts: 0, data: null };
 let statsCache = { ts: 0, data: null };
+let scoringStatsCache = { ts: 0, data: null };
+let alertsSummaryCache = { ts: 0, data: null };
 let analysisCacheMap = new Map(); // key -> { ts: number, data: any }
 
 const SORTS = {
@@ -862,6 +864,8 @@ app.get('/api/live/stream', (req, res) => {
     serverStats: statsCache.data,
     serverMetrics: metricsCache.data,
     analyticsData: analyticsCache.data,
+    alertsSummary: alertsSummaryCache.data,
+    scoringStats: scoringStatsCache.data,
     timestamp: Date.now()
   };
   res.write(`data: ${JSON.stringify(initialPayload)}\n\n`);
@@ -892,6 +896,8 @@ setInterval(async () => {
       serverStats: statsCache.data,
       serverMetrics: metricsCache.data,
       analyticsData: analyticsCache.data,
+      alertsSummary: alertsSummaryCache.data,
+      scoringStats: scoringStatsCache.data,
       timestamp: Date.now()
     };
     broadcastSSE(payload);
@@ -1283,9 +1289,7 @@ app.get('/api/scoring/pending', async (req, res) => {
   }
 });
 
-// GET /api/scoring/stats
-// Aggregated statistics on scoring health, risk tiers, and manual overrides
-app.get('/api/scoring/stats', async (req, res) => {
+async function refreshScoringStats() {
   try {
     const countsRes = await query(`
       SELECT 
@@ -1302,12 +1306,41 @@ app.get('/api/scoring/stats', async (req, res) => {
         COUNT(*) FILTER (WHERE risk_tier = 'BLOCKED') AS tier_blocked
       FROM torrents;
     `);
-
-    res.json(countsRes.rows[0]);
+    scoringStatsCache = { ts: Date.now(), data: countsRes.rows[0] };
+    return countsRes.rows[0];
   } catch (err) {
-    console.error('Error fetching scoring stats:', err);
-    res.status(500).json({ error: err.message });
+    console.error('Failed to refresh scoring stats:', err.message);
+    return scoringStatsCache.data;
   }
+}
+
+async function refreshAlertsSummary() {
+  try {
+    const countRes = await query(`
+      SELECT 
+        COUNT(*) AS total,
+        COUNT(*) FILTER (WHERE resolved_at IS NULL) AS active,
+        COUNT(*) FILTER (WHERE resolved_at IS NULL AND severity = 'CRITICAL') AS active_critical,
+        COUNT(*) FILTER (WHERE resolved_at IS NULL AND severity = 'WARNING') AS active_warning
+      FROM operational_alerts
+    `);
+    const summary = countRes.rows[0] || { total: 0, active: 0, active_critical: 0, active_warning: 0 };
+    alertsSummaryCache = { ts: Date.now(), data: summary };
+    return summary;
+  } catch (err) {
+    console.error('Failed to refresh alerts summary:', err.message);
+    return alertsSummaryCache.data;
+  }
+}
+
+// GET /api/scoring/stats
+// Aggregated statistics on scoring health, risk tiers, and manual overrides (Cached)
+app.get('/api/scoring/stats', async (req, res) => {
+  if (scoringStatsCache.data && Date.now() - scoringStatsCache.ts < STATS_CACHE_MS) {
+    return res.json(scoringStatsCache.data);
+  }
+  const data = await refreshScoringStats();
+  res.json(data || {});
 });
 
 // ============================================================
@@ -1327,27 +1360,23 @@ app.get('/api/alerts', async (req, res) => {
       whereClause = 'WHERE resolved_at IS NOT NULL';
     }
 
-    const [alertsRes, countRes] = await Promise.all([
-      query(`
-        SELECT id, ts, anomaly_score, severity, incident_type, confidence, top_features, guidance, resolved_at
-        FROM operational_alerts
-        ${whereClause}
-        ORDER BY ts DESC
-        LIMIT $1
-      `, [limit]),
-      query(`
-        SELECT 
-          COUNT(*) AS total,
-          COUNT(*) FILTER (WHERE resolved_at IS NULL) AS active,
-          COUNT(*) FILTER (WHERE resolved_at IS NULL AND severity = 'CRITICAL') AS active_critical,
-          COUNT(*) FILTER (WHERE resolved_at IS NULL AND severity = 'WARNING') AS active_warning
-        FROM operational_alerts
-      `)
-    ]);
+    const alertsRes = await query(`
+      SELECT id, ts, anomaly_score, severity, incident_type, confidence, top_features, guidance, resolved_at
+      FROM operational_alerts
+      ${whereClause}
+      ORDER BY ts DESC
+      LIMIT $1
+    `, [limit]);
+
+    // Use cached summary if fresh (<15s)
+    let summary = alertsSummaryCache.data;
+    if (!summary || Date.now() - alertsSummaryCache.ts > 15000) {
+      summary = await refreshAlertsSummary();
+    }
 
     res.json({
       alerts: alertsRes.rows,
-      summary: countRes.rows[0] || { total: 0, active: 0, active_critical: 0, active_warning: 0 }
+      summary: summary || { total: 0, active: 0, active_critical: 0, active_warning: 0 }
     });
   } catch (err) {
     console.error('Error fetching operational alerts:', err);
@@ -1394,6 +1423,8 @@ app.get(/^(?!\/api)/, (req, res) => res.sendFile(path.join(dist, 'index.html')))
   try {
     await refreshMetrics();
     await refreshStats();
+    await refreshScoringStats();
+    await refreshAlertsSummary();
     await computeAnalysis();
   } catch (e) {
     console.error("Warmup error:", e.message);
@@ -1401,9 +1432,11 @@ app.get(/^(?!\/api)/, (req, res) => res.sendFile(path.join(dist, 'index.html')))
 })();
 
 // Active background refresh loops (staggered)
-setInterval(refreshMetrics, 5000);    // Metrics refreshed every 5s
-setInterval(refreshStats, 35000);     // Aggregates refreshed every 35s
-setInterval(computeAnalysis, 120000); // Swarm analysis refreshed every 120s
+setInterval(refreshMetrics, 5000);         // Metrics refreshed every 5s
+setInterval(refreshAlertsSummary, 10000);   // Incident alerts summary refreshed every 10s
+setInterval(refreshStats, 35000);          // Aggregates refreshed every 35s
+setInterval(refreshScoringStats, 45000);   // Scoring statistics refreshed every 45s
+setInterval(computeAnalysis, 120000);      // Swarm analysis refreshed every 120s
 
 app.listen(PORT, HOST, () => {
   console.log(`dashboard listening on ${HOST}:${PORT}`);

@@ -287,6 +287,7 @@ export default function App() {
     if (streamData.serverStats) setServerStats(streamData.serverStats);
     if (streamData.serverMetrics) setServerMetrics(streamData.serverMetrics);
     if (streamData.analyticsData) setAnalyticsData(streamData.analyticsData);
+    if (streamData.alertsSummary) setAlertsSummary(streamData.alertsSummary);
   }, [streamData]);
 
   // Initial load and fallback polling for supplementary telemetry
@@ -299,6 +300,7 @@ export default function App() {
         api('/api/stats').then(setServerStats).catch(() => {});
         api('/api/metrics/current').then(setServerMetrics).catch(() => {});
         api('/api/analytics').then((res) => { if (res) setAnalyticsData(res); }).catch(() => {});
+        fetchAlerts();
       }
 
       // Supplementary telemetry polled at low frequency (60s)
@@ -308,7 +310,6 @@ export default function App() {
         if (res?.review_queue_depth != null) setClassifierReviewCount(res.review_queue_depth);
         if (res?.total_classified != null) setClassifierTotalClassified(res.total_classified);
       }).catch(() => {});
-      fetchAlerts();
     };
 
     fetchSupplemental();
@@ -382,21 +383,6 @@ export default function App() {
     fetchHistory();
     const histInterval = setInterval(fetchHistory, 120000); // 2 minutes (historical trend)
     return () => clearInterval(histInterval);
-  }, []);
-
-  // Poll classifier review queue depth for navigation badge
-  useEffect(() => {
-    const fetchReviewBadge = async () => {
-      try {
-        const m = await api('/api/classifier/metrics');
-        if (m && m.review_queue_depth != null) {
-          setClassifierReviewCount(m.review_queue_depth);
-        }
-      } catch {}
-    };
-    fetchReviewBadge();
-    const interval = setInterval(fetchReviewBadge, 60000); // 1 minute
-    return () => clearInterval(interval);
   }, []);
 
   // Server-side Torrent Browser data fetch
@@ -2670,6 +2656,7 @@ export default function App() {
             onInspectTorrent={(t) => {
               handleInspectTorrent(t);
             }}
+            streamScoringStats={streamData?.scoringStats}
           />
         )}
 
