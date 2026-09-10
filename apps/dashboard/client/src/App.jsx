@@ -2780,24 +2780,36 @@ export default function App() {
 
               {/* Health & Popularity Meters */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 space-y-2">
+                <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 space-y-2.5">
                   <div className="flex items-center justify-between text-xs font-mono">
                     <span className="text-[#888] flex items-center gap-1.5">
                       <Activity className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Swarm Health</span>
+                      <span>Swarm Health & Availability</span>
                     </span>
-                    <span
-                      className={`font-bold ${
-                        (selectedTorrent.health_score ?? 0) >= 70
-                          ? 'text-emerald-400'
-                          : (selectedTorrent.health_score ?? 0) >= 40
-                          ? 'text-amber-400'
-                          : 'text-rose-400'
-                      }`}
-                    >
-                      {selectedTorrent.health_score ?? 0}%
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`font-bold ${
+                          (selectedTorrent.health_score ?? 0) >= 70
+                            ? 'text-emerald-400'
+                            : (selectedTorrent.health_score ?? 0) >= 40
+                            ? 'text-amber-400'
+                            : 'text-rose-400'
+                        }`}
+                      >
+                        {selectedTorrent.health_score ?? 0}% ({selectedTorrent.availability_state || 'ACTIVE'})
+                      </span>
+                      <button
+                        onClick={() => handleRefreshHealth(selectedTorrent.infohash || selectedTorrent.hash)}
+                        disabled={refreshingHealth}
+                        title="Run instant real-time swarm health re-probe"
+                        className="px-1.5 py-0.5 text-[9px] rounded border border-[#2a2a2a] bg-[#111] hover:bg-[#1a1a1a] hover:text-white text-[#888] flex items-center gap-1 transition-colors disabled:opacity-50"
+                      >
+                        <RefreshCw className={`w-2.5 h-2.5 ${refreshingHealth ? 'animate-spin text-emerald-400' : ''}`} />
+                        {refreshingHealth ? 'Probing...' : 'Re-check'}
+                      </button>
+                    </div>
                   </div>
+
                   <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all ${
@@ -2810,7 +2822,30 @@ export default function App() {
                       style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.health_score ?? 0))}%` }}
                     />
                   </div>
-                  <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1 border-t border-[#141414]">
+
+                  {/* Mathematical Point Breakdown Audit */}
+                  <div className="pt-2 border-t border-[#141414] space-y-1 font-mono text-[10px]">
+                    <div className="flex items-center justify-between text-[#777]">
+                      <span>Seed Presence (Active Swarm):</span>
+                      <span className={(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? 'text-emerald-400' : 'text-[#666]'}>
+                        {(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? '+50 pts' : '+0 pts'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[#777]">
+                      <span>Connected DHT Peers ({selectedTorrent.swarm_peers || 0} nodes):</span>
+                      <span className={(selectedTorrent.swarm_peers || 0) > 0 ? 'text-cyan-400' : 'text-[#666]'}>
+                        +{(selectedTorrent.swarm_peers || 0) > 0 ? Math.min(30, Math.floor(6.0 * Math.log2(1.0 + (selectedTorrent.swarm_peers || 0)))) : 0} pts
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-[#777]">
+                      <span>Recency Decay:</span>
+                      <span className="text-amber-400">
+                        +{selectedTorrent.last_seen ? Math.min(20, Math.max(0, (selectedTorrent.health_score ?? 0) - ((selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? 50 : 0) - ((selectedTorrent.swarm_peers || 0) > 0 ? Math.min(30, Math.floor(6.0 * Math.log2(1.0 + (selectedTorrent.swarm_peers || 0)))) : 0))) : 0} pts
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1.5 border-t border-[#141414]">
                     <span className={(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? 'text-emerald-400 font-semibold' : 'text-[#777]'}>
                       {(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed
                         ? '✓ Confirmed Active Swarm'

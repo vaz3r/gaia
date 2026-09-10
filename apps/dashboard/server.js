@@ -334,42 +334,45 @@ app.post('/api/torrents/:infohash/refresh-health', async (req, res) => {
     );
     if (r.rows.length === 0) return res.status(404).json({ error: 'not found' });
 
+    const row = r.rows[0];
     const lastSeenDate = new Date(row.last_seen);
     const now = new Date();
     const hoursDecay = Math.max(0, (now.getTime() - lastSeenDate.getTime()) / 3600000);
-    const decay = Math.exp(-hoursDecay / 48.0); // 48h half-life
     const peersCount = row.swarm_peers || 0;
-    const pSat = peersCount > 0 ? Math.min(1.0, Math.log(1 + peersCount) / Math.log(26)) : 0;
-    const s = peersCount > 0 ? 1.0 : 0;
-    const newHealth = Math.min(100, Math.max(0, Math.round(100 * (0.6 * s + 0.4 * pSat) * decay)));
     const seedConfirmed = peersCount > 0 && hoursDecay <= 48.0;
 
+    // Popularity formulation
     const totalSeen = Number(row.total_seen || 1);
     const popBase = Math.min(1.0, Math.log10(Math.max(1, totalSeen) + 1.0) / Math.log10(501.0));
     const vel = Math.exp(-hoursDecay / 168.0);
+    const pSat = peersCount > 0 ? Math.min(1.0, Math.log(1 + peersCount) / Math.log(26)) : 0;
     const newPop = Math.min(100, Math.max(0, Math.round(100 * (0.40 * popBase + 0.35 * vel + 0.25 * pSat))));
 
-    // Synchronize ML Availability formulation (matches apps/ml/scoring/src/policy/engine.py)
+    // Calibrated Swarm Health & Availability (Unified Formulation)
+    // S_seed: 50 pts if confirmed active seed present
     const sSeed = seedConfirmed ? 50 : 0;
+    // S_peer: 0-30 pts logarithmic peer saturation
     const sPeer = peersCount > 0 ? Math.min(30, Math.floor(6.0 * Math.log2(1.0 + peersCount))) : 0;
+    // S_recency: 0-20 pts decay curve (72h half-life)
     const deltaDays = hoursDecay / 24.0;
     const sRecency = row.last_seen ? Math.floor(20.0 * Math.exp(-deltaDays / 7.0)) : 0;
-    const newAvailScore = Math.min(100, Math.max(0, sSeed + sPeer + sRecency));
+    const unifiedHealth = Math.min(100, Math.max(0, sSeed + sPeer + sRecency));
+
     let newAvailState = 'UNKNOWN';
-    if (newAvailScore >= 60) {
+    if (unifiedHealth >= 60) {
       newAvailState = 'ACTIVE';
-    } else if (newAvailScore >= 25) {
+    } else if (unifiedHealth >= 25) {
       newAvailState = 'DEGRADED';
-    } else if (newAvailScore > 0 || row.last_seen) {
+    } else if (unifiedHealth > 0 || row.last_seen) {
       newAvailState = 'STALE';
     }
 
     await query(
       `UPDATE torrents 
        SET health_score = $2, popularity_score = $3, seed_confirmed = $4,
-           availability_score = $5, availability_state = $6, last_health_check = now() 
+           availability_score = $2, availability_state = $5, last_health_check = now() 
        WHERE infohash = decode($1, 'hex')`,
-      [ih, newHealth, newPop, seedConfirmed, newAvailScore, newAvailState]
+      [ih, unifiedHealth, newPop, seedConfirmed, newAvailState]
     );
 
     const updated = await query(
@@ -384,7 +387,16 @@ app.post('/api/torrents/:infohash/refresh-health', async (req, res) => {
        WHERE t.infohash = decode($1, 'hex')`,
       [ih]
     );
-    res.json(updated.rows[0]);
+    res.json({
+      ...updated.rows[0],
+      breakdown: {
+        seed_pts: sSeed,
+        peer_pts: sPeer,
+        recency_pts: sRecency,
+        total_pts: unifiedHealth,
+        hours_since_probe: Math.round(hoursDecay * 10) / 10
+      }
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
