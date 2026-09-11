@@ -99,8 +99,8 @@ fi
 
 # ── 4. Build and deploy services ──
 if [ -n "$SERVICES" ]; then
-    echo "[4/4] Building and deploying services: $SERVICES (ensuring existing containers are not recreated)..."
-    $SSH "cd $REMOTE_TARGET_DIR && GIT_COMMIT=$TAG docker compose --env-file .env up -d --no-recreate --no-deps --build $SERVICES"
+    echo "[4/4] Building and deploying services: $SERVICES (only target services updated via --no-deps)..."
+    $SSH "cd $REMOTE_TARGET_DIR && GIT_COMMIT=$TAG docker compose --env-file .env up -d --no-deps --build $SERVICES"
 else
     echo "[4/4] Building and deploying compose stack (ensuring existing containers are not recreated)..."
     $SSH "cd $REMOTE_TARGET_DIR && GIT_COMMIT=$TAG docker compose --env-file .env up -d --no-recreate --build"
