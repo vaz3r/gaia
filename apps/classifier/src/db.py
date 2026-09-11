@@ -156,7 +156,7 @@ def get_torrents(
                            category, category_confidence, needs_review, classified_at
                     FROM torrents
                     WHERE classified_at IS NOT NULL
-                    ORDER BY verified_at DESC NULLS LAST
+                    ORDER BY classified_at DESC
                     OFFSET %s LIMIT %s;
                     """,
                     (offset, limit)
