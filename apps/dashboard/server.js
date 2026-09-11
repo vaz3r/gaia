@@ -1409,7 +1409,7 @@ app.use('/api/classifier', async (req, res) => {
       headers: {
         'Accept': 'application/json',
       },
-      signal: AbortSignal.timeout(5000), // Fail-fast in 5s rather than hanging Node.js
+      signal: AbortSignal.timeout(15000), // 15s timeout for intensive ML operations
     };
 
     if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
