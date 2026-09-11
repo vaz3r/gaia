@@ -97,6 +97,7 @@ export default function App() {
   const [scaleMode, setScaleMode] = useState('log'); // 'linear' | 'log'
   const [hoveredIdx, setHoveredIdx] = useState(null);
   const [hoveredBarIdx, setHoveredBarIdx] = useState(null);
+  const [hoveredDayIdx, setHoveredDayIdx] = useState(null);
 
   // Real backend state
   const [serverStats, setServerStats] = useState(null);
@@ -1246,6 +1247,111 @@ export default function App() {
                         </>
                       ) : (
                         <span>Loading hourly data...</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </section>
+
+            {/* 7-Day Daily Ingestion Bar Chart */}
+            <section className="rounded-xl border border-[#1f1f1f] bg-[#080808] p-5 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#181818]">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-[#999]">7-Day Daily Ingestion Volume</span>
+                    <span className="text-[11px] font-mono text-[#555]">· Asia/Dubai (GST · UTC+4)</span>
+                  </div>
+                  <p className="text-xs text-[#777] mt-0.5">
+                    New torrents inserted into the catalog per day over the last 7 days (Dubai local date).
+                  </p>
+                </div>
+                <div className="flex items-center gap-4 text-xs font-mono">
+                  <div className="text-[#888]">
+                    7-Day Total:{' '}
+                    <span className="text-white font-bold">
+                      {(serverStats?.daily_7d?.reduce((a, d) => a + d.count, 0) ?? 0).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="h-3 w-[1px] bg-[#222]" />
+                  <div className="text-cyan-400">
+                    Daily Avg:{' '}
+                    <span className="font-bold">
+                      {serverStats?.daily_7d?.length
+                        ? Math.round(
+                            serverStats.daily_7d.slice(0, -1).reduce((a, d) => a + d.count, 0) /
+                              Math.max(1, serverStats.daily_7d.length - 1)
+                          ).toLocaleString()
+                        : 0}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {(() => {
+                const dailyData = serverStats?.daily_7d || [];
+                const maxCount = Math.max(...dailyData.map((d) => d.count), 1);
+                return (
+                  <div className="space-y-2">
+                    <div className="h-36 w-full bg-[#000000] border border-[#161616] rounded-lg p-3 flex items-end justify-between gap-2 select-none relative">
+                      {dailyData.length === 0 ? (
+                        <div className="flex-1 flex items-center justify-center text-[#555] text-xs font-mono">
+                          Loading daily data...
+                        </div>
+                      ) : (
+                        dailyData.map((bar, i) => {
+                          const heightPct = Math.max(4, Math.round((bar.count / maxCount) * 100));
+                          const isToday = i === dailyData.length - 1;
+                          const isHovered = hoveredDayIdx === i;
+                          return (
+                            <div
+                              key={i}
+                              className="flex-1 flex flex-col items-center h-full justify-end group relative cursor-pointer"
+                              onMouseEnter={() => setHoveredDayIdx(i)}
+                              onMouseLeave={() => setHoveredDayIdx(null)}
+                            >
+                              {/* Hover Tooltip */}
+                              {isHovered && (
+                                <div className="absolute -top-14 z-30 pointer-events-none bg-[#141414] border border-[#333] rounded px-2 py-1.5 text-[11px] font-mono text-white whitespace-nowrap shadow-xl">
+                                  <div className="text-[#888]">{bar.day_label} GST</div>
+                                  <div className={`font-bold ${isToday ? 'text-amber-400' : 'text-cyan-400'}`}>
+                                    {bar.count.toLocaleString()} torrents
+                                  </div>
+                                  {isToday && <div className="text-[#666] text-[10px]">partial day</div>}
+                                </div>
+                              )}
+                              {/* Bar Pillar */}
+                              <div
+                                className={`w-full rounded-t transition-all duration-150 ${
+                                  isHovered
+                                    ? isToday
+                                      ? 'bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.5)]'
+                                      : 'bg-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.5)]'
+                                    : isToday
+                                    ? 'bg-amber-500/60'
+                                    : bar.count >= 150000
+                                    ? 'bg-cyan-500'
+                                    : bar.count >= 100000
+                                    ? 'bg-cyan-600/80'
+                                    : 'bg-[#2a2a2a]'
+                                }`}
+                                style={{ height: `${heightPct}%` }}
+                              />
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                    {/* X-axis day labels */}
+                    <div className="flex justify-between text-[10px] font-mono text-[#555] px-1">
+                      {dailyData.length > 0 ? (
+                        dailyData.map((bar, i) => (
+                          <span key={i} className={i === dailyData.length - 1 ? 'text-amber-400' : ''}>
+                            {bar.day_label}
+                          </span>
+                        ))
+                      ) : (
+                        <span>Loading daily data...</span>
                       )}
                     </div>
                   </div>

@@ -655,7 +655,7 @@ app.get('/api/metrics/history', async (req, res) => {
 
 async function refreshStats() {
   try {
-    const [total, v1h, v24h, newTorrents1h, newTorrents24h, seen1h, jobs, heart, sessionUp, hourly24h] = await Promise.all([
+    const [total, v1h, v24h, newTorrents1h, newTorrents24h, seen1h, jobs, heart, sessionUp, hourly24h, daily7d] = await Promise.all([
       query(`SELECT count(*) AS n FROM torrents`),
       query(`SELECT count(*) AS n FROM torrents WHERE verified_at > now() - interval '1 hour'`),
       query(`SELECT count(*) AS n FROM torrents WHERE verified_at > now() - interval '24 hours'`),
@@ -692,6 +692,29 @@ async function refreshStats() {
         LEFT JOIN recent r ON r.hr = h.hr
         ORDER BY h.hr ASC
       `),
+      // 7-day daily ingestion: new torrents inserted per day, in Dubai local time (GST, UTC+4)
+      query(`
+        WITH days AS (
+          SELECT generate_series(
+            date_trunc('day', now() AT TIME ZONE 'Asia/Dubai') - interval '6 days',
+            date_trunc('day', now() AT TIME ZONE 'Asia/Dubai'),
+            interval '1 day'
+          ) AS day_gst
+        ),
+        daily AS (
+          SELECT date_trunc('day', first_seen AT TIME ZONE 'Asia/Dubai') AS day_gst,
+                 count(*) AS count
+          FROM torrents
+          WHERE first_seen >= date_trunc('day', now() AT TIME ZONE 'Asia/Dubai') - interval '6 days'
+          GROUP BY 1
+        )
+        SELECT
+          to_char(d.day_gst, 'Mon DD') AS day_label,
+          COALESCE(daily.count, 0)::int AS count
+        FROM days d
+        LEFT JOIN daily ON daily.day_gst = d.day_gst
+        ORDER BY d.day_gst ASC
+      `),
     ]);
 
     const heartbeat = heart.rows[0].ts ? new Date(heart.rows[0].ts) : null;
@@ -715,6 +738,7 @@ async function refreshStats() {
       crawler_stale_s: heartbeat ? Math.round((Date.now() - heartbeat.getTime()) / 1000) : null,
       session_uptime_s: sessionUp.rows[0]?.uptime_s ?? null,
       hourly_24h: hourly24h.rows,
+      daily_7d: daily7d.rows,
     };
     statsCache = { ts: Date.now(), data };
     return data;
