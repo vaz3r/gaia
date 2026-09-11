@@ -396,14 +396,15 @@ def fetch_unclassified_batch(limit: int = 2000) -> List[Dict[str, Any]]:
     p = get_pool()
     conn = p.getconn()
     try:
-        # Check if classified_at column exists
         with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = 30000;")
+
             cur.execute("""
                 SELECT 1 FROM information_schema.columns 
                 WHERE table_name = 'torrents' AND column_name = 'classified_at';
             """)
             if not cur.fetchone():
-                return []  # Migration has not been applied yet
+                return []
 
             query = """
                 SELECT infohash, name, total_size, file_count, files
@@ -425,7 +426,7 @@ def fetch_unclassified_batch(limit: int = 2000) -> List[Dict[str, Any]]:
                     except Exception:
                         files = []
                 batch.append({
-                    "infohash": r[0],  # bytea raw
+                    "infohash": r[0],
                     "infohash_hex": bytea_to_hex(r[0]),
                     "name": r[1] or "",
                     "total_size": r[2] or 0,
@@ -440,8 +441,8 @@ def fetch_unclassified_batch(limit: int = 2000) -> List[Dict[str, Any]]:
     finally:
         p.putconn(conn)
 
-def bulk_update_classifications(records: List[Dict[str, Any]]) -> int:
-    """Execute high-speed single-statement bulk update via UNNEST."""
+def bulk_update_classifications(records: List[Dict[str, Any]], max_retries: int = 3) -> int:
+    """Execute high-speed single-statement bulk update via UNNEST with deadlock retry."""
     if not records:
         return 0
 
@@ -460,34 +461,45 @@ def bulk_update_classifications(records: List[Dict[str, Any]]) -> int:
         metas.append(json.dumps(r.get("meta", {})))
 
     p = get_pool()
-    conn = p.getconn()
-    try:
-        conn.set_session(readonly=False)
-        with conn.cursor() as cur:
-            query = """
-                UPDATE torrents AS t
-                SET 
-                    category = c.category,
-                    category_confidence = c.confidence,
-                    needs_review = c.needs_review,
-                    classified_at = now(),
-                    classification_meta = c.meta::jsonb
-                FROM (
-                    SELECT 
-                        unnest(%s::bytea[]) AS infohash,
-                        unnest(%s::text[]) AS category,
-                        unnest(%s::real[]) AS confidence,
-                        unnest(%s::boolean[]) AS needs_review,
-                        unnest(%s::jsonb[]) AS meta
-                ) AS c
-                WHERE t.infohash = c.infohash;
-            """
-            cur.execute(query, (infohashes, categories, confidences, needs_reviews, metas))
-            updated_count = cur.rowcount
-            conn.commit()
-            return updated_count
-    finally:
-        p.putconn(conn)
+
+    for attempt in range(max_retries):
+        conn = p.getconn()
+        try:
+            conn.set_session(readonly=False)
+            with conn.cursor() as cur:
+                cur.execute("SET statement_timeout = 30000;")
+                query = """
+                    UPDATE torrents AS t
+                    SET 
+                        category = c.category,
+                        category_confidence = c.confidence,
+                        needs_review = c.needs_review,
+                        classified_at = now(),
+                        classification_meta = c.meta::jsonb
+                    FROM (
+                        SELECT 
+                            unnest(%s::bytea[]) AS infohash,
+                            unnest(%s::text[]) AS category,
+                            unnest(%s::real[]) AS confidence,
+                            unnest(%s::boolean[]) AS needs_review,
+                            unnest(%s::jsonb[]) AS meta
+                    ) AS c
+                    WHERE t.infohash = c.infohash;
+                """
+                cur.execute(query, (infohashes, categories, confidences, needs_reviews, metas))
+                updated_count = cur.rowcount
+                conn.commit()
+                return updated_count
+        except Exception as e:
+            conn.rollback()
+            if "deadlock" in str(e).lower() and attempt < max_retries - 1:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            raise
+        finally:
+            p.putconn(conn)
+
+    return 0
 
 def upsert_label(
     infohash_hex: str,
