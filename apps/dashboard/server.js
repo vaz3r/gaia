@@ -142,6 +142,23 @@ const CHART_CACHE_MS = 3600000; // 1 hour
 let routingSecurityCache = { ts: 0, data: null };
 const ROUTING_SECURITY_CACHE_MS = 30000; // 30 seconds
 
+// Category counts cache: provides instant, accurate total counts for explorer tab
+let categoryCountsCache = {};
+async function refreshCategoryCounts() {
+  try {
+    const res = await query('SELECT category, count FROM category_stats_summary');
+    const map = {};
+    for (const r of res.rows) {
+      map[r.category] = parseInt(r.count, 10);
+    }
+    if (Object.keys(map).length > 0) {
+      categoryCountsCache = map;
+    }
+  } catch (err) {
+    console.error('Failed to refresh category counts:', err.message);
+  }
+}
+
 const SORTS = {
   verified_at: 'verified_at',
   size: 'total_size',
@@ -286,8 +303,17 @@ app.get('/api/torrents', async (req, res) => {
       params
     );
     let totalCount = 0;
-    if (!hasSearch && !hasCategory && !hasRisk && !hasAvailability && !hasPolicy) {
-      if (statsCache.data?.total_torrents) {
+    if (!hasSearch && !hasRisk && !hasAvailability && !hasPolicy) {
+      if (hasCategory) {
+        totalCount = categoryCountsCache[category] || 0;
+        if (!totalCount) {
+          try {
+            const catRes = await query('SELECT count FROM category_stats_summary WHERE category = $1', [category]);
+            totalCount = parseInt(catRes.rows[0]?.count || 0, 10);
+            if (totalCount) categoryCountsCache[category] = totalCount;
+          } catch {}
+        }
+      } else if (statsCache.data?.total_torrents) {
         totalCount = statsCache.data.total_torrents;
       } else {
         const estRes = await query("SELECT reltuples::bigint AS total FROM pg_class WHERE relname = 'torrents'");
@@ -302,9 +328,8 @@ app.get('/api/torrents', async (req, res) => {
       } else {
         // Use WHERE-only params (exclude ORDER BY-only params like fullPhraseParam)
         const whereParams = params._whereCount !== undefined ? params.slice(0, params._whereCount) : params;
-        // Cap at 10000 to avoid seq scan; paginator will show "10000+" if needed
         const totalRes = await query(
-          `SELECT count(*) AS total FROM (SELECT 1 FROM torrents ${where} LIMIT 10000) sub`,
+          `SELECT count(*) AS total FROM (SELECT 1 FROM torrents ${where} LIMIT 50000) sub`,
           whereParams
         );
         totalCount = parseInt(totalRes.rows[0].total, 10);
@@ -1901,6 +1926,7 @@ app.get(/^(?!\/api)/, (req, res) => res.sendFile(path.join(dist, 'index.html')))
     await refreshStats();
     await refreshScoringStats();
     await refreshAlertsSummary();
+    await refreshCategoryCounts();
     await computeAnalysis();
   } catch (e) {
     console.error("Warmup error:", e.message);
@@ -1921,6 +1947,7 @@ setInterval(refreshAlertsSummary, 10000);   // Incident alerts summary refreshed
 setInterval(refreshStats, 35000);          // Aggregates refreshed every 35s
 setInterval(refreshScoringStats, 45000);   // Scoring statistics refreshed every 45s
 setInterval(computeAnalysis, 120000);      // Swarm analysis refreshed every 120s
+setInterval(refreshCategoryCounts, 300000); // Category explorer counts refreshed every 5m
 
 app.listen(PORT, HOST, () => {
   console.log(`dashboard listening on ${HOST}:${PORT}`);

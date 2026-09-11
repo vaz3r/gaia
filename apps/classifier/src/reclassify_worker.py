@@ -54,7 +54,7 @@ class ReclassifyManager:
                 return True
             return False
 
-    def start(self, batch_size: int = 1000, limit: Optional[int] = None, dry_run: bool = False) -> Dict[str, Any]:
+    def start(self, batch_size: int = 2000, limit: Optional[int] = None, dry_run: bool = False) -> Dict[str, Any]:
         with self._lock:
             if self._status["is_running"]:
                 raise RuntimeError("Reclassification task is already running")
@@ -189,12 +189,14 @@ class ReclassifyManager:
                     })
                     old_categories.append(old_cat)
 
+                t_batch = time.time()
                 # Process batch through model
                 acc, flag = self._process_batch(service, batch_items, old_categories, category_shifts, dry_run=dry_run)
+                batch_dur = time.time() - t_batch
                 processed += len(batch_items)
                 accepted_count += acc
                 still_flagged_count += flag
-                self._update_progress(processed, accepted_count, still_flagged_count, category_shifts, t_start, target_count)
+                self._update_progress(processed, accepted_count, still_flagged_count, category_shifts, t_start, target_count, batch_duration=batch_dur, batch_size=len(batch_items))
 
             with self._lock:
                 total_elapsed = time.time() - t_start
@@ -222,10 +224,19 @@ class ReclassifyManager:
         flagged: int,
         shifts: Dict[str, int],
         t_start: float,
-        target_count: int
+        target_count: int,
+        batch_duration: float = 0.0,
+        batch_size: int = 0
     ):
         elapsed = time.time() - t_start
-        rate = processed / max(elapsed, 0.01)
+        overall_rate = processed / max(elapsed, 0.01)
+        if batch_duration > 0 and batch_size > 0:
+            batch_rate = batch_size / max(batch_duration, 0.01)
+            # Smooth blend: 75% recent batch rate, 25% overall rate
+            rate = 0.75 * batch_rate + 0.25 * overall_rate
+        else:
+            rate = overall_rate
+
         remaining = max(0, target_count - processed)
         eta = (remaining / rate) if rate > 0 else None
         pct_accepted = (accepted / max(processed, 1)) * 100.0
@@ -267,46 +278,14 @@ class ReclassifyManager:
 
             update_records.append({
                 "infohash": item["infohash_bytes"],
-                "category": cat,
-                "category_confidence": conf,
+                "infohash_hex": item["infohash"],
+                "predicted_category": cat,
+                "confidence": conf,
                 "needs_review": needs_review,
-                "classification_meta": json.dumps(meta) if meta else None,
+                "meta": meta,
             })
 
         if not dry_run and update_records:
-            self._bulk_update(update_records)
+            db.bulk_update_classifications(update_records)
 
         return accepted, flagged
-
-    def _bulk_update(self, records: List[Dict[str, Any]]):
-        p = db.get_pool()
-        conn = p.getconn()
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SET statement_timeout = '60000';")
-                query = """
-                    UPDATE torrents AS t
-                    SET 
-                        category = v.category,
-                        category_confidence = v.category_confidence,
-                        needs_review = v.needs_review,
-                        classified_at = now(),
-                        classification_meta = v.classification_meta::jsonb
-                    FROM (VALUES %s) AS v(infohash, category, category_confidence, needs_review, classification_meta)
-                    WHERE t.infohash = v.infohash;
-                """
-                template = "(%s, %s, %s, %s, %s)"
-                vals = [
-                    (
-                        r["infohash"],
-                        r["category"],
-                        r["category_confidence"],
-                        r["needs_review"],
-                        r["classification_meta"]
-                    )
-                    for r in records
-                ]
-                psycopg2.extras.execute_values(cur, query, vals, template=template, page_size=2000)
-                conn.commit()
-        finally:
-            p.putconn(conn)
