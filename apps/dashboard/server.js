@@ -736,11 +736,10 @@ async function refreshStats() {
       query(`SELECT count(*) AS n FROM torrents WHERE verified_at > now() - interval '24 hours'`),
       query(`SELECT count(*) AS n FROM torrents WHERE first_seen > now() - interval '1 hour'`),
       query(`SELECT count(*) AS n FROM torrents WHERE first_seen > now() - interval '24 hours'`),
-      query(`SELECT count(*) AS n FROM infohash_sightings WHERE last_seen > now() - interval '1 hour'`),
+      query(`SELECT COALESCE(SUM(metric_value), 0)::bigint AS n FROM metrics WHERE metric_name = 'infohashes_harvested' AND ts > now() - interval '1 hour'`),
       query(
-        `SELECT count(*) FILTER (WHERE status IN ('pending', 'verifying', 'failed')) AS backlog,
-                count(*) FILTER (WHERE status = 'verifying') AS verifying
-         FROM verification_jobs`
+        `SELECT (SELECT reltuples::bigint FROM pg_class WHERE relname = 'verification_jobs') AS backlog,
+                (SELECT count(*) FROM verification_jobs WHERE status = 'verifying') AS verifying`
       ),
       query(`SELECT max(ts) AS ts FROM metrics`),
       query(`SELECT EXTRACT(EPOCH FROM (now() - ts))::int AS uptime_s
