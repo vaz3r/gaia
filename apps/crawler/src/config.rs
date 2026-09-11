@@ -33,6 +33,7 @@ pub struct Config {
     pub storage: StorageConfig,
     pub cache: CacheConfig,
     pub harvest: HarvestConfig,
+    pub buffer: BufferConfig,
     pub logging: LoggingConfig,
 }
 
@@ -116,6 +117,7 @@ pub struct StorageConfig {
     pub janitor_peer_outcomes_retention_secs: u64,
     pub janitor_sightings_single_seen_retention_secs: u64,
     pub janitor_sightings_max_retention_secs: u64,
+    pub janitor_pending_infohashes_retention_secs: u64,
     pub janitor_batch_size: i64,
     pub janitor_batch_sleep_ms: u64,
 }
@@ -139,6 +141,25 @@ pub struct HarvestConfig {
     pub announce_bloom_ratio: f64,
     pub announce_bloom_min: usize,
     pub harvest_channel_capacity: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BufferConfig {
+    pub claim_limit: usize,
+    pub claim_interval_secs: u64,
+    pub flush_interval_secs: u64,
+    pub flush_chunk: usize,
+}
+
+impl Default for BufferConfig {
+    fn default() -> Self {
+        BufferConfig {
+            claim_limit: 500,
+            claim_interval_secs: 5,
+            flush_interval_secs: 2,
+            flush_chunk: 500,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -186,6 +207,7 @@ impl Default for Config {
             storage: StorageConfig::default(),
             cache: CacheConfig::default(),
             harvest: HarvestConfig::default(),
+            buffer: BufferConfig::default(),
             logging: LoggingConfig::default_with_data_dir(&data_dir),
         }
     }
@@ -281,6 +303,7 @@ impl Default for StorageConfig {
             janitor_peer_outcomes_retention_secs: 172800,
             janitor_sightings_single_seen_retention_secs: 604800,
             janitor_sightings_max_retention_secs: 2592000,
+            janitor_pending_infohashes_retention_secs: 86400,
             janitor_batch_size: 25000,
             janitor_batch_sleep_ms: 100,
         }
@@ -513,6 +536,10 @@ impl Config {
             "CRAW_JANITOR_SIGHTINGS_MAX_RETENTION_SECS",
             self.storage.janitor_sightings_max_retention_secs,
         );
+        self.storage.janitor_pending_infohashes_retention_secs = env_u64(
+            "CRAW_JANITOR_PENDING_INFOHASHES_RETENTION_SECS",
+            self.storage.janitor_pending_infohashes_retention_secs,
+        );
         self.storage.peer_outcomes_flush_interval_secs = env_u64(
             "CRAW_PEER_OUTCOMES_FLUSH_INTERVAL_SECS",
             self.storage.peer_outcomes_flush_interval_secs,
@@ -557,6 +584,18 @@ impl Config {
             "CRAW_HARVEST_CHANNEL_CAPACITY",
             self.harvest.harvest_channel_capacity,
         );
+
+        // buffer
+        self.buffer.claim_limit = env_usize("CRAW_BUFFER_CLAIM_LIMIT", self.buffer.claim_limit);
+        self.buffer.claim_interval_secs = env_u64(
+            "CRAW_BUFFER_CLAIM_INTERVAL_SECS",
+            self.buffer.claim_interval_secs,
+        );
+        self.buffer.flush_interval_secs = env_u64(
+            "CRAW_BUFFER_FLUSH_INTERVAL_SECS",
+            self.buffer.flush_interval_secs,
+        );
+        self.buffer.flush_chunk = env_usize("CRAW_BUFFER_FLUSH_CHUNK", self.buffer.flush_chunk);
 
         // retry
         self.retry.no_peers_terminal_on_first = env_bool(

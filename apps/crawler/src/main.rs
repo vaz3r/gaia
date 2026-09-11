@@ -25,6 +25,7 @@ use crate::router::Router;
 use crate::storage::batch_writer::BatchWriter;
 use crate::storage::janitor::JanitorConfig;
 use crate::storage::jobs::{RetryConfig as JobRetryConfig, VerifyStore};
+use crate::storage::pending_infohashes::{PendingInfohashScheduler, PendingInfohashWriter};
 use crate::storage::pg::PoolConfig;
 use crate::storage::sightings::SightingWriter;
 use crate::trace::TraceConfig;
@@ -122,6 +123,15 @@ async fn main() {
 
     let harvest_channel_capacity = config.harvest.harvest_channel_capacity.max(1);
     let (harvest_tx, harvest_rx) = mpsc::channel(harvest_channel_capacity);
+
+    let pending_writer = Arc::new(PendingInfohashWriter::new(
+        pool.clone(),
+        config.buffer.flush_chunk,
+    ));
+    tokio::spawn(pending_writer.clone().run(Duration::from_secs(
+        config.buffer.flush_interval_secs,
+    )));
+
     let harvester = Harvester::new(
         config.harvest.bloom_capacity,
         config.harvest.bloom_fp_rate,
@@ -131,6 +141,7 @@ async fn main() {
         fresh_verify_tx.clone(),
         verify_tx.clone(),
         announce_tx,
+        pending_writer.clone(),
         metrics.clone(),
     );
     tokio::spawn(crate::harvest::run_harvester(harvest_rx, harvester));
@@ -167,6 +178,7 @@ async fn main() {
             metrics.clone(),
             harvest_tx.clone(),
             fresh_verify_tx.clone(),
+            pending_writer.clone(),
             &mut node_routers,
         )
         .await;
@@ -206,6 +218,13 @@ async fn main() {
         Duration::from_secs(config.retry.scheduler_interval_secs),
     );
 
+    let buffer_scheduler = PendingInfohashScheduler::new(
+        pool.clone(),
+        config.buffer.claim_limit,
+        Duration::from_secs(config.buffer.claim_interval_secs),
+    );
+    let buffer_run = buffer_scheduler.run(fresh_verify_tx.clone(), metrics.clone());
+
     let batch_writer = Arc::new(BatchWriter::new(
         pool.clone(),
         retry_backoffs.clone(),
@@ -230,6 +249,7 @@ async fn main() {
         peer_outcomes_retention_secs: config.storage.janitor_peer_outcomes_retention_secs,
         sightings_single_seen_retention_secs: config.storage.janitor_sightings_single_seen_retention_secs,
         sightings_max_retention_secs: config.storage.janitor_sightings_max_retention_secs,
+        pending_infohashes_retention_secs: config.storage.janitor_pending_infohashes_retention_secs,
         batch_size: config.storage.janitor_batch_size,
         batch_sleep_ms: config.storage.janitor_batch_sleep_ms,
     };
@@ -395,6 +415,7 @@ async fn main() {
         _ = sightings_run => { eprintln!("[DBG] select: sightings_run resolved"); }
         _ = sightings_flush => { eprintln!("[DBG] select: sightings_flush resolved"); }
         _ = retry_run => { eprintln!("[DBG] select: retry_run resolved"); }
+        _ = buffer_run => { eprintln!("[DBG] select: buffer_run resolved"); }
         _ = batch_run => { eprintln!("[DBG] select: batch_run resolved"); }
         _ = metrics_run => { eprintln!("[DBG] select: metrics_run resolved"); }
         _ = peer_outcomes_run => { eprintln!("[DBG] select: peer_outcomes_run resolved"); }
@@ -408,6 +429,7 @@ async fn main() {
     tracing::info!("shutdown: draining pending writes");
     batch_writer.flush().await;
     sightings.flush().await;
+    pending_writer.flush().await;
     tracing::info!("shutdown complete");
 
     // Let logging guard flush remaining events
@@ -482,6 +504,7 @@ async fn spawn_node(
     metrics: Arc<Metrics>,
     harvest_tx: mpsc::Sender<HarvestEvent>,
     fresh_verify_tx: mpsc::Sender<[u8; 20]>,
+    pending_writer: Arc<PendingInfohashWriter>,
     node_routers: &mut Vec<Arc<Router>>,
 ) {
     let data_dir = config.data_dir.join(format!("node_{node_index}"));
@@ -645,6 +668,8 @@ async fn spawn_node(
         router.clone(),
         Duration::from_secs(10),
         fresh_verify_tx.clone(),
+        pending_writer.clone(),
+        metrics.clone(),
     ));
     tokio::spawn(limiter_sweep_loop(
         limiter.clone(),

@@ -127,5 +127,11 @@ fn snapshot_rows(s: &Snapshot) -> Vec<(&'static str, u64)> {
             "scheduler_skipped_backpressure",
             s.scheduler_skipped_backpressure,
         ),
+        ("pending_buffer_written", s.pending_buffer_written),
+        ("pending_buffer_replayed", s.pending_buffer_replayed),
+        (
+            "pending_buffer_skipped_backpressure",
+            s.pending_buffer_skipped_backpressure,
+        ),
     ]
 }

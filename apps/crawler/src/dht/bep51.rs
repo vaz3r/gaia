@@ -1,7 +1,9 @@
 use crate::dht::node_id::random_node_id;
 use crate::dht::routing_table::NodeInfo;
 use crate::krpc::message::Message;
+use crate::metrics::{Add1, Metrics};
 use crate::router::Router;
+use crate::storage::pending_infohashes::PendingInfohashWriter;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -10,6 +12,8 @@ pub async fn run_bep51_worker(
     router: Arc<Router>,
     interval: Duration,
     fresh_verify_tx: mpsc::Sender<[u8; 20]>,
+    pending_writer: Arc<PendingInfohashWriter>,
+    metrics: Arc<Metrics>,
 ) {
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -22,10 +26,15 @@ pub async fn run_bep51_worker(
                 for node in nodes {
                     let r = router.clone();
                     let tx = fresh_verify_tx.clone();
+                    let pw = pending_writer.clone();
+                    let m = metrics.clone();
                     set.spawn(async move {
                         if let Ok(infohashes) = send_sample_infohashes(&r, node).await {
                             for ih in infohashes {
-                                let _ = tx.try_send(ih);
+                                if tx.try_send(ih).is_err() {
+                                    pw.push(ih, "bep51");
+                                    m.fresh_channel_dropped.add(1);
+                                }
                             }
                         }
                     });

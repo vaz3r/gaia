@@ -7,6 +7,7 @@ pub struct JanitorConfig {
     pub peer_outcomes_retention_secs: u64,
     pub sightings_single_seen_retention_secs: u64,
     pub sightings_max_retention_secs: u64,
+    pub pending_infohashes_retention_secs: u64,
     pub batch_size: i64,
     pub batch_sleep_ms: u64,
 }
@@ -17,10 +18,12 @@ pub struct JanitorReport {
     pub verified_deleted: i64,
     pub peer_outcomes_deleted: i64,
     pub sightings_deleted: i64,
+    pub pending_infohashes_deleted: i64,
     pub dead_batches: u32,
     pub verified_batches: u32,
     pub peer_outcomes_batches: u32,
     pub sightings_batches: u32,
+    pub pending_infohashes_batches: u32,
     pub elapsed_ms: u64,
 }
 
@@ -31,11 +34,13 @@ pub async fn run(pool: &PgPool, cfg: &JanitorConfig) -> JanitorReport {
     report.verified_deleted = cleanup_verified(pool, cfg, &mut report).await;
     report.peer_outcomes_deleted = cleanup_peer_outcomes(pool, cfg, &mut report).await;
     report.sightings_deleted = cleanup_sightings(pool, cfg, &mut report).await;
+    report.pending_infohashes_deleted = cleanup_pending_infohashes(pool, cfg, &mut report).await;
     report.elapsed_ms = start.elapsed().as_millis() as u64;
     if report.dead_deleted > 0
         || report.verified_deleted > 0
         || report.peer_outcomes_deleted > 0
         || report.sightings_deleted > 0
+        || report.pending_infohashes_deleted > 0
     {
         tracing::info!(
             dead_deleted = report.dead_deleted,
@@ -46,6 +51,8 @@ pub async fn run(pool: &PgPool, cfg: &JanitorConfig) -> JanitorReport {
             peer_outcomes_batches = report.peer_outcomes_batches,
             sightings_deleted = report.sightings_deleted,
             sightings_batches = report.sightings_batches,
+            pending_infohashes_deleted = report.pending_infohashes_deleted,
+            pending_infohashes_batches = report.pending_infohashes_batches,
             elapsed_ms = report.elapsed_ms,
             "janitor: cleanup complete"
         );
@@ -193,6 +200,46 @@ async fn cleanup_verified(pool: &PgPool, cfg: &JanitorConfig, report: &mut Janit
             }
             Err(e) => {
                 tracing::warn!(error = %e, "janitor: delete verified failed");
+                break;
+            }
+        }
+    }
+    total
+}
+
+async fn cleanup_pending_infohashes(
+    pool: &PgPool,
+    cfg: &JanitorConfig,
+    report: &mut JanitorReport,
+) -> i64 {
+    let mut total: i64 = 0;
+    loop {
+        let sql = format!(
+            "DELETE FROM pending_infohashes \
+             WHERE ctid = ANY( \
+                 SELECT ctid FROM pending_infohashes \
+                 WHERE created_at < now() - interval '{} seconds' \
+                 LIMIT $1 \
+             )",
+            cfg.pending_infohashes_retention_secs
+        );
+        let result = sqlx::query(&sql).bind(cfg.batch_size).execute(pool).await;
+
+        match result {
+            Ok(r) => {
+                let n = r.rows_affected() as i64;
+                total += n;
+                report.pending_infohashes_batches += 1;
+                if n == 0 {
+                    break;
+                }
+                if n < cfg.batch_size {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(cfg.batch_sleep_ms)).await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "janitor: delete pending_infohashes failed");
                 break;
             }
         }

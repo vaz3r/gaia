@@ -3,6 +3,7 @@ pub mod bloom;
 use crate::harvest::bloom::BloomFilter;
 use crate::krpc::Infohash;
 use crate::metrics::{Add1, Metrics};
+use crate::storage::pending_infohashes::PendingInfohashWriter;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -31,6 +32,7 @@ pub struct Harvester {
     fresh_verify_tx: mpsc::Sender<Infohash>,
     verify_tx: mpsc::Sender<Infohash>,
     announce_tx: mpsc::Sender<(Infohash, SocketAddr)>,
+    pending_writer: Arc<PendingInfohashWriter>,
     metrics: Arc<Metrics>,
 }
 
@@ -56,6 +58,7 @@ impl Harvester {
         fresh_verify_tx: mpsc::Sender<Infohash>,
         verify_tx: mpsc::Sender<Infohash>,
         announce_tx: mpsc::Sender<(Infohash, SocketAddr)>,
+        pending_writer: Arc<PendingInfohashWriter>,
         metrics: Arc<Metrics>,
     ) -> Self {
         let capacity = capacity.max(64);
@@ -70,6 +73,7 @@ impl Harvester {
             fresh_verify_tx,
             verify_tx,
             announce_tx,
+            pending_writer,
             metrics,
         }
     }
@@ -87,6 +91,7 @@ impl Harvester {
             if self.announce_tx.try_send((ih, peer)).is_err()
                 && self.fresh_verify_tx.try_send(ih).is_err()
             {
+                self.pending_writer.push(ih, "harvester");
                 self.metrics.fresh_channel_dropped.add(1);
                 return false;
             }
@@ -104,6 +109,7 @@ impl Harvester {
             return false;
         }
         if self.fresh_verify_tx.try_send(ih).is_err() {
+            self.pending_writer.push(ih, "harvester");
             self.metrics.fresh_channel_dropped.add(1);
             return false;
         }

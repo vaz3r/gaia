@@ -104,6 +104,10 @@ pub struct Metrics {
     pub fresh_channel_depth: AtomicU64,
     pub fresh_channel_depth_max: AtomicU64,
     pub scheduler_skipped_backpressure: AtomicU64,
+    // Pending infohash buffer metrics
+    pub pending_buffer_written: AtomicU64,
+    pub pending_buffer_replayed: AtomicU64,
+    pub pending_buffer_skipped_backpressure: AtomicU64,
     // Pipeline observability — bounded atomics, no alloc on hot path
     pub fresh_dequeued_total: AtomicU64,
     pub retry_dequeued_total: AtomicU64,
@@ -330,6 +334,9 @@ pub struct Snapshot {
     pub fresh_channel_depth: u64,
     pub fresh_channel_depth_max: u64,
     pub scheduler_skipped_backpressure: u64,
+    pub pending_buffer_written: u64,
+    pub pending_buffer_replayed: u64,
+    pub pending_buffer_skipped_backpressure: u64,
     pub fresh_dequeued_total: u64,
     pub retry_dequeued_total: u64,
     pub announce_dequeued_total: u64,
@@ -523,6 +530,11 @@ impl Metrics {
             fresh_channel_depth_max: self.fresh_channel_depth_max.load(Ordering::Relaxed),
             scheduler_skipped_backpressure: self
                 .scheduler_skipped_backpressure
+                .load(Ordering::Relaxed),
+            pending_buffer_written: self.pending_buffer_written.load(Ordering::Relaxed),
+            pending_buffer_replayed: self.pending_buffer_replayed.load(Ordering::Relaxed),
+            pending_buffer_skipped_backpressure: self
+                .pending_buffer_skipped_backpressure
                 .load(Ordering::Relaxed),
             fresh_dequeued_total: self.fresh_dequeued_total.load(Ordering::Relaxed),
             retry_dequeued_total: self.retry_dequeued_total.load(Ordering::Relaxed),
