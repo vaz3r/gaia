@@ -12,6 +12,10 @@ services:
     init: true
     restart: unless-stopped
     network_mode: host
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@${DB_HOST}:${PG_PORT:-5432}/${POSTGRES_DB:-craw}?sslmode=disable
       CRAW_EXTERNAL_IP: ${CRAW_EXTERNAL_IP}

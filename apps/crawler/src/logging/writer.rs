@@ -151,8 +151,6 @@ fn rotate(
     current_path: &mut String,
     ctx: &AsyncWriter,
 ) {
-    let old_path = current_path.clone();
-
     let (new_path, new_file) = match create_new_file(&ctx.dir) {
         Ok(p) => p,
         Err(e) => {
@@ -163,11 +161,8 @@ fn rotate(
     let new_writer = BufWriter::new(new_file);
 
     let old = std::mem::replace(writer, new_writer);
-    drop(old);
-
-    if let Ok(f) = File::open(&old_path) {
-        let _ = f.sync_all();
-        drop(f);
+    if let Ok(file) = old.into_inner() {
+        let _ = file.sync_all();
     }
 
     *current_path = new_path;
