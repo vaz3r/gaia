@@ -492,13 +492,22 @@ def bulk_update_classifications(records: List[Dict[str, Any]], max_retries: int 
                 conn.commit()
                 return updated_count
         except Exception as e:
-            conn.rollback()
-            if "deadlock" in str(e).lower() and attempt < max_retries - 1:
-                time.sleep(0.5 * (attempt + 1))
+            try:
+                if conn and not conn.closed:
+                    conn.rollback()
+            except Exception:
+                pass
+            err_str = str(e).lower()
+            if ("deadlock" in err_str or "closed the connection" in err_str or "connection already closed" in err_str) and attempt < max_retries - 1:
+                time.sleep(1.0 * (attempt + 1))
                 continue
             raise
         finally:
-            p.putconn(conn)
+            if conn:
+                try:
+                    p.putconn(conn, close=conn.closed)
+                except Exception:
+                    pass
 
     return 0
 
