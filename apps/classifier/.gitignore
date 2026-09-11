@@ -29,6 +29,7 @@ data/models/
 *.safetensors
 *.pkl
 *.joblib
+!models/*.joblib
 
 # ── Large data files ──────────────────────────────────────────────────────────
 # All intermediate JSONL, CSV, JSON are gitignored

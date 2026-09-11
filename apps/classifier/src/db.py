@@ -266,9 +266,11 @@ def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = Non
     Excludes 'Other' to preserve the 10-class open-set boundary."""
     p = get_pool()
     conn = p.getconn()
+    with conn.cursor() as init_cur:
+        init_cur.execute("SET statement_timeout = 300000;")
     cursor_name = f"train_cur_{int(time.time()*1000)}"
     cur = conn.cursor(name=cursor_name)
-    cur.itersize = 2000
+    cur.itersize = 1500
     try:
         query = """
             SELECT 
@@ -280,7 +282,11 @@ def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = Non
                 t.total_size,
                 t.file_count,
                 t.files,
-                l.labeled_at
+                l.labeled_at,
+                t.integrity_score,
+                t.model_safe_probability,
+                t.metadata_quality_score,
+                t.policy_action
             FROM labeled_results l
             JOIN torrents t ON l.infohash = t.infohash
             WHERE l.confidence = %s AND l.label_category != 'Other'
@@ -303,6 +309,10 @@ def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = Non
             count_val = r[6] or 1
             files = r[7]
             labeled_at = r[8].isoformat() if len(r) > 8 and r[8] else None
+            integrity_score = r[9] if len(r) > 9 and r[9] is not None else 100
+            model_safe_probability = r[10] if len(r) > 10 and r[10] is not None else 1.0
+            metadata_quality_score = r[11] if len(r) > 11 and r[11] is not None else 100
+            policy_action = str(r[12]) if len(r) > 12 and r[12] else 'ALLOW'
 
             if isinstance(files, str):
                 try:
@@ -310,7 +320,7 @@ def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = Non
                 except Exception:
                     files = []
             if isinstance(files, list):
-                files = files[:40]
+                files = files[:100]
 
             records.append({
                 "infohash": ih,
@@ -321,7 +331,11 @@ def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = Non
                 "total_size": size,
                 "file_count": count_val,
                 "files": files or [],
-                "labeled_at": labeled_at
+                "labeled_at": labeled_at,
+                "integrity_score": integrity_score,
+                "model_safe_probability": model_safe_probability,
+                "metadata_quality_score": metadata_quality_score,
+                "policy_action": policy_action
             })
             if count % 10000 == 0:
                 print(f"      Loaded {count:,} records from database...", flush=True)
@@ -343,7 +357,8 @@ def fetch_recent_canary_slice(limit: int = 1000) -> List[Dict[str, Any]]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT infohash, name, total_size, file_count, files
+                SELECT infohash, name, total_size, file_count, files,
+                       integrity_score, model_safe_probability, metadata_quality_score, policy_action
                 FROM torrents
                 ORDER BY verified_at DESC NULLS LAST
                 LIMIT %s;
@@ -360,13 +375,17 @@ def fetch_recent_canary_slice(limit: int = 1000) -> List[Dict[str, Any]]:
                     except Exception:
                         files = []
                 if isinstance(files, list):
-                    files = files[:40]
+                    files = files[:100]
                 items.append({
                     "infohash": bytea_to_hex(r[0]),
                     "name": r[1] or "",
                     "total_size": r[2] or 0,
                     "file_count": r[3] or 1,
-                    "files": files or []
+                    "files": files or [],
+                    "integrity_score": r[5] if len(r) > 5 and r[5] is not None else 100,
+                    "model_safe_probability": r[6] if len(r) > 6 and r[6] is not None else 1.0,
+                    "metadata_quality_score": r[7] if len(r) > 7 and r[7] is not None else 100,
+                    "policy_action": str(r[8]) if len(r) > 8 and r[8] else "ALLOW"
                 })
             return items
     finally:

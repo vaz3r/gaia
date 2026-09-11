@@ -6,16 +6,65 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 # Regex patterns for domain scene rules
-RE_TV = re.compile(r'\b[sS]\d{1,2}[eE]\d{1,2}\b|\b\d{1,2}x\d{1,2}\b|\bseason\s*\d+\b|\bepisode\s*\d+\b|\bcomplete\s+series\b', re.IGNORECASE)
-RE_ANIME = re.compile(r'\[(horriblesubs|erai-raws|subsplease|judas|asw|commie|chyu|doki|hatsuyuki|kamigami|nekketsu|vcb-studio|moozzi2|lolihouse|ember|coalgirls|reinforce|anime\s*time|baha|hr)\]|[\u3040-\u30ff\u31f0-\u31ff]|\b(kimetsu|yaiba|jujutsu|kaisen|shingeki|one\s*piece|naruto|bleach|boku\s*no\s*hero|dragon\s*ball|chainsaw\s*man|spy\s*x\s*family|frieren|dungeon\s*meshi|solo\s*leveling|oshi\s*no\s*ko)\b', re.IGNORECASE)
-RE_ADULT = re.compile(r'\b(brazzers|naughtyamerica|puretaboo|realitykings|blacked|tushy|sxyprn|bangbros|adult|xxx|hentai|18禁|jav|pornhub|fuck|pussy|milf|blowjob|anal|threesome|doggystyle|onlyfans|xvideos|redtube|youporn|chaturbate|teamskeet|nubiles|mofos)\b', re.IGNORECASE)
-RE_AUDIOBOOK = re.compile(r'(\b(audiobook|audio\s*book|narrat(ed|or)|unabridged|abridged|read\s*by|performed\s*by|voiced\s*by|audible|audio\s*drama|full[\s\-]cast|\.m4b\b|\.aax\b)\b|\b\d+h\d+m\b|\([A-Za-zА-Яа-я]+[_\s]+[A-Za-zА-Яа-я]\.?\))', re.IGNORECASE)
-RE_BOOK = re.compile(r'\b(epub|pdf|mobi|azw3|djvu|cbr|cbz|chm|retail\s*epub|ebook|e-book|course|tutorial|lecture|textbook|udemy|coursera|masterclass|pluralsight)\b', re.IGNORECASE)
-RE_DOCU = re.compile(r'\b(bbc|pbs|national\s*geographic|discovery(\s*channel)?|docu|documentary|nature|history\s*channel|attenborough|planet\s*earth|curiositystream)\b', re.IGNORECASE)
-RE_GAME = re.compile(r'\b(fitgirl|dodi|repack|codex|skidrow|flt|plaza|cso|nsp|xci|playstation|ps4|ps5|switch|xbox|nintendo|switch|roms?|reloaded|cpy|rune|tenoke|empress|razor1911|elamigos|gog|tinyiso)\b', re.IGNORECASE)
-RE_APP = re.compile(r'\b(crack|keygen|patch|portable|setup|multilingual|v\d+\.\d+|\.dmg\b|\.iso\b|\.apk\b|winrar|installer)\b', re.IGNORECASE)
-RE_MOVIE = re.compile(r'\b(19\d\d|20\d\d)\b.*?\b(1080p|2160p|720p|bluray|bdrip|web-dl|remux|hdr|dvdrip|uhd)\b', re.IGNORECASE)
-RE_MUSIC = re.compile(r'\b(flac|320kbps|alac|lossless|soundtrack|ost|discography|album|single|ep|vinyl|remastered|cd\s*rip|web-flac|qobuz|deezer|tidal|greatest\s*hits)\b', re.IGNORECASE)
+RE_TV = re.compile(
+    r'\b[sS]\d{1,2}[eE]\d{1,2}\b|\b\d{1,2}x\d{1,2}\b|\bseason\s*\d+\b|\bepisode\s*\d+\b|\bcomplete\s+series\b'
+    r'|\bseries\s*\d+\b|\bpart\s*\d+\b|\bep\s*\d+\b|\[第\d+集\]|\[第\d+话\]',
+    re.IGNORECASE
+)
+RE_ANIME = re.compile(
+    r'\[(horriblesubs|erai-raws|subsplease|judas|asw|commie|chyu|doki|hatsuyuki|kamigami|nekketsu|vcb-studio|'
+    r'moozzi2|lolihouse|ember|coalgirls|reinforce|anime\s*time|baha|hr|ohys-raws|leopard-raws|nyaa)\]'
+    r'|[\u3040-\u30ff\u31f0-\u31ff]'
+    r'|\b(kimetsu|yaiba|jujutsu|kaisen|shingeki|one\s*piece|naruto|bleach|boku\s*no\s*hero|dragon\s*ball|'
+    r'chainsaw\s*man|spy\s*x\s*family|frieren|dungeon\s*meshi|solo\s*leveling|oshi\s*no\s*ko|'
+    r'rezero|isekai|shaman\s*king|yu-gi-oh|yugioh|gundam|evangelion|fullmetal|death\s*note|'
+    r'gintama|haikyuu|jojo|tokyo\s*ghoul|vinland|mushoku\s*tensei|slime|danmachi|baki|berserk|'
+    r'monogatari|konosuba|overlord|fate|boruto|inuyasha|dandadan|sousou|kaiju|wind\s*breaker|'
+    r'dual[\s\-]audio|multi[\s\-]sub|multi[\s\-]audio|hi10p|10[\s\-]bit|nced|ncop|bdrip|anilibria)\b',
+    re.IGNORECASE
+)
+RE_ADULT = re.compile(
+    r'\b(brazzers|naughtyamerica|puretaboo|realitykings|blacked|tushy|sxyprn|bangbros|adult|xxx|'
+    r'hentai|18禁|jav|pornhub|fuck|pussy|milf|blowjob|anal|threesome|doggystyle|onlyfans|xvideos|'
+    r'redtube|youporn|chaturbate|teamskeet|nubiles|mofos|fetish|cum|creampie|gangbang|babe|erotic|'
+    r'stripper|porn|deepthroat|hardcore|lust|squirt|cuckold|masturbat)\b',
+    re.IGNORECASE
+)
+RE_AUDIOBOOK = re.compile(
+    r'(\b(audiobook|audio\s*book|narrat(ed|or)|unabridged|abridged|read\s*by|performed\s*by|voiced\s*by|'
+    r'audible|audio\s*drama|full[\s\-]cast|\.m4b\b|\.aax\b)\b|\b\d+h\d+m\b|\([A-Za-zА-Яа-я]+[_\s]+[A-Za-zА-Яа-я]\.?\))',
+    re.IGNORECASE
+)
+RE_BOOK = re.compile(
+    r'\b(epub|pdf|mobi|azw3|djvu|cbr|cbz|chm|retail\s*epub|ebook|e-book|course|tutorial|lecture|textbook|'
+    r'udemy|coursera|masterclass|pluralsight|oreilly|packt|wiley|springer|cambridge|oxford|manual)\b',
+    re.IGNORECASE
+)
+RE_DOCU = re.compile(
+    r'\b(bbc|pbs|national\s*geographic|nat\s*geo|discovery(\s*channel)?|docu|documentary|docuseries|'
+    r'nature|history\s*channel|attenborough|planet\s*earth|blue\s*planet|curiositystream|novafilm|imax)\b',
+    re.IGNORECASE
+)
+RE_GAME = re.compile(
+    r'\b(fitgirl|dodi|repack|codex|skidrow|flt|plaza|cso|nsp|xci|playstation|ps4|ps5|ps3|ps2|psx|switch|'
+    r'xbox|nintendo|roms?|reloaded|cpy|rune|tenoke|empress|razor1911|elamigos|gog|tinyiso|pc\s*game|'
+    r'steamrip|cracked|kaos|rg\s*mechanics|deluxe\s*edition|definitive\s*edition)\b',
+    re.IGNORECASE
+)
+RE_APP = re.compile(
+    r'\b(adobe|autodesk|microsoft\s*office|windows\s*1\d|macos|crack|keygen|patch|portable|setup|'
+    r'multilingual|v\d+\.\d+|\.dmg\b|\.apk\b|winrar|installer|activator|x64|x86)\b',
+    re.IGNORECASE
+)
+RE_MOVIE = re.compile(
+    r'\b(19\d\d|20\d\d)\b.*?\b(1080p|2160p|720p|bluray|bdrip|web-dl|remux|hdr|dvdrip|uhd)\b',
+    re.IGNORECASE
+)
+RE_MUSIC = re.compile(
+    r'\b(flac|320kbps|alac|lossless|soundtrack|ost|discography|album|single|ep|vinyl|remastered|cd\s*rip|'
+    r'web-flac|qobuz|deezer|tidal|greatest\s*hits)\b',
+    re.IGNORECASE
+)
 
 EXT_CATEGORIES = {
     'video': {'mkv', 'mp4', 'avi', 'ts', 'wmv', 'vob', 'm4v', 'webm', 'mpg', 'mpeg', 'flv', 'mov', '3gp', 'm2ts'},
@@ -37,7 +86,7 @@ def extract_extension(filename):
             return ext
     return ''
 
-def get_text_and_features(item, normalize_dense=True):
+def get_text_and_features(item, normalize_dense=True, dense_version=1):
     name = str(item.get('name') or '')
     total_size = float(item.get('total_size') or 0.0)
     file_count = float(item.get('file_count') or 1.0)
@@ -46,6 +95,12 @@ def get_text_and_features(item, normalize_dense=True):
     file_paths = []
     ext_byte_shares = {cat: 0.0 for cat in EXT_CATEGORIES}
     has_files_list = False
+    max_file_len = 0.0
+    has_nfo = 0.0
+    has_cue = 0.0
+    has_setup_exe = 0.0
+    
+    max_inspect_files = 100 if dense_version >= 2 else 40
     
     if files:
         if isinstance(files, str):
@@ -54,11 +109,13 @@ def get_text_and_features(item, normalize_dense=True):
                 files = json.loads(files)
             except Exception:
                 files = []
-        if isinstance(files, list):
+        if isinstance(files, list) and files:
             has_files_list = True
-            for f in files[:40]:
+            for f in files[:max_inspect_files]:
                 if isinstance(f, dict):
                     length = float(f.get('length') or 0.0)
+                    if length > max_file_len:
+                        max_file_len = length
                     path = f.get('path')
                     if isinstance(path, list) and path:
                         p_str = "/".join(str(p) for p in path)
@@ -67,9 +124,16 @@ def get_text_and_features(item, normalize_dense=True):
                         for cat, cat_exts in EXT_CATEGORIES.items():
                             if ext in cat_exts:
                                 ext_byte_shares[cat] += length
+                        if ext == 'nfo':
+                            has_nfo = 1.0
+                        elif ext == 'cue':
+                            has_cue = 1.0
+                        elif ext == 'exe' and 'setup' in path[-1].lower():
+                            has_setup_exe = 1.0
     
     name_ext = extract_extension(name)
     if not has_files_list and name_ext:
+        max_file_len = total_size
         for cat, cat_exts in EXT_CATEGORIES.items():
             if name_ext in cat_exts:
                 ext_byte_shares[cat] += max(total_size, 1.0)
@@ -113,10 +177,25 @@ def get_text_and_features(item, normalize_dense=True):
         1.0 if has_music else 0.0,
     ]
     
-    dense_vector = [eff_log_size, eff_log_count, is_single] + ext_ratios + regex_feats
-    
-    text_content = name + " " + " ".join(file_paths[:15])
-    clean_text = re.sub(r'[\._\-\+]', ' ', text_content)
+    if dense_version >= 2:
+        largest_file_ratio = min(max_file_len / denom, 1.0)
+        meta_feats = [
+            largest_file_ratio,
+            1.0 if has_files_list else 0.0,
+            has_nfo,
+            has_cue,
+            has_setup_exe
+        ]
+        dense_vector = [eff_log_size, eff_log_count, is_single] + ext_ratios + regex_feats + meta_feats
+        # Select informative file paths for text
+        selected_paths = file_paths[:20] if len(file_paths) <= 20 else file_paths[:10] + file_paths[-10:]
+        text_content = name + " " + " ".join(selected_paths)
+    else:
+        dense_vector = [eff_log_size, eff_log_count, is_single] + ext_ratios + regex_feats
+        text_content = name + " " + " ".join(file_paths[:15])
+
+    clean_text = re.sub(r'[\._\-\+\[\]\(\)\{\}]', ' ', text_content)
+    clean_text = re.sub(r'\s+', ' ', clean_text).strip()
     
     return clean_text, dense_vector
 
@@ -170,9 +249,10 @@ def explain_features(item):
     }
 
 class TorrentFeatureExtractor(BaseEstimator, TransformerMixin):
-    def __init__(self, max_features=250000, normalize_dense=True):
+    def __init__(self, max_features=250000, normalize_dense=True, dense_version=2):
         self.max_features = max_features
         self.normalize_dense = normalize_dense
+        self.dense_version = dense_version
         self.char_vectorizer = TfidfVectorizer(
             analyzer='char_wb',
             ngram_range=(3, 5),
@@ -184,7 +264,7 @@ class TorrentFeatureExtractor(BaseEstimator, TransformerMixin):
             analyzer='word',
             ngram_range=(1, 2),
             min_df=2,
-            max_features=50000,
+            max_features=60000,
             token_pattern=r'(?u)\b\w+\b',
             sublinear_tf=True
         )
@@ -192,8 +272,9 @@ class TorrentFeatureExtractor(BaseEstimator, TransformerMixin):
     def fit(self, records, y=None):
         texts = []
         norm = getattr(self, 'normalize_dense', False)
+        dv = getattr(self, 'dense_version', 1)
         for r in records:
-            txt, _ = get_text_and_features(r, normalize_dense=norm)
+            txt, _ = get_text_and_features(r, normalize_dense=norm, dense_version=dv)
             texts.append(txt)
         self.char_vectorizer.fit(texts)
         self.word_vectorizer.fit(texts)
@@ -203,8 +284,9 @@ class TorrentFeatureExtractor(BaseEstimator, TransformerMixin):
         texts = []
         dense_list = []
         norm = getattr(self, 'normalize_dense', False)
+        dv = getattr(self, 'dense_version', 1)
         for r in records:
-            txt, dense = get_text_and_features(r, normalize_dense=norm)
+            txt, dense = get_text_and_features(r, normalize_dense=norm, dense_version=dv)
             texts.append(txt)
             dense_list.append(dense)
             
