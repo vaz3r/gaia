@@ -71,7 +71,7 @@ class ReclassifyRequest(BaseModel):
 
 @app.get("/")
 @app.head("/")
-def get_root():
+async def get_root():
     """Health check endpoint for headless classifier API daemon."""
     return {
         "status": "online",
@@ -266,7 +266,7 @@ def get_retrain_status():
 def start_reclassification(req: Optional[ReclassifyRequest] = None):
     """Trigger background reclassification on review queue items."""
     manager = ReclassifyManager.get_instance()
-    batch_size = req.batch_size if req and req.batch_size else 2000
+    batch_size = req.batch_size if req and req.batch_size else 500
     limit = req.limit if req and req.limit else None
     dry_run = bool(req.dry_run) if req and req.dry_run is not None else False
 
@@ -280,18 +280,17 @@ def start_reclassification(req: Optional[ReclassifyRequest] = None):
 
 
 @app.get("/api/reclassify/status")
-def get_reclassification_status():
+async def get_reclassification_status():
     """Retrieve live real-time reclassification telemetry."""
     manager = ReclassifyManager.get_instance()
     return manager.get_status()
 
 
 @app.post("/api/reclassify/cancel")
-def cancel_reclassification():
+async def cancel_reclassification():
     """Cancel any active background reclassification."""
     manager = ReclassifyManager.get_instance()
     cancelled = manager.cancel()
     if not cancelled:
         return {"status": "not_running", "message": "No reclassification job currently active."}
-    return {"status": "cancelling", "message": "Cancellation requested. Worker will halt cleanly after current batch."}
-
+    return {"status": "cancelling", "message": "Reclassification cancellation requested. Worker will halt cleanly after current batch."}

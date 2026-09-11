@@ -54,7 +54,7 @@ class ReclassifyManager:
                 return True
             return False
 
-    def start(self, batch_size: int = 2000, limit: Optional[int] = None, dry_run: bool = False) -> Dict[str, Any]:
+    def start(self, batch_size: int = 500, limit: Optional[int] = None, dry_run: bool = False) -> Dict[str, Any]:
         with self._lock:
             if self._status["is_running"]:
                 raise RuntimeError("Reclassification task is already running")
@@ -125,9 +125,16 @@ class ReclassifyManager:
                     with conn.cursor() as cur:
                         # Ensure batch worker has sufficient execution time
                         cur.execute("SET statement_timeout = '60000';")
+                        files_expr = """
+                            CASE 
+                                WHEN t.file_count > 40 AND jsonb_typeof(t.files) = 'array' THEN 
+                                    (SELECT jsonb_agg(elem) FROM (SELECT elem FROM jsonb_array_elements(t.files) elem LIMIT 40) s)
+                                ELSE t.files 
+                            END
+                        """
                         if last_infohash is None:
-                            query = """
-                                SELECT t.infohash, t.name, t.total_size, t.file_count, t.files, t.category
+                            query = f"""
+                                SELECT t.infohash, t.name, t.total_size, t.file_count, {files_expr} AS files, t.category
                                 FROM torrents t
                                 WHERE t.needs_review = true
                                   AND NOT EXISTS (
@@ -138,8 +145,8 @@ class ReclassifyManager:
                             """
                             cur.execute(query, (current_batch_size,))
                         else:
-                            query = """
-                                SELECT t.infohash, t.name, t.total_size, t.file_count, t.files, t.category
+                            query = f"""
+                                SELECT t.infohash, t.name, t.total_size, t.file_count, {files_expr} AS files, t.category
                                 FROM torrents t
                                 WHERE t.needs_review = true
                                   AND t.infohash > %s
@@ -152,6 +159,10 @@ class ReclassifyManager:
                             cur.execute(query, (last_infohash, current_batch_size))
                         batch_rows = cur.fetchall()
                 finally:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
                     p.putconn(conn)
 
                 if not batch_rows:
@@ -197,6 +208,8 @@ class ReclassifyManager:
                 accepted_count += acc
                 still_flagged_count += flag
                 self._update_progress(processed, accepted_count, still_flagged_count, category_shifts, t_start, target_count, batch_duration=batch_dur, batch_size=len(batch_items))
+                # Yield GIL and CPU to allow uvicorn and health checks to remain real-time responsive
+                time.sleep(0.02)
 
             with self._lock:
                 total_elapsed = time.time() - t_start
