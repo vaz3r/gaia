@@ -73,7 +73,7 @@ $SSH "cd $DEPLOY_REMOTE_GIT && git fetch origin && git checkout $TAG"
 
 # ── 3. Ensure data directories exist ──
 echo "[3/4] Ensuring data directories..."
-$SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S mkdir -p ${DEPLOY_REMOTE_DATA}/crawler ${DEPLOY_REMOTE_DATA}/postgres ${DEPLOY_REMOTE_DATA}/logs ${DEPLOY_REMOTE_DATA}/classifier/models ${DEPLOY_REMOTE_DATA}/anomalies/models ${DEPLOY_REMOTE_DATA}/anomalies/data /mnt/gaia/logs/crawler && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R 10001:10001 ${DEPLOY_REMOTE_DATA} /mnt/gaia/logs && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R $DEPLOY_USER:$DEPLOY_USER ${DEPLOY_REMOTE_DATA}/classifier ${DEPLOY_REMOTE_DATA}/anomalies && echo '${DEPLOY_PASSWORD:-}' | sudo -S chmod -R 777 ${DEPLOY_REMOTE_DATA}/classifier ${DEPLOY_REMOTE_DATA}/anomalies || true"
+$SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S mkdir -p ${DEPLOY_REMOTE_DATA}/crawler ${DEPLOY_REMOTE_DATA}/postgres ${DEPLOY_REMOTE_DATA}/logs ${DEPLOY_REMOTE_DATA}/classifier/models ${DEPLOY_REMOTE_DATA}/anomalies/models ${DEPLOY_REMOTE_DATA}/anomalies/data /mnt/gaia/logs/crawler && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R 10001:10001 ${DEPLOY_REMOTE_DATA}/crawler /mnt/gaia/logs && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R $DEPLOY_USER:$DEPLOY_USER ${DEPLOY_REMOTE_DATA}/classifier ${DEPLOY_REMOTE_DATA}/anomalies && echo '${DEPLOY_PASSWORD:-}' | sudo -S chmod -R 777 ${DEPLOY_REMOTE_DATA}/classifier ${DEPLOY_REMOTE_DATA}/anomalies || true"
 
 # Ensure baseline classifier model exists on remote host
 if [ -f "$REPO_ROOT/apps/classifier/models/torrent_classifier_v2.joblib" ]; then
