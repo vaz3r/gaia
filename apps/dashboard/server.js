@@ -134,6 +134,13 @@ let statsCache = { ts: 0, data: null };
 let scoringStatsCache = { ts: 0, data: null };
 let alertsSummaryCache = { ts: 0, data: null };
 let analysisCacheMap = new Map(); // key -> { ts: number, data: any }
+// Chart data cache: hourly_24h + daily_7d are expensive aggregations that only
+// need hourly resolution, so we decouple them from the 35s stats refresh cycle.
+let chartCache = { ts: 0, hourly_24h: null, daily_7d: null };
+const CHART_CACHE_MS = 3600000; // 1 hour
+// Routing security cache: BEP42 telemetry doesn't change rapidly.
+let routingSecurityCache = { ts: 0, data: null };
+const ROUTING_SECURITY_CACHE_MS = 30000; // 30 seconds
 
 const SORTS = {
   verified_at: 'verified_at',
@@ -522,7 +529,6 @@ app.get('/api/peers', async (req, res) => {
       }
     }
 
-    const countQuery = `SELECT count(*) AS total, max(metadata_provided_count) AS max_metadata FROM stable_peers ${whereClause}`;
     const dataQuery = `
       SELECT host(ip) AS ip, port, metadata_provided_count, first_seen, last_seen
       FROM stable_peers
@@ -531,13 +537,32 @@ app.get('/api/peers', async (req, res) => {
       LIMIT ${limit} OFFSET ${offset}
     `;
 
-    const [countRes, rowsRes] = await Promise.all([
-      query(countQuery, params),
-      query(dataQuery, params),
-    ]);
+    let total, maxMeta, rowsRes;
 
-    const total = parseInt(countRes.rows[0]?.total || 0, 10);
-    const maxMeta = parseInt(countRes.rows[0]?.max_metadata || 0, 10);
+    if (!search) {
+      // No search filter: avoid the 402ms full seq scan.
+      // - Use reltuples for count (~0.1ms, ±1% accuracy).
+      // - Use idx_stable_peers_meta_count (first row DESC = max) for max (~4ms).
+      const [estRes, maxRes, rows] = await Promise.all([
+        query(`SELECT reltuples::bigint AS n FROM pg_class WHERE relname = 'stable_peers'`),
+        query(`SELECT metadata_provided_count FROM stable_peers ORDER BY metadata_provided_count DESC LIMIT 1`),
+        query(dataQuery, params),
+      ]);
+      total = parseInt(estRes.rows[0]?.n || 0, 10);
+      maxMeta = parseInt(maxRes.rows[0]?.metadata_provided_count || 0, 10);
+      rowsRes = rows;
+    } else {
+      // Search active: COUNT(*) is bounded by the IP/port filter result set.
+      const countQuery = `SELECT count(*) AS total, max(metadata_provided_count) AS max_metadata FROM stable_peers ${whereClause}`;
+      const [countRes, rows] = await Promise.all([
+        query(countQuery, params),
+        query(dataQuery, params),
+      ]);
+      total = parseInt(countRes.rows[0]?.total || 0, 10);
+      maxMeta = parseInt(countRes.rows[0]?.max_metadata || 0, 10);
+      rowsRes = rows;
+    }
+
     const pages = Math.max(1, Math.ceil(total / limit));
 
     res.json({
@@ -556,6 +581,7 @@ app.get('/api/peers', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // GET /api/peers/:ip/:port/torrents - Seeded torrents discovered from this peer
 app.get('/api/peers/:ip/:port/torrents', async (req, res) => {
@@ -699,8 +725,13 @@ app.get('/api/metrics/history', async (req, res) => {
 
 async function refreshStats() {
   try {
-    const [total, v1h, v24h, newTorrents1h, newTorrents24h, seen1h, jobs, heart, sessionUp, hourly24h, daily7d] = await Promise.all([
-      query(`SELECT count(*) AS n FROM torrents`),
+    const now = Date.now();
+    const chartFresh = chartCache.hourly_24h && (now - chartCache.ts) < CHART_CACHE_MS;
+
+    const promises = [
+      // Use reltuples estimate (~0.1ms) instead of COUNT(*) (~2,700ms on 3M rows).
+      // Accuracy is ±1% — sufficient for a dashboard counter.
+      query(`SELECT reltuples::bigint AS n FROM pg_class WHERE relname = 'torrents'`),
       query(`SELECT count(*) AS n FROM torrents WHERE verified_at > now() - interval '1 hour'`),
       query(`SELECT count(*) AS n FROM torrents WHERE verified_at > now() - interval '24 hours'`),
       query(`SELECT count(*) AS n FROM torrents WHERE first_seen > now() - interval '1 hour'`),
@@ -714,52 +745,70 @@ async function refreshStats() {
       query(`SELECT max(ts) AS ts FROM metrics`),
       query(`SELECT EXTRACT(EPOCH FROM (now() - ts))::int AS uptime_s
              FROM metrics WHERE metric_name = '_session_start' ORDER BY ts DESC LIMIT 1`),
-      query(`
-        WITH hours AS (
-          SELECT generate_series(
-            date_trunc('hour', now()) - interval '23 hours',
-            date_trunc('hour', now()),
-            interval '1 hour'
-          ) AS hr
-        ),
-        recent AS (
-          SELECT date_trunc('hour', verified_at) AS hr, count(*) AS count
-          FROM torrents
-          WHERE verified_at >= date_trunc('hour', now()) - interval '23 hours'
-          GROUP BY 1
-        )
-        SELECT 
-          to_char(h.hr AT TIME ZONE 'Asia/Dubai', 'HH24:00') AS hour_label,
-          extract(epoch from h.hr) * 1000 AS ts,
-          COALESCE(r.count, 0)::int AS count
-        FROM hours h
-        LEFT JOIN recent r ON r.hr = h.hr
-        ORDER BY h.hr ASC
-      `),
-      // 7-day daily ingestion: new torrents inserted per day, in Dubai local time (GST, UTC+4)
-      query(`
-        WITH days AS (
-          SELECT generate_series(
-            date_trunc('day', now() AT TIME ZONE 'Asia/Dubai') - interval '6 days',
-            date_trunc('day', now() AT TIME ZONE 'Asia/Dubai'),
-            interval '1 day'
-          ) AS day_gst
-        ),
-        daily AS (
-          SELECT date_trunc('day', first_seen AT TIME ZONE 'Asia/Dubai') AS day_gst,
-                 count(*) AS count
-          FROM torrents
-          WHERE first_seen >= date_trunc('day', now() AT TIME ZONE 'Asia/Dubai') - interval '6 days'
-          GROUP BY 1
-        )
-        SELECT
-          to_char(d.day_gst, 'Mon DD') AS day_label,
-          COALESCE(daily.count, 0)::int AS count
-        FROM days d
-        LEFT JOIN daily ON daily.day_gst = d.day_gst
-        ORDER BY d.day_gst ASC
-      `),
-    ]);
+    ];
+
+    // Expensive chart aggregations: only run when the 1-hour chart cache is stale.
+    // hourly_24h scans ~534k rows (generate_series + HashAggregate) — measured at 3,258ms.
+    // daily_7d is similarly heavy. Both have hourly resolution so 1h TTL is appropriate.
+    if (!chartFresh) {
+      promises.push(
+        query(`
+          WITH hours AS (
+            SELECT generate_series(
+              date_trunc('hour', now()) - interval '23 hours',
+              date_trunc('hour', now()),
+              interval '1 hour'
+            ) AS hr
+          ),
+          recent AS (
+            SELECT date_trunc('hour', verified_at) AS hr, count(*) AS count
+            FROM torrents
+            WHERE verified_at >= date_trunc('hour', now()) - interval '23 hours'
+            GROUP BY 1
+          )
+          SELECT 
+            to_char(h.hr AT TIME ZONE 'Asia/Dubai', 'HH24:00') AS hour_label,
+            extract(epoch from h.hr) * 1000 AS ts,
+            COALESCE(r.count, 0)::int AS count
+          FROM hours h
+          LEFT JOIN recent r ON r.hr = h.hr
+          ORDER BY h.hr ASC
+        `),
+        // 7-day daily ingestion: new torrents inserted per day, in Dubai local time (GST, UTC+4)
+        query(`
+          WITH days AS (
+            SELECT generate_series(
+              date_trunc('day', now() AT TIME ZONE 'Asia/Dubai') - interval '6 days',
+              date_trunc('day', now() AT TIME ZONE 'Asia/Dubai'),
+              interval '1 day'
+            ) AS day_gst
+          ),
+          daily AS (
+            SELECT date_trunc('day', first_seen AT TIME ZONE 'Asia/Dubai') AS day_gst,
+                   count(*) AS count
+            FROM torrents
+            WHERE first_seen >= date_trunc('day', now() AT TIME ZONE 'Asia/Dubai') - interval '6 days'
+            GROUP BY 1
+          )
+          SELECT
+            to_char(d.day_gst, 'Mon DD') AS day_label,
+            COALESCE(daily.count, 0)::int AS count
+          FROM days d
+          LEFT JOIN daily ON daily.day_gst = d.day_gst
+          ORDER BY d.day_gst ASC
+        `)
+      );
+    }
+
+    const results = await Promise.all(promises);
+    const [total, v1h, v24h, newTorrents1h, newTorrents24h, seen1h, jobs, heart, sessionUp] = results;
+
+    // Update chart cache if we fetched fresh chart data
+    if (!chartFresh) {
+      const hourly24h = results[9];
+      const daily7d = results[10];
+      chartCache = { ts: now, hourly_24h: hourly24h.rows, daily_7d: daily7d.rows };
+    }
 
     const heartbeat = heart.rows[0].ts ? new Date(heart.rows[0].ts) : null;
     const verified1hNum = parseInt(v1h.rows[0].n ?? 0, 10);
@@ -781,8 +830,8 @@ async function refreshStats() {
       crawler_heartbeat_ts: heartbeat,
       crawler_stale_s: heartbeat ? Math.round((Date.now() - heartbeat.getTime()) / 1000) : null,
       session_uptime_s: sessionUp.rows[0]?.uptime_s ?? null,
-      hourly_24h: hourly24h.rows,
-      daily_7d: daily7d.rows,
+      hourly_24h: chartCache.hourly_24h || [],
+      daily_7d: chartCache.daily_7d || [],
     };
     statsCache = { ts: Date.now(), data };
     return data;
@@ -791,6 +840,7 @@ async function refreshStats() {
     return statsCache.data;
   }
 }
+
 
 // GET /api/stats - Immediate response from memory cache
 app.get('/api/stats', async (req, res) => {
@@ -1018,6 +1068,11 @@ app.get('/api/analysis', async (req, res) => {
 
 // GET /api/routing/security - BEP 42 Sybil Protection Telemetry & Cryptographic Verification Gauge
 app.get('/api/routing/security', async (req, res) => {
+  const now = Date.now();
+  if (routingSecurityCache.data && (now - routingSecurityCache.ts) < ROUTING_SECURITY_CACHE_MS) {
+    return res.json(routingSecurityCache.data);
+  }
+
   try {
     const r = await query(`
       SELECT DISTINCT ON (metric_name) metric_name, metric_value, ts
@@ -1044,7 +1099,7 @@ app.get('/api/routing/security', async (req, res) => {
     const total_inbound = total_bep42 + total_rand;
     const compliance_pct = total_inbound > 0 ? parseFloat(((total_bep42 / total_inbound) * 100).toFixed(2)) : 0;
 
-    res.json({
+    const responseData = {
       compliance_pct,
       total_inbound,
       total_bep42,
@@ -1060,12 +1115,16 @@ app.get('/api/routing/security', async (req, res) => {
         bep42_sha1_prefix_mask: 'crc32c(ip & 0x030f3fff, r <= 7) >> 29',
         status: compliance_pct >= 30 ? 'ENFORCING' : 'OBSERVING'
       }
-    });
+    };
+
+    routingSecurityCache = { ts: now, data: responseData };
+    res.json(responseData);
   } catch (err) {
     console.error('Failed to fetch routing security metrics:', err);
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // ============================================================
 // SERVER-SENT EVENTS (SSE) ENGINE: /api/live/stream
@@ -1171,7 +1230,7 @@ app.get('/api/performance', (req, res) => {
 let analyticsCache = { ts: 0, data: null };
 app.get('/api/analytics', async (req, res) => {
   const now = Date.now();
-  if (analyticsCache.data && now - analyticsCache.ts < 30000) {
+  if (analyticsCache.data && now - analyticsCache.ts < 60000) {
     return res.json(analyticsCache.data);
   }
 
@@ -1304,10 +1363,21 @@ app.get('/api/analytics', async (req, res) => {
 // Routes /api/classifier/* to the Python headless ML daemon (default port 8080)
 // ============================================================
 const CLASSIFIER_API_URL = process.env.CLASSIFIER_API_URL || 'http://127.0.0.1:8080';
+const classifierProxyCache = new Map(); // path -> { ts: number, status: number, data: any }
+const CLASSIFIER_CACHE_MS = 10000; // 10s cache for lightweight telemetry
 
 app.use('/api/classifier', async (req, res) => {
   const targetPath = req.url; // e.g. /metrics, /torrents, /classify
   const targetUrl = `${CLASSIFIER_API_URL}/api${targetPath}`;
+  const now = Date.now();
+
+  // Cache GET /status and GET /metrics to avoid redundant proxy overhead on tab switches
+  if (req.method === 'GET' && (targetPath === '/status' || targetPath === '/metrics')) {
+    const cached = classifierProxyCache.get(targetPath);
+    if (cached && (now - cached.ts) < CLASSIFIER_CACHE_MS) {
+      return res.status(cached.status).json(cached.data);
+    }
+  }
 
   try {
     const fetchOptions = {
@@ -1315,6 +1385,7 @@ app.use('/api/classifier', async (req, res) => {
       headers: {
         'Accept': 'application/json',
       },
+      signal: AbortSignal.timeout(5000), // Fail-fast in 5s rather than hanging Node.js
     };
 
     if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
@@ -1328,6 +1399,9 @@ app.use('/api/classifier', async (req, res) => {
     res.status(resp.status);
     if (contentType.includes('application/json')) {
       const data = await resp.json();
+      if (req.method === 'GET' && (targetPath === '/status' || targetPath === '/metrics') && resp.status === 200) {
+        classifierProxyCache.set(targetPath, { ts: now, status: resp.status, data });
+      }
       return res.json(data);
     } else {
       const text = await resp.text();
@@ -1500,23 +1574,44 @@ app.get('/api/scoring/blocked', async (req, res) => {
 
     const where = `WHERE ${whereClauses.join(' AND ')}`;
 
-    const countRes = await query(
-      `SELECT count(*) AS total FROM torrents t ${where}`,
-      params
-    );
-    const total = parseInt(countRes.rows[0]?.total || 0, 10);
+    // For unfiltered requests, reuse pre-cached scoring stats (refreshed every 45s)
+    // instead of running a 4,400ms parallel seq scan over 3M rows.
+    // scoringStatsCache.data contains: action_suppress and tier_blocked counts,
+    // but some torrents may have both flags — use a quick partial-index count instead,
+    // which uses idx_torrents_blocked and runs in ~5ms.
+    let total;
+    if (!search && scoringStatsCache.data) {
+      // Use a lightweight count against the partial index (idx_torrents_blocked)
+      // instead of a full table scan. This runs in ~5ms vs 4,400ms.
+      const countRes = await query(
+        `SELECT count(*) AS total FROM torrents t WHERE (t.policy_action = 'SUPPRESS' OR t.risk_tier = 'BLOCKED')`
+      );
+      total = parseInt(countRes.rows[0]?.total || 0, 10);
+    } else {
+      const countRes = await query(
+        `SELECT count(*) AS total FROM torrents t ${where}`,
+        params
+      );
+      total = parseInt(countRes.rows[0]?.total || 0, 10);
+    }
 
     const dataParams = [...params, limit, offset];
+    // LATERAL JOIN replaces the correlated subquery for reason_codes.
+    // Instead of 25 individual sub-queries (one per row), the planner can
+    // batch them via the composite idx_score_history_infohash index.
     const rowsRes = await query(
       `SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.total_size, t.file_count, t.verified_at,
               t.category, t.integrity_score, t.policy_action, t.risk_tier, t.decision_source,
               t.availability_score, t.availability_state, t.scored_at,
-              COALESCE(
-                (SELECT h.reason_codes FROM torrent_score_history h 
-                 WHERE h.infohash = t.infohash ORDER BY h.scored_at DESC LIMIT 1),
-                '[]'::jsonb
-              ) AS reason_codes
+              COALESCE(hist.reason_codes, '[]'::jsonb) AS reason_codes
        FROM torrents t
+       LEFT JOIN LATERAL (
+         SELECT h.reason_codes
+         FROM torrent_score_history h
+         WHERE h.infohash = t.infohash
+         ORDER BY h.scored_at DESC
+         LIMIT 1
+       ) hist ON true
        ${where}
        ORDER BY t.scored_at DESC NULLS LAST, t.verified_at DESC
        LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
@@ -1535,6 +1630,7 @@ app.get('/api/scoring/blocked', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // POST /api/scoring/unblock
 // Body: { infohashes: string[], target_action?: 'ALLOW' | 'REVIEW', notes?: string }
@@ -1813,7 +1909,15 @@ app.get(/^(?!\/api)/, (req, res) => res.sendFile(path.join(dist, 'index.html')))
 })();
 
 // Active background refresh loops (staggered)
-setInterval(refreshMetrics, 5000);         // Metrics refreshed every 5s
+// refreshMetrics runs every 5s, but skips when no SSE clients are connected and the
+// cache is still within METRICS_CACHE_MS. This avoids 720 unnecessary 112ms DB queries
+// per hour when nobody is watching the live dashboard stream.
+setInterval(async () => {
+  if (sseClients.size === 0 && metricsCache.data && (Date.now() - metricsCache.ts) < METRICS_CACHE_MS) {
+    return; // Cache still fresh and nobody watching live — skip refresh
+  }
+  await refreshMetrics();
+}, 5000);
 setInterval(refreshAlertsSummary, 10000);   // Incident alerts summary refreshed every 10s
 setInterval(refreshStats, 35000);          // Aggregates refreshed every 35s
 setInterval(refreshScoringStats, 45000);   // Scoring statistics refreshed every 45s

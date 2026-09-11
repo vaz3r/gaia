@@ -11,13 +11,13 @@ POSTGRES_USER = os.environ.get("POSTGRES_USER", "crawler")
 POSTGRES_DB = os.environ.get("POSTGRES_DB", "craw")
 PG_PASSWORD = os.environ.get("PG_PASSWORD", "83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b")
 
-_connection_pool: Optional[pool.SimpleConnectionPool] = None
+_connection_pool: Optional[pool.ThreadedConnectionPool] = None
 
-def get_pool() -> pool.SimpleConnectionPool:
+def get_pool() -> pool.ThreadedConnectionPool:
     global _connection_pool
     if _connection_pool is None or _connection_pool.closed:
-        _connection_pool = pool.SimpleConnectionPool(
-            minconn=1,
+        _connection_pool = pool.ThreadedConnectionPool(
+            minconn=2,
             maxconn=25,
             host=DB_HOST,
             port=PG_PORT,
@@ -146,8 +146,9 @@ def get_torrents(
                 rows = cur.fetchall()
             else:
                 # Query classified torrents (avoid displaying unclassified backlog in 'All Classified')
-                cur.execute("SELECT count(*) FROM torrents WHERE classified_at IS NOT NULL;")
-                total = cur.fetchone()[0]
+                # Reuse pre-calculated total_classified from metrics cache to avoid 3M row count(*) scan
+                metrics = get_queue_metrics()
+                total = metrics.get("total_classified", 0)
 
                 cur.execute(
                     """
