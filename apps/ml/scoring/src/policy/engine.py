@@ -103,19 +103,23 @@ def compute_availability(
     swarm_peers: Optional[int] = 0,
     last_seen: Optional[datetime] = None,
     now: Optional[datetime] = None,
+    fetch_success_rate: float = 0.0,
+    fetch_timeout_rate: float = 0.0,
+    hours_since_success: Optional[float] = None,
 ) -> Tuple[int, AvailabilityState]:
     """
-    V1 Explicit Deterministic Availability formulation: time-decayed operational score.
+    V2 Availability formulation: time-decayed operational score with fetch outcome reliability.
     """
     if now is None:
         now = datetime.now(timezone.utc)
 
-    # 1. Confirmed seed component (up to 50 pts)
-    s_seed = 50 if seed_confirmed else 0
-
-    # 2. Peer count log component (up to 30 pts)
     peers = max(0, swarm_peers or 0)
-    s_peer = min(30, int(6.0 * math.log2(1.0 + peers))) if peers > 0 else 0
+
+    # 1. Confirmed seed component (up to 35 pts)
+    s_seed = 35 if seed_confirmed else 0
+
+    # 2. Peer count log component (up to 20 pts)
+    s_peer = min(20, int(5.7 * math.log2(1.0 + peers))) if peers > 0 else 0
 
     # 3. Sighting recency component (up to 20 pts)
     s_recency = 0
@@ -125,10 +129,17 @@ def compute_availability(
         delta_days = max(0.0, (now - last_seen).total_seconds() / 86400.0)
         s_recency = int(20.0 * math.exp(-delta_days / 7.0))
     else:
-        # Never sighted
         s_recency = 0
 
-    availability_score = min(100, s_seed + s_peer + s_recency)
+    # 4. Fetch reliability component (up to 25 pts)
+    # Requires actual fetch outcome data; 0 if no data available
+    s_fetch = 0
+    if fetch_success_rate > 0 and hours_since_success is not None:
+        recency = math.exp(-hours_since_success / 24.0)  # 24h half-life
+        s_fetch = int(25.0 * fetch_success_rate * recency * (1.0 - fetch_timeout_rate))
+        s_fetch = min(25, max(0, s_fetch))
+
+    availability_score = min(100, s_seed + s_peer + s_recency + s_fetch)
 
     if availability_score >= 60:
         state = AvailabilityState.ACTIVE
@@ -155,6 +166,9 @@ def evaluate_policy(
     last_seen: Optional[datetime] = None,
     last_error: Optional[str] = None,
     score_model_version: str = "v1.0.0",
+    fetch_success_rate: float = 0.0,
+    fetch_timeout_rate: float = 0.0,
+    hours_since_success: Optional[float] = None,
 ) -> ScoringResult:
     """
     Evaluates policy deductions, invariant rules, and generates ScoringResult.
@@ -183,6 +197,9 @@ def evaluate_policy(
         seed_confirmed=seed_confirmed,
         swarm_peers=swarm_peers,
         last_seen=last_seen,
+        fetch_success_rate=fetch_success_rate,
+        fetch_timeout_rate=fetch_timeout_rate,
+        hours_since_success=hours_since_success,
     )
 
     # 3. Check Critical Invariants (Forces SUPPRESS & BLOCKED)

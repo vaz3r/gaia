@@ -363,6 +363,35 @@ app.post('/api/torrents/:infohash/refresh-health', async (req, res) => {
     const hoursDecay = Math.max(0, (now.getTime() - lastSeenDate.getTime()) / 3600000);
     const peersCount = row.swarm_peers || 0;
     
+    // Fetch outcome stats (48h window)
+    const fetchStats = await query(
+      `SELECT count(*) AS total_fetches,
+              count(*) FILTER (WHERE result IN ('ok','metadata_ok')) AS successful,
+              count(*) FILTER (WHERE result IN ('timeout','metadata_timeout')) AS timeouts,
+              max(created_at) FILTER (WHERE result IN ('ok','metadata_ok')) AS last_success
+       FROM fetch_peer_outcomes
+       WHERE infohash = decode($1, 'hex')
+         AND created_at > now() - interval '48 hours'`,
+      [ih]
+    );
+    const fs = fetchStats.rows[0];
+    const totalFetches = Number(fs.total_fetches || 0);
+    const successfulFetches = Number(fs.successful || 0);
+    const timeoutFetches = Number(fs.timeouts || 0);
+    const lastSuccess = fs.last_success ? new Date(fs.last_success) : null;
+
+    // Compute fetch stats
+    let fetchSuccessRate = 0;
+    let fetchTimeoutRate = 0;
+    let hoursSinceSuccess = null;
+    if (totalFetches > 0 && successfulFetches > 0) {
+      fetchSuccessRate = successfulFetches / totalFetches;
+      fetchTimeoutRate = timeoutFetches / totalFetches;
+      if (lastSuccess) {
+        hoursSinceSuccess = Math.max(0, (now.getTime() - lastSuccess.getTime()) / 3600000);
+      }
+    }
+
     // Seed is confirmed if swarm has active peers, or previously confirmed within 14-day window
     const hasPeers = peersCount > 0;
     const seedConfirmed = hasPeers || (Boolean(row.seed_confirmed) && hoursDecay <= 336.0);
@@ -374,15 +403,21 @@ app.post('/api/torrents/:infohash/refresh-health', async (req, res) => {
     const pSat = peersCount > 0 ? Math.min(1.0, Math.log(1 + peersCount) / Math.log(26)) : 0;
     const newPop = Math.min(100, Math.max(0, Math.round(100 * (0.40 * popBase + 0.35 * vel + 0.25 * pSat))));
 
-    // Calibrated Swarm Health & Availability (Unified Formulation)
-    // S_seed: 50 pts if confirmed active seed or peers present
-    const sSeed = seedConfirmed ? 50 : 0;
-    // S_peer: 0-30 pts logarithmic peer saturation
-    const sPeer = hasPeers ? Math.min(30, Math.floor(6.0 * Math.log2(1.0 + peersCount))) : 0;
-    // S_recency: 0-20 pts decay curve (14-day exponential half-life)
+    // V2 Swarm Health & Availability with fetch outcome reliability
+    // S_seed: 35 pts if confirmed active seed or peers present
+    const sSeed = seedConfirmed ? 35 : 0;
+    // S_peer: 0-20 pts logarithmic peer saturation
+    const sPeer = hasPeers ? Math.min(20, Math.floor(5.7 * Math.log2(1.0 + peersCount))) : 0;
+    // S_recency: 0-20 pts decay curve (7-day exponential half-life)
     const deltaDays = hoursDecay / 24.0;
     const sRecency = row.last_seen ? Math.max(2, Math.floor(20.0 * Math.exp(-deltaDays / 14.0))) : 0;
-    const unifiedHealth = Math.min(100, Math.max(0, sSeed + sPeer + sRecency));
+    // S_fetch: 0-25 pts fetch outcome reliability (24h recency half-life)
+    let sFetch = 0;
+    if (fetchSuccessRate > 0 && hoursSinceSuccess !== null) {
+      const fetchRecency = Math.exp(-hoursSinceSuccess / 24.0);
+      sFetch = Math.min(25, Math.max(0, Math.floor(25.0 * fetchSuccessRate * fetchRecency * (1.0 - fetchTimeoutRate))));
+    }
+    const unifiedHealth = Math.min(100, Math.max(0, sSeed + sPeer + sRecency + sFetch));
 
     let newAvailState = 'UNKNOWN';
     if (unifiedHealth >= 60) {
@@ -419,8 +454,17 @@ app.post('/api/torrents/:infohash/refresh-health', async (req, res) => {
         seed_pts: sSeed,
         peer_pts: sPeer,
         recency_pts: sRecency,
+        fetch_pts: sFetch,
         total_pts: unifiedHealth,
-        hours_since_probe: Math.round(hoursDecay * 10) / 10
+        hours_since_probe: Math.round(hoursDecay * 10) / 10,
+        fetch_stats: {
+          total_fetches: totalFetches,
+          successful: successfulFetches,
+          timeouts: timeoutFetches,
+          success_rate: Math.round(fetchSuccessRate * 1000) / 10,
+          timeout_rate: Math.round(fetchTimeoutRate * 1000) / 10,
+          hours_since_success: hoursSinceSuccess !== null ? Math.round(hoursSinceSuccess * 10) / 10 : null
+        }
       }
     });
   } catch (err) {

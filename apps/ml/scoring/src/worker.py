@@ -94,7 +94,28 @@ class ScoringWorker:
 
         # 3. Policy evaluation
         scoring_results = []
+        now_utc = datetime.now(timezone.utc)
         for p_safe, r in zip(p_safe_batch, rows):
+            # Compute fetch stats from query results (indices 10-13)
+            total_fetches = r[10] or 0
+            successful_fetches = r[11] or 0
+            timeout_fetches = r[12] or 0
+            last_success = r[13]
+
+            if total_fetches > 0 and successful_fetches > 0:
+                fetch_success_rate = successful_fetches / total_fetches
+                fetch_timeout_rate = timeout_fetches / total_fetches
+                if last_success is not None:
+                    if last_success.tzinfo is None:
+                        last_success = last_success.replace(tzinfo=timezone.utc)
+                    hours_since_success = (now_utc - last_success).total_seconds() / 3600.0
+                else:
+                    hours_since_success = None
+            else:
+                fetch_success_rate = 0.0
+                fetch_timeout_rate = 0.0
+                hours_since_success = None
+
             res = evaluate_policy(
                 infohash=r[0],
                 model_safe_probability=float(p_safe),
@@ -107,6 +128,9 @@ class ScoringWorker:
                 swarm_peers=r[8],
                 last_seen=r[9],
                 score_model_version="trust_classifier_v1.0.0",
+                fetch_success_rate=fetch_success_rate,
+                fetch_timeout_rate=fetch_timeout_rate,
+                hours_since_success=hours_since_success,
             )
             scoring_results.append(res)
 
@@ -227,14 +251,27 @@ class ScoringWorker:
         Priority 1: Unscored new arrivals (scored_at IS NULL).
         Priority 2: Stale availability refresh (scored_at < NOW() - 24h).
         """
-        # 1. Fetch unscored new torrents
+        # 1. Fetch unscored new torrents with fetch outcome stats
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT infohash, name, piece_length, total_size, file_count, 
-                       files, category, seed_confirmed, swarm_peers, last_seen
-                FROM torrents
-                WHERE scored_at IS NULL
-                ORDER BY verified_at DESC NULLS LAST
+                SELECT t.infohash, t.name, t.piece_length, t.total_size, t.file_count, 
+                       t.files, t.category, t.seed_confirmed, t.swarm_peers, t.last_seen,
+                       COALESCE(f.total_fetches, 0) AS total_fetches,
+                       COALESCE(f.successful, 0) AS successful_fetches,
+                       COALESCE(f.timeouts, 0) AS timeout_fetches,
+                       f.last_success
+                FROM torrents t
+                LEFT JOIN LATERAL (
+                    SELECT count(*) AS total_fetches,
+                           count(*) FILTER (WHERE result IN ('ok','metadata_ok')) AS successful,
+                           count(*) FILTER (WHERE result IN ('timeout','metadata_timeout')) AS timeouts,
+                           max(created_at) FILTER (WHERE result IN ('ok','metadata_ok')) AS last_success
+                    FROM fetch_peer_outcomes
+                    WHERE infohash = t.infohash
+                      AND created_at > now() - interval '48 hours'
+                ) f ON true
+                WHERE t.scored_at IS NULL
+                ORDER BY t.verified_at DESC NULLS LAST
                 LIMIT %s;
             """, (self.batch_size,))
             unscored_rows = cur.fetchall()
@@ -245,11 +282,24 @@ class ScoringWorker:
         # 2. If no new unscored torrents, refresh stale availability scores
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT infohash, name, piece_length, total_size, file_count, 
-                       files, category, seed_confirmed, swarm_peers, last_seen
-                FROM torrents
-                WHERE scored_at < now() - (%s || ' hours')::interval
-                ORDER BY scored_at ASC
+                SELECT t.infohash, t.name, t.piece_length, t.total_size, t.file_count, 
+                       t.files, t.category, t.seed_confirmed, t.swarm_peers, t.last_seen,
+                       COALESCE(f.total_fetches, 0) AS total_fetches,
+                       COALESCE(f.successful, 0) AS successful_fetches,
+                       COALESCE(f.timeouts, 0) AS timeout_fetches,
+                       f.last_success
+                FROM torrents t
+                LEFT JOIN LATERAL (
+                    SELECT count(*) AS total_fetches,
+                           count(*) FILTER (WHERE result IN ('ok','metadata_ok')) AS successful,
+                           count(*) FILTER (WHERE result IN ('timeout','metadata_timeout')) AS timeouts,
+                           max(created_at) FILTER (WHERE result IN ('ok','metadata_ok')) AS last_success
+                    FROM fetch_peer_outcomes
+                    WHERE infohash = t.infohash
+                      AND created_at > now() - interval '48 hours'
+                ) f ON true
+                WHERE t.scored_at < now() - (%s || ' hours')::interval
+                ORDER BY t.scored_at ASC
                 LIMIT %s;
             """, (str(self.availability_refresh_hours), self.batch_size))
             stale_rows = cur.fetchall()

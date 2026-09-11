@@ -300,7 +300,7 @@ impl Default for StorageConfig {
             janitor_interval_secs: 1800,
             janitor_dead_retention_secs: 86400,
             janitor_verified_retention_secs: 3600,
-            janitor_peer_outcomes_retention_secs: 172800,
+            janitor_peer_outcomes_retention_secs: 604800,
             janitor_sightings_single_seen_retention_secs: 604800,
             janitor_sightings_max_retention_secs: 2592000,
             janitor_pending_infohashes_retention_secs: 86400,
