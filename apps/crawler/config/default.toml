@@ -58,7 +58,7 @@ max_pieces = 4096
 failed_peer_sample_rate = 500
 conn_limiter_ttl_secs = 60
 conn_limiter_max_entries = 1000000
-ip_cooldown_secs = 7200
+ip_cooldown_secs = 300
 ip_cooldown_max_entries = 200000
 abuse_blacklist_path = "config/abuse_blacklist.txt"
 

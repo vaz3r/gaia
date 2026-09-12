@@ -52,7 +52,7 @@ impl Walker {
         let mut set = tokio::task::JoinSet::new();
         let query_timeout = self.query_timeout;
         for &addr in nodes {
-            if self.ip_cooldown.is_quarantined(&addr.ip()) {
+            if self.ip_cooldown.is_blacklisted(&addr.ip()) {
                 continue;
             }
             let router = self.router.clone();
@@ -166,7 +166,7 @@ impl Walker {
         let (our_id, target) = self.pick_target();
         let query_timeout = self.query_timeout;
         for node in nodes {
-            if self.ip_cooldown.is_quarantined(&node.addr.ip()) {
+            if self.ip_cooldown.is_blacklisted(&node.addr.ip()) {
                 continue;
             }
             if !self.limiter.allow(node.addr.ip()) {

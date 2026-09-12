@@ -454,104 +454,18 @@ async fn try_fetch(
                     phase: Some("connect".to_string()),
                     elapsed_ms: Some(start.elapsed().as_millis().min(i32::MAX as u128) as i32),
                 });
-                match utp {
-                    Some(sock) => {
-                        metrics.utp_attempts.add(1);
-                        crate::trace_lifecycle!(
-                            &ih,
-                            "fetch_start",
-                            stream = "fetch",
-                            peer = addr_str.clone(),
-                            transport = "utp"
-                        );
-                        let utp_start = std::time::Instant::now();
-                        match WireSession::connect_utp(sock, addr, &ih, &pid, utp_timeout).await {
-                            Ok(s) => {
-                                metrics.utp_connect_ok.add(1);
-                                metrics.utp_connect_actual.add(1);
-                                match source {
-                                    CandidateSource::Direct => metrics
-                                        .source_direct_connect_ok_total
-                                        .fetch_add(1, Ordering::Relaxed),
-                                    CandidateSource::AnnounceCache => metrics
-                                        .source_announce_cache_connect_ok_total
-                                        .fetch_add(1, Ordering::Relaxed),
-                                    CandidateSource::Dht => metrics
-                                        .source_dht_connect_ok_total
-                                        .fetch_add(1, Ordering::Relaxed),
-                                };
-                                crate::trace_lifecycle!(
-                                    &ih,
-                                    "connect_result",
-                                    stream = "fetch",
-                                    peer = addr_str.clone(),
-                                    transport = "utp",
-                                    result = "ok",
-                                    elapsed_ms = utp_start.elapsed().as_millis() as u64
-                                );
-                                transport_str = "utp";
-                                s
-                            }
-                            Err(utp_err) => {
-                                let result_str = connect_error_to_outcome(&utp_err);
-                                crate::trace_lifecycle!(
-                                    &ih,
-                                    "connect_result",
-                                    stream = "fetch",
-                                    peer = addr_str.clone(),
-                                    transport = "utp",
-                                    result = result_str,
-                                    elapsed_ms = utp_start.elapsed().as_millis() as u64
-                                );
-                                peer_outcomes.push(PeerOutcome {
-                                    ih,
-                                    peer: addr.to_string(),
-                                    source: source.as_str().to_string(),
-                                    transport: "utp".to_string(),
-                                    result: result_str.to_string(),
-                                    client: None,
-                                    phase: Some("connect".to_string()),
-                                    elapsed_ms: Some(
-                                        utp_start.elapsed().as_millis().min(i32::MAX as u128)
-                                            as i32,
-                                    ),
-                                });
-                                cache.mark_bad(addr);
-                                ip_cooldown.mark_failure(addr.ip());
-                                let transport_us =
-                                    transport_start.elapsed().as_micros().min(u64::MAX as u128)
-                                        as u64;
-                                saturating_add_atomic(
-                                    &metrics.transport_connect_micros_total,
-                                    transport_us,
-                                );
-                                metrics
-                                    .transport_connect_completed_total
-                                    .fetch_add(1, Ordering::Relaxed);
-                                return FetchOutcome::ConnectFailed(
-                                    addr,
-                                    utp_err,
-                                    source,
-                                    start.elapsed(),
-                                );
-                            }
-                        }
-                    }
-                    None => {
-                        cache.mark_bad(addr);
-                        ip_cooldown.mark_failure(addr.ip());
-                        let transport_us =
-                            transport_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
-                        saturating_add_atomic(
-                            &metrics.transport_connect_micros_total,
-                            transport_us,
-                        );
-                        metrics
-                            .transport_connect_completed_total
-                            .fetch_add(1, Ordering::Relaxed);
-                        return FetchOutcome::ConnectFailed(addr, tcp_err, source, start.elapsed());
-                    }
-                }
+                cache.mark_bad(addr);
+                ip_cooldown.mark_failure(addr.ip());
+                let transport_us =
+                    transport_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
+                saturating_add_atomic(
+                    &metrics.transport_connect_micros_total,
+                    transport_us,
+                );
+                metrics
+                    .transport_connect_completed_total
+                    .fetch_add(1, Ordering::Relaxed);
+                return FetchOutcome::ConnectFailed(addr, tcp_err, source, start.elapsed());
             }
         }
     };

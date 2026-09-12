@@ -265,7 +265,7 @@ impl Default for FetchConfig {
             lead_source_grace_ms: 1000,
             conn_limiter_ttl_secs: 60,
             conn_limiter_max_entries: 1_000_000,
-            ip_cooldown_secs: 7200,
+            ip_cooldown_secs: 300,
             ip_cooldown_max_entries: 200_000,
             abuse_blacklist_path: Some(PathBuf::from("config/abuse_blacklist.txt")),
         }
@@ -1382,7 +1382,7 @@ mod tests {
         assert_eq!(c.storage.janitor_interval_secs, 1800);
         assert_eq!(c.storage.janitor_batch_size, 25000);
         assert_eq!(c.fetch.transport_race_concurrent, false);
-        assert_eq!(c.fetch.ip_cooldown_secs, 7200);
+        assert_eq!(c.fetch.ip_cooldown_secs, 300);
         assert_eq!(c.fetch.ip_cooldown_max_entries, 200_000);
         assert_eq!(c.fetch.connect_deadline_ms, 10000);
         assert_eq!(c.fetch.pipeline_limit, 4000);

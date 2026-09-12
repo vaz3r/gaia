@@ -68,7 +68,7 @@ pub async fn source_peers(
             }
             let idx = candidates
                 .iter()
-                .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr) && !ip_cooldown.is_quarantined(&n.addr.ip()));
+                .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr) && !ip_cooldown.is_blacklisted(&n.addr.ip()));
             let Some(node) = idx.map(|i| candidates.remove(i)) else {
                 break;
             };
@@ -171,7 +171,7 @@ pub async fn source_peers(
                 }
                 let idx = candidates
                     .iter()
-                    .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr) && !ip_cooldown.is_quarantined(&n.addr.ip()));
+                    .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr) && !ip_cooldown.is_blacklisted(&n.addr.ip()));
                 let Some(node) = idx.map(|i| candidates.remove(i)) else {
                     break;
                 };

@@ -132,8 +132,9 @@ impl IpCooldownCache {
         }
     }
 
-    /// Check whether an IP is quarantined (due to past failure) or statically blacklisted.
-    pub fn is_quarantined(&self, ip: &IpAddr) -> bool {
+    /// Check whether an IP is in the static abuse blacklist (CIDR or static IP).
+    /// Used by DHT routing and Walker to block known abusers without starving on swarm churn.
+    pub fn is_blacklisted(&self, ip: &IpAddr) -> bool {
         if self.blacklist_ips.contains(ip) {
             return true;
         }
@@ -141,6 +142,15 @@ impl IpCooldownCache {
             if cidr.contains(ip) {
                 return true;
             }
+        }
+        false
+    }
+
+    /// Check whether an IP is quarantined (due to past failure) or statically blacklisted.
+    /// Used by peer metadata fetch candidates.
+    pub fn is_quarantined(&self, ip: &IpAddr) -> bool {
+        if self.is_blacklisted(ip) {
+            return true;
         }
         if let Some(entry) = self.quarantined.get(ip) {
             if Instant::now() < *entry.value() {
@@ -233,8 +243,11 @@ mod tests {
         let ip: IpAddr = "192.0.2.1".parse().unwrap();
 
         assert!(!cache.is_quarantined(&ip));
+        assert!(!cache.is_blacklisted(&ip));
         cache.mark_failure(ip);
         assert!(cache.is_quarantined(&ip));
+        // Dynamic failure must NOT mark an IP as statically blacklisted
+        assert!(!cache.is_blacklisted(&ip));
 
         std::thread::sleep(Duration::from_millis(60));
         assert!(!cache.is_quarantined(&ip));
