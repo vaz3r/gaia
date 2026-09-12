@@ -1,3 +1,4 @@
+pub mod ip_cooldown;
 pub mod rate_limit;
 
 #[cfg(target_os = "linux")]

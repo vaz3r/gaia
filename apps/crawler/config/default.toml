@@ -47,9 +47,9 @@ utp_timeout_secs = 5
 metadata_timeout_secs = 25
 race_peers = 8
 global_fetch_limit = 1200
-max_connections_per_ip = 4
+max_connections_per_ip = 1
 utp_enabled = true
-transport_race_concurrent = true
+transport_race_concurrent = false
 connect_deadline_ms = 10000
 pipeline_limit = 4000
 fresh_channel_capacity = 65536
@@ -58,6 +58,9 @@ max_pieces = 4096
 failed_peer_sample_rate = 500
 conn_limiter_ttl_secs = 60
 conn_limiter_max_entries = 1000000
+ip_cooldown_secs = 7200
+ip_cooldown_max_entries = 200000
+abuse_blacklist_path = "config/abuse_blacklist.txt"
 
 [retry]
 max_retries = 4

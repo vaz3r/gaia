@@ -13,6 +13,7 @@ use tokio::time::MissedTickBehavior;
 pub struct Walker {
     router: Arc<Router>,
     limiter: Arc<RateLimiter>,
+    ip_cooldown: Arc<crate::net::ip_cooldown::IpCooldownCache>,
     bootstrap: Vec<SocketAddr>,
     alpha: usize,
     interval: Duration,
@@ -25,6 +26,7 @@ impl Walker {
     pub fn new(
         router: Arc<Router>,
         limiter: Arc<RateLimiter>,
+        ip_cooldown: Arc<crate::net::ip_cooldown::IpCooldownCache>,
         bootstrap: Vec<SocketAddr>,
         alpha: usize,
         interval: Duration,
@@ -35,6 +37,7 @@ impl Walker {
         Walker {
             router,
             limiter,
+            ip_cooldown,
             bootstrap,
             alpha,
             interval,
@@ -49,6 +52,9 @@ impl Walker {
         let mut set = tokio::task::JoinSet::new();
         let query_timeout = self.query_timeout;
         for &addr in nodes {
+            if self.ip_cooldown.is_quarantined(&addr.ip()) {
+                continue;
+            }
             let router = self.router.clone();
             let target = crate::dht::node_id::random_node_id();
             let sender = self.router.random_sybil_id();
@@ -160,6 +166,9 @@ impl Walker {
         let (our_id, target) = self.pick_target();
         let query_timeout = self.query_timeout;
         for node in nodes {
+            if self.ip_cooldown.is_quarantined(&node.addr.ip()) {
+                continue;
+            }
             if !self.limiter.allow(node.addr.ip()) {
                 continue;
             }

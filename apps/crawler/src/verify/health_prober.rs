@@ -32,6 +32,7 @@ pub struct HealthProber {
     router: Arc<Router>,
     metrics: Arc<Metrics>,
     cache: Arc<PeerCache>,
+    ip_cooldown: Arc<crate::net::ip_cooldown::IpCooldownCache>,
     config: HealthProberConfig,
 }
 
@@ -49,6 +50,7 @@ impl HealthProber {
         router: Arc<Router>,
         metrics: Arc<Metrics>,
         cache: Arc<PeerCache>,
+        ip_cooldown: Arc<crate::net::ip_cooldown::IpCooldownCache>,
         config: HealthProberConfig,
     ) -> Self {
         HealthProber {
@@ -56,6 +58,7 @@ impl HealthProber {
             router,
             metrics,
             cache,
+            ip_cooldown,
             config,
         }
     }
@@ -118,6 +121,7 @@ impl HealthProber {
             let router = self.router.clone();
             let metrics = self.metrics.clone();
             let cache = self.cache.clone();
+            let ip_cooldown = self.ip_cooldown.clone();
             let sem = sem.clone();
             let query_timeout = self.config.query_timeout;
             let stats = fetch_stats.get(&ih_bytes).cloned();
@@ -135,6 +139,7 @@ impl HealthProber {
                     query_timeout,
                     24,
                     &cache,
+                    &ip_cooldown,
                     false,
                 )
                 .await;

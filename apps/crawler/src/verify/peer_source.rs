@@ -30,6 +30,7 @@ pub async fn source_peers(
     query_timeout: Duration,
     max_queries: usize,
     cache: &PeerCache,
+    ip_cooldown: &crate::net::ip_cooldown::IpCooldownCache,
     is_lead_task: bool,
 ) -> SourceResult {
     let k = k.max(1);
@@ -41,6 +42,7 @@ pub async fn source_peers(
 
     let mut queried: HashSet<SocketAddr> = HashSet::new();
     let mut seen: HashSet<SocketAddr> = HashSet::new();
+    let mut seen_ips: HashSet<std::net::IpAddr> = HashSet::new();
     let mut peers: Vec<SocketAddr> = Vec::new();
     let mut succeeded: u64 = 0;
 
@@ -66,7 +68,7 @@ pub async fn source_peers(
             }
             let idx = candidates
                 .iter()
-                .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr));
+                .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr) && !ip_cooldown.is_quarantined(&n.addr.ip()));
             let Some(node) = idx.map(|i| candidates.remove(i)) else {
                 break;
             };
@@ -100,8 +102,16 @@ pub async fn source_peers(
                                     if !is_routable(ip) {
                                         continue;
                                     }
+                                    let ip_addr = std::net::IpAddr::V4(ip);
+                                    if ip_cooldown.is_quarantined(&ip_addr) {
+                                        continue;
+                                    }
+                                    // Strict per-IP deduplication: at most 1 port per IP for this infohash
+                                    if !seen_ips.insert(ip_addr) {
+                                        continue;
+                                    }
                                     let addr = SocketAddr::new(
-                                        std::net::IpAddr::V4(ip),
+                                        ip_addr,
                                         u16::from_be_bytes([b[4], b[5]]),
                                     );
                                     if peer_is_bad(&addr, cache, &metrics) {
@@ -161,7 +171,7 @@ pub async fn source_peers(
                 }
                 let idx = candidates
                     .iter()
-                    .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr));
+                    .position(|n| n.addr != router.self_addr && !queried.contains(&n.addr) && !ip_cooldown.is_quarantined(&n.addr.ip()));
                 let Some(node) = idx.map(|i| candidates.remove(i)) else {
                     break;
                 };
@@ -318,5 +328,16 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Relaxed)
                 >= 1
         );
+    }
+
+    #[test]
+    fn ip_cooldown_and_dedup_filtering() {
+        use crate::net::ip_cooldown::IpCooldownCache;
+        let cooldown = IpCooldownCache::new(Duration::from_secs(3600), 1000, None);
+        let ip_bad: std::net::IpAddr = "198.51.100.1".parse().unwrap();
+        cooldown.mark_failure(ip_bad);
+
+        assert!(cooldown.is_quarantined(&ip_bad));
+        assert!(!cooldown.is_quarantined(&"8.8.8.8".parse().unwrap()));
     }
 }

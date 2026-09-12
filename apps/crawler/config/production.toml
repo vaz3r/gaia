@@ -24,6 +24,10 @@ global_fetch_limit = 1200
 race_peers = 8
 metadata_timeout_secs = 25
 utp_enabled = true
+max_connections_per_ip = 1
+transport_race_concurrent = false
+ip_cooldown_secs = 7200
+abuse_blacklist_path = "/etc/crawler/config/abuse_blacklist.txt"
 conn_limiter_max_entries = 500000
 
 [cache]

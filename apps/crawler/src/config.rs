@@ -82,6 +82,9 @@ pub struct FetchConfig {
     pub lead_source_grace_ms: u64,
     pub conn_limiter_ttl_secs: u64,
     pub conn_limiter_max_entries: usize,
+    pub ip_cooldown_secs: u64,
+    pub ip_cooldown_max_entries: usize,
+    pub abuse_blacklist_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -250,18 +253,21 @@ impl Default for FetchConfig {
             metadata_timeout_secs: 25,
             race_peers: 8,
             global_fetch_limit: 1200,
-            max_connections_per_ip: 4,
+            max_connections_per_ip: 1,
             utp_enabled: true,
             max_message_len: 16 * 1024 * 1024,
             max_pieces: 4096,
             failed_peer_sample_rate: 500,
             fresh_channel_capacity: 65536,
-            transport_race_concurrent: true,
+            transport_race_concurrent: false,
             connect_deadline_ms: 10000,
             pipeline_limit: 4000,
             lead_source_grace_ms: 1000,
             conn_limiter_ttl_secs: 60,
             conn_limiter_max_entries: 1_000_000,
+            ip_cooldown_secs: 7200,
+            ip_cooldown_max_entries: 200_000,
+            abuse_blacklist_path: Some(PathBuf::from("config/abuse_blacklist.txt")),
         }
     }
 }
@@ -425,6 +431,15 @@ impl Config {
         // 3. Apply env overrides (highest precedence).
         cfg.apply_env();
 
+        if let Some(ref path) = cfg.fetch.abuse_blacklist_path {
+            if !path.exists() {
+                let candidate = config_dir.join(path.file_name().unwrap_or(path.as_os_str()));
+                if candidate.exists() {
+                    cfg.fetch.abuse_blacklist_path = Some(candidate);
+                }
+            }
+        }
+
         cfg
     }
 
@@ -560,6 +575,21 @@ impl Config {
             "CRAW_CONN_LIMITER_MAX_ENTRIES",
             self.fetch.conn_limiter_max_entries,
         );
+        self.fetch.max_connections_per_ip = env_usize(
+            "CRAW_MAX_CONNECTIONS_PER_IP",
+            self.fetch.max_connections_per_ip,
+        );
+        self.fetch.ip_cooldown_secs = env_u64(
+            "CRAW_IP_COOLDOWN_SECS",
+            self.fetch.ip_cooldown_secs,
+        );
+        self.fetch.ip_cooldown_max_entries = env_usize(
+            "CRAW_IP_COOLDOWN_MAX_ENTRIES",
+            self.fetch.ip_cooldown_max_entries,
+        );
+        if let Some(path) = env_string("CRAW_ABUSE_BLACKLIST_PATH", None) {
+            self.fetch.abuse_blacklist_path = Some(PathBuf::from(path));
+        }
 
         // cache
         self.cache.peer_cache_ttl_secs =
@@ -819,6 +849,12 @@ struct PartialFetch {
     pipeline_limit: Option<usize>,
     #[serde(default)]
     lead_source_grace_ms: Option<u64>,
+    #[serde(default)]
+    ip_cooldown_secs: Option<u64>,
+    #[serde(default)]
+    ip_cooldown_max_entries: Option<usize>,
+    #[serde(default)]
+    abuse_blacklist_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1127,6 +1163,15 @@ impl PartialFetch {
         if let Some(v) = self.lead_source_grace_ms {
             cfg.lead_source_grace_ms = v;
         }
+        if let Some(v) = self.ip_cooldown_secs {
+            cfg.ip_cooldown_secs = v;
+        }
+        if let Some(v) = self.ip_cooldown_max_entries {
+            cfg.ip_cooldown_max_entries = v;
+        }
+        if let Some(v) = self.abuse_blacklist_path {
+            cfg.abuse_blacklist_path = Some(v);
+        }
     }
 }
 
@@ -1331,12 +1376,14 @@ mod tests {
         assert_eq!(c.retry.scheduler_claim_limit, 1000);
         assert_eq!(c.storage.pg_pool_max_connections, 128);
         assert_eq!(c.logging.log_dir, PathBuf::from("data/logs"));
-        assert_eq!(c.fetch.max_connections_per_ip, 4);
+        assert_eq!(c.fetch.max_connections_per_ip, 1);
         assert_eq!(c.retry.no_peers_terminal_on_first, true);
         assert_eq!(c.storage.torrent_batch_chunk, 2000);
         assert_eq!(c.storage.janitor_interval_secs, 1800);
         assert_eq!(c.storage.janitor_batch_size, 25000);
-        assert_eq!(c.fetch.transport_race_concurrent, true);
+        assert_eq!(c.fetch.transport_race_concurrent, false);
+        assert_eq!(c.fetch.ip_cooldown_secs, 7200);
+        assert_eq!(c.fetch.ip_cooldown_max_entries, 200_000);
         assert_eq!(c.fetch.connect_deadline_ms, 10000);
         assert_eq!(c.fetch.pipeline_limit, 4000);
         assert_eq!(c.fetch.lead_source_grace_ms, 1000);

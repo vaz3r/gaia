@@ -153,8 +153,19 @@ async fn main() {
     ));
     let peer_cache_cleanup = peer_cache.clone();
 
-    let (shutdown_tx, _shutdown_rx): (tokio::sync::broadcast::Sender<()>, _) =
-        broadcast::channel(1);
+    let ip_cooldown = Arc::new(crate::net::ip_cooldown::IpCooldownCache::new(
+        Duration::from_secs(config.fetch.ip_cooldown_secs),
+        config.fetch.ip_cooldown_max_entries,
+        config.fetch.abuse_blacklist_path.as_deref(),
+    ));
+    let ip_cooldown_sweep = ip_cooldown.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            ip_cooldown_sweep.evict_expired();
+        }
+    });
 
     tracing::info!(
         nodes = config.nodes,
@@ -179,6 +190,7 @@ async fn main() {
             harvest_tx.clone(),
             fresh_verify_tx.clone(),
             pending_writer.clone(),
+            ip_cooldown.clone(),
             &mut node_routers,
         )
         .await;
@@ -323,6 +335,7 @@ async fn main() {
             std::time::Duration::from_secs(config.fetch.conn_limiter_ttl_secs),
             config.fetch.conn_limiter_max_entries,
         )),
+        ip_cooldown.clone(),
         verify::VerifyConfig {
             pipeline_limit: config.fetch.pipeline_limit,
             fetch_limit: config.fetch.global_fetch_limit,
@@ -400,6 +413,7 @@ async fn main() {
         node_routers[0].clone(),
         metrics.clone(),
         peer_cache.clone(),
+        ip_cooldown.clone(),
         crate::verify::health_prober::HealthProberConfig::default(),
     ));
     let health_prober_run = health_prober.run();
@@ -480,6 +494,9 @@ fn log_effective_config(config: &Config) {
         janitor_batch_size = config.storage.janitor_batch_size,
         bloom_capacity = config.harvest.bloom_capacity,
         harvest_channel_capacity = config.harvest.harvest_channel_capacity,
+        ip_cooldown_secs = config.fetch.ip_cooldown_secs,
+        ip_cooldown_max_entries = config.fetch.ip_cooldown_max_entries,
+        abuse_blacklist = ?config.fetch.abuse_blacklist_path,
         log_json = config.logging.log_json,
         log_dir = %config.logging.log_dir.display(),
         profile = %config.profile,
@@ -505,6 +522,7 @@ async fn spawn_node(
     harvest_tx: mpsc::Sender<HarvestEvent>,
     fresh_verify_tx: mpsc::Sender<[u8; 20]>,
     pending_writer: Arc<PendingInfohashWriter>,
+    ip_cooldown: Arc<crate::net::ip_cooldown::IpCooldownCache>,
     node_routers: &mut Vec<Arc<Router>>,
 ) {
     let data_dir = config.data_dir.join(format!("node_{node_index}"));
@@ -652,6 +670,7 @@ async fn spawn_node(
     let walker = Walker::new(
         router.clone(),
         limiter.clone(),
+        ip_cooldown.clone(),
         bootstrap.to_vec(),
         config.dht.walker_alpha,
         Duration::from_millis(config.dht.walker_interval_ms),

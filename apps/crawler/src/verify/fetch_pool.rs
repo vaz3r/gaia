@@ -257,6 +257,7 @@ async fn try_fetch(
     pid: [u8; 20],
     metrics: Arc<Metrics>,
     cache: Arc<PeerCache>,
+    ip_cooldown: Arc<crate::net::ip_cooldown::IpCooldownCache>,
     utp: Option<Arc<UtpSocketUdp>>,
     peer_outcomes: Arc<PeerOutcomeWriter>,
     source: CandidateSource,
@@ -268,6 +269,17 @@ async fn try_fetch(
     connect_deadline: Duration,
     _fetch_permit: tokio::sync::OwnedSemaphorePermit,
 ) -> FetchOutcome {
+    if ip_cooldown.is_quarantined(&addr.ip()) {
+        return FetchOutcome::ConnectFailed(
+            addr,
+            WireError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "ip_quarantined",
+            )),
+            source,
+            Duration::ZERO,
+        );
+    }
     let _fetch_guard = FetchActiveGuard::new(metrics.clone());
     metrics.tcp_attempts.add(1);
 
@@ -382,6 +394,7 @@ async fn try_fetch(
             }
             Err(e) => {
                 cache.mark_bad(addr);
+                ip_cooldown.mark_failure(addr.ip());
                 let transport_us =
                     transport_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
                 saturating_add_atomic(&metrics.transport_connect_micros_total, transport_us);
@@ -504,6 +517,7 @@ async fn try_fetch(
                                     ),
                                 });
                                 cache.mark_bad(addr);
+                                ip_cooldown.mark_failure(addr.ip());
                                 let transport_us =
                                     transport_start.elapsed().as_micros().min(u64::MAX as u128)
                                         as u64;
@@ -525,6 +539,7 @@ async fn try_fetch(
                     }
                     None => {
                         cache.mark_bad(addr);
+                        ip_cooldown.mark_failure(addr.ip());
                         let transport_us =
                             transport_start.elapsed().as_micros().min(u64::MAX as u128) as u64;
                         saturating_add_atomic(
@@ -640,7 +655,7 @@ pub async fn verify_infohash(
     peer_outcomes: Arc<PeerOutcomeWriter>,
     conn_limiter: Arc<crate::verify::ConnLimiter>,
     fetch_limit: Arc<tokio::sync::Semaphore>,
-    negative_cache: Arc<dashmap::DashMap<std::net::IpAddr, tokio::time::Instant>>,
+    ip_cooldown: Arc<crate::net::ip_cooldown::IpCooldownCache>,
     stable_peers: Arc<Vec<SocketAddr>>,
 ) -> VerifyResult {
     let race_peers = params.race_peers.max(1);
@@ -653,6 +668,7 @@ pub async fn verify_infohash(
 
     let mut set: JoinSet<FetchOutcome> = JoinSet::new();
     let mut peers_seen: HashSet<SocketAddr> = HashSet::new();
+    let mut peers_seen_ips: HashSet<std::net::IpAddr> = HashSet::new();
     let mut candidate_queue: VecDeque<(SocketAddr, CandidateSource)> =
         VecDeque::with_capacity(race_peers);
 
@@ -660,6 +676,8 @@ pub async fn verify_infohash(
     //    Priority 1: Direct peer supplied by announce_peer
     //    Priority 2: AnnouncePeerCache peer
     if let Some(d) = direct
+        && !ip_cooldown.is_quarantined(&d.ip())
+        && peers_seen_ips.insert(d.ip())
         && peers_seen.insert(d)
         && candidate_queue.len() < race_peers
     {
@@ -672,7 +690,11 @@ pub async fn verify_infohash(
     if !stable_peers.is_empty() {
         let mut rng = rand::rng();
         for &peer in stable_peers.choose_multiple(&mut rng, 2) {
-            if candidate_queue.len() < race_peers && peers_seen.insert(peer) {
+            if !ip_cooldown.is_quarantined(&peer.ip())
+                && peers_seen_ips.insert(peer.ip())
+                && candidate_queue.len() < race_peers
+                && peers_seen.insert(peer)
+            {
                 metrics.source_direct_accepted_total.fetch_add(1, Ordering::Relaxed);
                 candidate_queue.push_back((peer, CandidateSource::Direct));
             }
@@ -680,6 +702,8 @@ pub async fn verify_infohash(
     }
 
     if let Some(announcer) = announce_peer_cache.get(&info_hash)
+        && !ip_cooldown.is_quarantined(&announcer.ip())
+        && peers_seen_ips.insert(announcer.ip())
         && peers_seen.insert(announcer)
     {
         crate::trace_lifecycle!(
@@ -755,6 +779,7 @@ pub async fn verify_infohash(
                 let router_c = router_clone.clone();
                 let metrics_c = metrics_clone.clone();
                 let peer_cache_c = peer_cache_dht.clone();
+                let ip_cooldown_c = ip_cooldown.clone();
                 let started_at = Instant::now();
                 let handle = tokio::spawn(async move {
                     source_peers(
@@ -768,6 +793,7 @@ pub async fn verify_infohash(
                         source_query_timeout,
                         source_max_queries,
                         &peer_cache_c,
+                        &ip_cooldown_c,
                         is_lead_task,
                     )
                     .await
@@ -810,10 +836,11 @@ pub async fn verify_infohash(
                     Some(Ok(FetchOutcome::Success(meta, addr, src, dur, pex_peers))) => {
                         for peer in pex_peers {
                             announce_peer_cache.insert(info_hash, peer);
-                            if candidate_queue.len() < race_peers && peers_seen.insert(peer) {
-                                if let Some(exp) = negative_cache.get(&peer.ip()) && *exp > tokio::time::Instant::now() {
-                                    continue;
-                                }
+                            if candidate_queue.len() < race_peers
+                                && !ip_cooldown.is_quarantined(&peer.ip())
+                                && peers_seen_ips.insert(peer.ip())
+                                && peers_seen.insert(peer)
+                            {
                                 metrics.source_announce_cache_accepted_total.fetch_add(1, Ordering::Relaxed);
                                 candidate_queue.push_back((peer, CandidateSource::AnnounceCache));
                             }
@@ -829,10 +856,11 @@ pub async fn verify_infohash(
                         if let FetchOutcome::MetadataFailed(_, _, _, pex_peers) = &outcome {
                             for &peer in pex_peers {
                                 announce_peer_cache.insert(info_hash, peer);
-                                if candidate_queue.len() < race_peers && peers_seen.insert(peer) {
-                                    if let Some(exp) = negative_cache.get(&peer.ip()) && *exp > tokio::time::Instant::now() {
-                                        continue;
-                                    }
+                                if candidate_queue.len() < race_peers
+                                    && !ip_cooldown.is_quarantined(&peer.ip())
+                                    && peers_seen_ips.insert(peer.ip())
+                                    && peers_seen.insert(peer)
+                                {
                                     metrics.source_announce_cache_accepted_total.fetch_add(1, Ordering::Relaxed);
                                     candidate_queue.push_back((peer, CandidateSource::AnnounceCache));
                                 }
@@ -840,7 +868,7 @@ pub async fn verify_infohash(
                         }
                         match outcome {
                             FetchOutcome::ConnectFailed(_addr, WireError::Timeout, src, dur) => {
-                                negative_cache.insert(_addr.ip(), tokio::time::Instant::now() + std::time::Duration::from_secs(60));
+                                ip_cooldown.mark_failure(_addr.ip());
                                 metrics.fetch_connect_timeout.add(1);
                                 metrics.verify_timeouts.add(1);
                                 match src {
@@ -858,7 +886,7 @@ pub async fn verify_infohash(
                                 }
                             }
                             FetchOutcome::ConnectFailed(_addr, WireError::Io(_), src, dur) => {
-                                negative_cache.insert(_addr.ip(), tokio::time::Instant::now() + std::time::Duration::from_secs(60));
+                                ip_cooldown.mark_failure(_addr.ip());
                                 metrics.fetch_connect_io.add(1);
                                 match src {
                                     CandidateSource::Direct => {
@@ -876,6 +904,7 @@ pub async fn verify_infohash(
                                 sample_failed_peer(&info_hash, &_addr, &metrics, params.failed_peer_sample_rate.max(1));
                             }
                             FetchOutcome::ConnectFailed(_addr, _, src, dur) => {
+                                ip_cooldown.mark_failure(_addr.ip());
                                 metrics.fetch_connect_io.add(1);
                                 match src {
                                     CandidateSource::Direct => {
@@ -1009,11 +1038,10 @@ pub async fn verify_infohash(
                             .fetch_add(1, Ordering::Relaxed);
                     }
                     if let Some((addr, source)) = candidate_queue.pop_front() {
-                        if let Some(exp) = negative_cache.get(&addr.ip())
-                            && *exp > tokio::time::Instant::now() {
-                                drop(permit);
-                                continue;
-                            }
+                        if ip_cooldown.is_quarantined(&addr.ip()) {
+                            drop(permit);
+                            continue;
+                        }
                         if source != CandidateSource::Dht {
                             queued_lead_candidates = queued_lead_candidates.saturating_sub(1);
                             active_lead_attempts += 1;
@@ -1029,6 +1057,7 @@ pub async fn verify_infohash(
                         let pid = peer_id;
                         let metrics_c = metrics.clone();
                         let cache_c = peer_cache.clone();
+                        let ip_cooldown_c = ip_cooldown.clone();
                         let utp_c = utp.clone();
                         let po_c = peer_outcomes.clone();
                         let limiter_c = conn_limiter.clone();
@@ -1039,6 +1068,7 @@ pub async fn verify_infohash(
                                 pid,
                                 metrics_c,
                                 cache_c,
+                                ip_cooldown_c,
                                 utp_c,
                                 po_c,
                                 source,
@@ -1089,13 +1119,17 @@ pub async fn verify_infohash(
                     };
                     source_state = state;
                     for addr in new_peers {
-                        if peers_seen.contains(&addr) {
+                        if ip_cooldown.is_quarantined(&addr.ip()) {
+                            continue;
+                        }
+                        if peers_seen_ips.contains(&addr.ip()) || peers_seen.contains(&addr) {
                             continue;
                         }
                         if peers_seen.len() >= race_peers {
                             metrics.fetch_candidates_skipped_budget_total.fetch_add(1, Ordering::Relaxed);
                             continue;
                         }
+                        peers_seen_ips.insert(addr.ip());
                         peers_seen.insert(addr);
                         metrics.source_dht_accepted_total.fetch_add(1, Ordering::Relaxed);
                         candidate_queue.push_back((addr, CandidateSource::Dht));

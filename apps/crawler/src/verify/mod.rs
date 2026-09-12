@@ -237,31 +237,12 @@ pub async fn run_pipeline(
     announce_peer_cache: Arc<AnnouncePeerCache>,
     peer_outcomes: Arc<crate::storage::peer_outcomes::PeerOutcomeWriter>,
     conn_limiter: Arc<ConnLimiter>,
+    ip_cooldown: Arc<crate::net::ip_cooldown::IpCooldownCache>,
     config: VerifyConfig,
     stable_peers: Arc<Vec<SocketAddr>>,
 ) {
     let pipeline_limit = Arc::new(Semaphore::new(config.pipeline_limit.max(1)));
     let fetch_limit = Arc::new(Semaphore::new(config.fetch_limit.max(1)));
-    let negative_cache: Arc<dashmap::DashMap<std::net::IpAddr, tokio::time::Instant>> =
-        Arc::new(dashmap::DashMap::new());
-    let nc_clone = negative_cache.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
-        loop {
-            interval.tick().await;
-            let now = tokio::time::Instant::now();
-            nc_clone.retain(|_, v: &mut tokio::time::Instant| *v > now);
-            if nc_clone.len() > 50_000 {
-                let excess = nc_clone.len() - 50_000;
-                let target = (excess / 4).max(100);
-                let to_remove: Vec<std::net::IpAddr> =
-                    nc_clone.iter().take(target).map(|e| *e.key()).collect();
-                for k in to_remove {
-                    nc_clone.remove(&k);
-                }
-            }
-        }
-    });
     let next_router = AtomicUsize::new(0);
     // Fair-drain batch: after this many consecutive fresh/announce items, force
     // one retry-channel item so a backlogged verify queue is never starved.
@@ -382,7 +363,7 @@ pub async fn run_pipeline(
         let conn_limiter = conn_limiter.clone();
         let params = config.params.clone();
         let fetch_limit = fetch_limit.clone();
-        let negative_cache = negative_cache.clone();
+        let ip_cooldown = ip_cooldown.clone();
         let stable_peers = stable_peers.clone();
         tokio::spawn(async move {
             let _pipeline_permit = _pipeline_permit;
@@ -405,7 +386,7 @@ pub async fn run_pipeline(
                 peer_outcomes,
                 conn_limiter,
                 fetch_limit,
-                negative_cache,
+                ip_cooldown,
                 stable_peers.clone(),
             )
             .await;

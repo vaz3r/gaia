@@ -1,0 +1,14 @@
+# GAIA Crawler Abuse & Honeypot Blacklist
+# IPs and CIDR blocks listed here are completely excluded from DHT walks,
+# peer verification, and metadata fetching.
+#
+# Syntax:
+#   <ip_or_cidr> [# optional comment]
+
+# Documentation & Reserved (RFC 5737, RFC 3849)
+192.0.2.0/24
+198.51.100.0/24
+203.0.113.0/24
+2001:db8::/32
+
+# Known automated reporting honeypots & non-BitTorrent scanners
