@@ -38,3 +38,33 @@ export function magnetFrom(infohash, name) {
   const dn = name ? `&dn=${encodeURIComponent(name)}` : ''
   return `magnet:?xt=urn:btih:${infohash}${dn}${cachedTrackers}`
 }
+
+export async function downloadTorrent(infohash, name) {
+  const res = await fetch(`/api/torrents/${infohash}/torrent`);
+  if (!res.ok) {
+    let errMsg = `HTTP ${res.status}`;
+    let fallbackMagnet = null;
+    try {
+      const j = await res.json();
+      errMsg = j.error || errMsg;
+      fallbackMagnet = j.magnet;
+    } catch {}
+    const err = new Error(errMsg);
+    err.magnet = fallbackMagnet;
+    throw err;
+  }
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const cleanName = (name || `torrent-${infohash.slice(0, 8)}`)
+    .replace(/[/\\?%*:|"<>]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+  a.download = `${cleanName}.torrent`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+

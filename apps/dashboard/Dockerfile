@@ -12,7 +12,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev || npm install --omit=dev
-COPY server.js ./
+COPY server.js wireFetcher.js ./
 COPY --from=client /build/dist ./client/dist
 RUN mkdir -p /app/logs && chown -R node:node /app
 ENV PORT=3000

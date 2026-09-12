@@ -49,9 +49,10 @@ import {
   Tag,
   ShieldAlert,
   Ban,
-  AlertTriangle
+  AlertTriangle,
+  FileDown
 } from 'lucide-react';
-import { api, loadTrackers, magnetFrom } from './api.js';
+import { api, loadTrackers, magnetFrom, downloadTorrent } from './api.js';
 import { formatBytes, formatNum, formatTime, formatUptime, formatDubaiDate, formatDubaiTimeHM } from './utils.js';
 import AnalysisView from './components/AnalysisView.jsx';
 import ClassifierView from './components/ClassifierView.jsx';
@@ -137,6 +138,29 @@ export default function App() {
   const [refreshingHealth, setRefreshingHealth] = useState(false);
   const [copiedHash, setCopiedHash] = useState(null);
   const [copiedMagnet, setCopiedMagnet] = useState(false);
+  const [downloadingIh, setDownloadingIh] = useState(null);
+
+  const handleDownloadTorrent = async (t, e) => {
+    if (e) e.stopPropagation();
+    const hash = t.infohash || t.hash;
+    if (!hash || downloadingIh) return;
+    setDownloadingIh(hash);
+    try {
+      await downloadTorrent(hash, t.name);
+    } catch (err) {
+      console.warn('On-the-fly .torrent assembly fallback:', err.message);
+      if (err.magnet) {
+        copyToClipboard(err.magnet, 'magnet');
+        alert('Active seeders temporarily busy for direct .torrent assembly. Copied Turbo-Magnet link with live seeders to clipboard!');
+      } else {
+        const fallbackMagnet = generateMagnetLink(t);
+        copyToClipboard(fallbackMagnet, 'magnet');
+        alert('Direct .torrent fetch timed out. Copied Magnet link to clipboard!');
+      }
+    } finally {
+      setDownloadingIh(null);
+    }
+  };
 
   const handleRefreshHealth = async (infohash) => {
     if (!infohash || refreshingHealth) return;
@@ -1786,6 +1810,18 @@ export default function App() {
                           <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center justify-end gap-1.5">
                               <button
+                                onClick={(e) => handleDownloadTorrent(t, e)}
+                                disabled={downloadingIh === (t.infohash || t.hash)}
+                                className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-emerald-400 hover:text-emerald-300 hover:border-emerald-600/50 transition-colors disabled:opacity-50"
+                                title="Download .torrent on-the-fly (500ms fast-start)"
+                              >
+                                {downloadingIh === (t.infohash || t.hash) ? (
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                                ) : (
+                                  <FileDown className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                              <button
                                 onClick={() => copyToClipboard(generateMagnetLink(t), 'magnet')}
                                 className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white hover:border-[#444] transition-colors"
                                 title="Copy Magnet Link"
@@ -3207,17 +3243,35 @@ export default function App() {
               {/* Modal Action Buttons */}
               <div className="pt-4 border-t border-[#1c1c1c] flex items-center justify-between gap-3">
                 <button
+                  onClick={(e) => handleDownloadTorrent(selectedTorrent, e)}
+                  disabled={downloadingIh === (selectedTorrent.infohash || selectedTorrent.hash)}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-xs transition-colors disabled:opacity-50"
+                  title="Generate and download .torrent file on-the-fly (500ms fast-start)"
+                >
+                  {downloadingIh === (selectedTorrent.infohash || selectedTorrent.hash) ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin text-black" />
+                      <span>Fetching .torrent on-the-fly...</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileDown className="w-4 h-4 text-black" />
+                      <span>Download .torrent (Fast-Start)</span>
+                    </>
+                  )}
+                </button>
+                <button
                   onClick={() => copyToClipboard(generateMagnetLink(selectedTorrent), 'magnet')}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-white text-black font-semibold text-xs hover:bg-[#e0e0e0] transition-colors"
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-[#181818] border border-[#2a2a2a] text-white font-semibold text-xs hover:bg-[#252525] transition-colors"
                 >
                   {copiedMagnet ? (
                     <>
-                      <Check className="w-4 h-4 text-emerald-600" />
+                      <Check className="w-4 h-4 text-emerald-400" />
                       <span>Magnet URI Copied!</span>
                     </>
                   ) : (
                     <>
-                      <DownloadCloud className="w-4 h-4 text-black" />
+                      <DownloadCloud className="w-4 h-4 text-[#888]" />
                       <span>Copy Magnet URI</span>
                     </>
                   )}

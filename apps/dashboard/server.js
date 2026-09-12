@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { fetchMetadataOnTheFly, buildTorrentBuffer, buildTurboMagnet } from './wireFetcher.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { Pool } = pg;
@@ -515,10 +516,82 @@ app.get('/api/torrents/:infohash/magnet', async (req, res) => {
     );
     if (r.rows.length === 0) return res.status(404).json({ error: 'not found' });
     const { ihhex, name } = { ihhex: r.rows[0].ih, ...r.rows[0] };
-    const magnet = `magnet:?xt=urn:btih:${ihhex}${
-      name ? `&dn=${encodeURIComponent(name)}` : ''
-    }`;
-    res.json({ magnet });
+
+    // Query up to 5 recent live peers for peer injection
+    const peersRes = await query(
+      `SELECT peer FROM (
+         SELECT host(peer_ip) || ':' || peer_port::text AS peer, verified_at AS ts 
+         FROM peer_torrents WHERE infohash = decode($1, 'hex')
+         UNION ALL
+         SELECT peer, created_at AS ts 
+         FROM fetch_peer_outcomes WHERE infohash = decode($1, 'hex') AND result = 'ok'
+       ) p GROUP BY peer ORDER BY max(ts) DESC LIMIT 5`,
+      [ih]
+    );
+    const peers = peersRes.rows.map(row => row.peer);
+    const magnet = buildTurboMagnet(ihhex, name, peers);
+    res.json({ magnet, peers_injected: peers.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/torrents/:infohash/torrent', async (req, res) => {
+  const ih = String(req.params.infohash || '').toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(ih)) {
+    return res.status(400).json({ error: 'infohash must be 40 hex chars' });
+  }
+  try {
+    const r = await query(
+      `SELECT encode(infohash, 'hex') AS ih, name FROM torrents WHERE infohash = decode($1, 'hex')`,
+      [ih]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ error: 'torrent not found' });
+    const torrentName = r.rows[0].name || `payload-${ih.slice(0, 8)}`;
+
+    // Query candidate peers from peer_torrents and fetch_peer_outcomes
+    const peersRes = await query(
+      `SELECT peer FROM (
+         SELECT host(peer_ip) || ':' || peer_port::text AS peer, verified_at AS ts 
+         FROM peer_torrents WHERE infohash = decode($1, 'hex')
+         UNION ALL
+         SELECT peer, created_at AS ts 
+         FROM fetch_peer_outcomes WHERE infohash = decode($1, 'hex') AND result = 'ok'
+       ) p GROUP BY peer ORDER BY max(ts) DESC LIMIT 5`,
+      [ih]
+    );
+    const candidatePeers = peersRes.rows.map(row => row.peer);
+
+    if (candidatePeers.length === 0) {
+      const turboMagnet = buildTurboMagnet(ih, torrentName, []);
+      return res.status(504).json({
+        error: 'No active seeders recorded to assemble metadata on the fly',
+        magnet: turboMagnet
+      });
+    }
+
+    try {
+      // Fetch metadata directly over wire on the fly (racing candidate peers with 3.5s timeout)
+      const rawInfoBuf = await fetchMetadataOnTheFly(ih, candidatePeers, 3500);
+      const torrentBuf = buildTorrentBuffer(rawInfoBuf);
+
+      const cleanFilename = torrentName
+        .replace(/[/\\?%*:|"<>]/g, '_')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      res.setHeader('Content-Type', 'application/x-bittorrent');
+      res.setHeader('Content-Disposition', `attachment; filename="${cleanFilename || ih}.torrent"`);
+      res.setHeader('Content-Length', torrentBuf.length);
+      return res.end(torrentBuf);
+    } catch (wireErr) {
+      console.warn(`[wireFetcher] On-the-fly fetch failed for ${ih}:`, wireErr.message);
+      const turboMagnet = buildTurboMagnet(ih, torrentName, candidatePeers);
+      return res.status(504).json({
+        error: `Could not reach live seeders in time: ${wireErr.message}`,
+        magnet: turboMagnet
+      });
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
