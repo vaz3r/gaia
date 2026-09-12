@@ -256,3 +256,44 @@ def test_feature_extraction_antivirus_signals():
     )
     assert feats_fake_app["category_is_software"] == 1.0
     assert feats_fake_app["software_implausible_size"] == 1.0
+
+
+def test_rarbg_dummy_anti_scraper_exe_allowed():
+    """Authentic RARBG movie release containing harmless 99-byte RARBG_DO_NOT_MIRROR.exe dummy file must be ALLOWED as SAFE."""
+    files = [
+        {"path": ["Dracula.II.Ascension.2003.1080p.BluRay.x265-RARBG.mp4"], "length": 1424890928},
+        {"path": ["RARBG.txt"], "length": 30},
+        {"path": ["RARBG_DO_NOT_MIRROR.exe"], "length": 99},
+        {"path": ["Subs", "3_English.srt"], "length": 63509},
+    ]
+    reasons, details = evaluate_silver_invariants(
+        name="Dracula.II.Ascension.2003.1080p.BluRay.x265-RARBG",
+        total_size=1424954566,
+        category="Movies",
+        files=files,
+    )
+    assert ReasonCode.EXECUTABLE_IN_MEDIA_SWARM not in reasons
+
+    feats = extract_integrity_features(
+        name="Dracula.II.Ascension.2003.1080p.BluRay.x265-RARBG",
+        total_size=1424954566,
+        file_count=4,
+        files=files,
+        category="Movies",
+    )
+    assert feats["executable_share"] == 0.0
+    assert feats["media_executable_mismatch"] == 0.0
+
+    res = evaluate_policy(
+        infohash=b"\x09" * 20,
+        model_safe_probability=0.99,
+        name="Dracula.II.Ascension.2003.1080p.BluRay.x265-RARBG",
+        total_size=1424954566,
+        file_count=4,
+        files=files,
+        category="Movies",
+    )
+    assert res.policy_action == PolicyAction.ALLOW
+    assert res.risk_tier == RiskTier.SAFE
+    assert res.integrity_score >= 80
+

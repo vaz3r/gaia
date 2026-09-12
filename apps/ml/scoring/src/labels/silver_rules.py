@@ -172,14 +172,53 @@ def check_rtlo_spoofing(name: Optional[str] = None, files: Optional[List[Dict[st
     return False
 
 
+KNOWN_BENIGN_DUMMY_EXECUTABLES = {
+    "rarbg_do_not_mirror.exe",
+    "do_not_mirror.exe",
+    "do_not_mirror_rarbg.exe",
+}
+
+VIDEO_AND_AUDIO_EXTENSIONS = {
+    ".mp4", ".mkv", ".avi", ".wmv", ".mov", ".flv", ".webm", ".m4v", ".ts",
+    ".mp3", ".flac", ".wav", ".aac", ".ogg", ".m4a", ".wma", ".alac",
+}
+
+
+def is_benign_media_dummy_file(
+    path_str: str,
+    file_size: int = 0,
+    total_size: int = 0,
+    media_bytes: int = 0,
+) -> bool:
+    """
+    Identifies known anti-scraper dummy files (e.g. RARBG_DO_NOT_MIRROR.exe, 99 bytes)
+    that are safely embedded in authentic multi-gigabyte media torrents to prevent scraper bots.
+    """
+    basename = path_str.lower().replace("\\", "/").split("/")[-1].strip()
+
+    # 1. Known anti-scraper dummy marker by name (typically 99 bytes, max 10KB)
+    if basename in KNOWN_BENIGN_DUMMY_EXECUTABLES and file_size <= 10240:
+        return True
+
+    # 2. Negligible dummy stub under 300 bytes (cannot contain PE header) in a torrent
+    # where legitimate video/audio payload dominates (>85%)
+    if file_size <= 300 and total_size > 50 * 1024 * 1024:
+        if (media_bytes / max(1, total_size)) >= 0.85:
+            return True
+
+    return False
+
+
 def check_executable_in_media(
     category: Optional[str] = None,
     files: Optional[List[Dict[str, Any]]] = None,
     name: Optional[str] = None,
+    total_size: int = 0,
 ) -> Tuple[bool, List[str]]:
     """
     Flags any media / non-software torrent that contains executable or script files in
     either the root swarm title or the files payload tree.
+    Explicitly exempts known anti-scraper dummy files (e.g. RARBG_DO_NOT_MIRROR.exe, 99 bytes).
     """
     if not category:
         return False, []
@@ -188,6 +227,7 @@ def check_executable_in_media(
         return False, []
 
     flagged = []
+    # 1. Root swarm title: NEVER exempt root title executables!
     if name:
         name_clean = name.strip()
         m = re.search(r"\s*\.([a-zA-Z0-9]+)\s*$", name_clean)
@@ -196,14 +236,26 @@ def check_executable_in_media(
             if ext in EXECUTABLE_EXTENSIONS:
                 flagged.append(name)
 
+    # 2. Files payload tree: exempt known benign anti-scraper dummy files
     if files:
+        # Calculate media bytes
+        media_bytes = 0
+        for f in files:
+            p = _get_path_str(f).strip().lower()
+            sz = int(f.get("length") or f.get("size") or 0) if isinstance(f, dict) else 0
+            ext = "." + p.rsplit(".", 1)[-1] if "." in p else ""
+            if ext in VIDEO_AND_AUDIO_EXTENSIONS:
+                media_bytes += sz
+
         for f in files:
             p = _get_path_str(f).strip()
+            sz = int(f.get("length") or f.get("size") or 0) if isinstance(f, dict) else 0
             m = re.search(r"\s*\.([a-zA-Z0-9]+)\s*$", p)
             if m:
                 ext = "." + m.group(1).lower()
                 if ext in EXECUTABLE_EXTENSIONS:
-                    flagged.append(p)
+                    if not is_benign_media_dummy_file(p, sz, total_size, media_bytes):
+                        flagged.append(p)
 
     return len(flagged) > 0, flagged[:5]
 
@@ -287,8 +339,8 @@ def evaluate_silver_invariants(
         reasons.append(ReasonCode.RTLO_CHAR_SPOOFING)
         details["rtlo_spoofing"] = True
 
-    # Executable payload in non-software media check
-    is_media_exe, flagged_media = check_executable_in_media(category, files, name)
+    # Executable payload in non-software media check (with anti-scraper dummy exemptions)
+    is_media_exe, flagged_media = check_executable_in_media(category, files, name, total_size)
     if is_media_exe:
         reasons.append(ReasonCode.EXECUTABLE_IN_MEDIA_SWARM)
         details["media_executables"] = flagged_media

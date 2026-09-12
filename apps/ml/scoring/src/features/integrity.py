@@ -12,6 +12,8 @@ from src.labels.silver_rules import (
     DANGEROUS_STANDALONE_EXTENSIONS,
     EXECUTABLE_EXTENSIONS,
     MAJOR_SOFTWARE_TITLES,
+    is_benign_media_dummy_file,
+    _get_path_str,
 )
 
 SPAM_KEYWORDS = {
@@ -80,6 +82,12 @@ def extract_integrity_features(
     executable_files_count = 0.0
 
     if files:
+        media_bytes = sum(
+            max(0, int(f.get("length") or f.get("size") or 0))
+            for f in files
+            if isinstance(f, dict) and ("." + _get_path_str(f).rsplit(".", 1)[-1].lower() if "." in _get_path_str(f) else "") in (EXT_CATEGORIES["video"] | EXT_CATEGORIES["audio"])
+        )
+
         for f in files:
             p_val = f.get("path") if isinstance(f, dict) else ""
             if isinstance(p_val, list):
@@ -99,16 +107,19 @@ def extract_integrity_features(
 
             # Extension
             ext = "." + p.rsplit(".", 1)[-1].lower() if "." in p else ""
+            is_dummy = is_benign_media_dummy_file(p, sz, total_size_safe, media_bytes)
+
             if ext:
                 extensions.append(ext)
                 for cat_name, ext_set in EXT_CATEGORIES.items():
                     if ext in ext_set:
-                        cat_bytes[cat_name] += sz
+                        if not (cat_name == "executable" and is_dummy):
+                            cat_bytes[cat_name] += sz
 
-            if ext in EXECUTABLE_EXTENSIONS:
+            if ext in EXECUTABLE_EXTENSIONS and not is_dummy:
                 executable_files_count += 1.0
 
-            if ext in DANGEROUS_STANDALONE_EXTENSIONS:
+            if ext in DANGEROUS_STANDALONE_EXTENSIONS and not is_dummy:
                 has_dangerous_script = 1.0
 
             if DECEPTIVE_EXT_PATTERN.search(p):
