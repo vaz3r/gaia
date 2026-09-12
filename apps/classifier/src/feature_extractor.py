@@ -6,9 +6,19 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 # Regex patterns for domain scene rules
+# Corpus-wide ubiquitous stop words discovered from 3.2M torrent entropy analysis
+CORPUS_STOP_WORDS = [
+    'the', 'and', 'of', 'in', 'for', 'to', 'by', 'on', 'all', 'me', 'my', 'it',
+    'com', '2026', '2025', '2024', '2023', '2022', '2021', '2020', '2019',
+    '01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12',
+    'www', 'org', 'net', 'rarbg', 'torrent', 'download'
+]
+
+# Regex patterns for domain scene rules (empirically expanded from 3.2M analysis)
 RE_TV = re.compile(
     r'\b[sS]\d{1,2}[eE]\d{1,2}\b|\b\d{1,2}x\d{1,2}\b|\bseason\s*\d+\b|\bepisode\s*\d+\b|\bcomplete\s+series\b'
-    r'|\bseries\s*\d+\b|\bpart\s*\d+\b|\bep\s*\d+\b|\[第\d+集\]|\[第\d+话\]',
+    r'|\bseries\s*\d+\b|\bpart\s*\d+\b|\bep\s*\d+\b|\[第\d+集\]|\[第\d+话\]|\[第\d+期\]|全\d+集|更新至'
+    r'|\b(eztvx?|hdtv|dsnp|amzn|ddp5|s01|s02|s03|s04|s05|tgx|megusta)\b',
     re.IGNORECASE
 )
 RE_ANIME = re.compile(
@@ -20,49 +30,67 @@ RE_ANIME = re.compile(
     r'rezero|isekai|shaman\s*king|yu-gi-oh|yugioh|gundam|evangelion|fullmetal|death\s*note|'
     r'gintama|haikyuu|jojo|tokyo\s*ghoul|vinland|mushoku\s*tensei|slime|danmachi|baki|berserk|'
     r'monogatari|konosuba|overlord|fate|boruto|inuyasha|dandadan|sousou|kaiju|wind\s*breaker|'
-    r'dual[\s\-]audio|multi[\s\-]sub|multi[\s\-]audio|hi10p|10[\s\-]bit|nced|ncop|bdrip|anilibria)\b',
+    r'dual[\s\-]audio|multi[\s\-]sub|multi[\s\-]audio|hi10p|10[\s\-]bit|nced|ncop|bdrip|anilibria|vostfr|multisub)\b',
     re.IGNORECASE
 )
 RE_ADULT = re.compile(
     r'\b(brazzers|naughtyamerica|puretaboo|realitykings|blacked|tushy|sxyprn|bangbros|adult|xxx|'
     r'hentai|18禁|jav|pornhub|fuck|pussy|milf|blowjob|anal|threesome|doggystyle|onlyfans|xvideos|'
     r'redtube|youporn|chaturbate|teamskeet|nubiles|mofos|fetish|cum|creampie|gangbang|babe|erotic|'
-    r'stripper|porn|deepthroat|hardcore|lust|squirt|cuckold|masturbat)\b',
+    r'stripper|porn|deepthroat|hardcore|lust|squirt|cuckold|masturbat|'
+    r'patreon|dlraw|dl版|culturedcommissions|brego|pthc|uncensored|playboy|penthouse|hustler|'
+    r'bonga|stripchat|cam4|camsoda|fansly|manyvids|nud(e|ity)|voyeur|'
+    r'dmm|tokyo[\s\-]?hot|1pondo|caribbeancom|heyzo|s-cute|pacopacomama|10musume|heydouga|'
+    r'一本道|無修正|素人|中国翻訳|オリジナル|同人|同人誌|エロ|裏アカ|成年コミック|'
+    r'секс|порно|эротика|минет|шлюхи)\b'
+    r'|\[ai\s*generated\]|\bai[\s\-_]*gen(erated)?\b'
+    r'|\[\d{5,7}\]',
+    re.IGNORECASE
+)
+RE_JAV = re.compile(
+    r'\b[A-Za-z]{2,6}[-_ ]\d{3,5}\b'
+    r'|\bFC2[-_ ]?(PPV)?[-_ ]?\d+\b'
+    r'|\b(carib|1pon|10mu|heyd|c0930|h0930|h4610|siro|mkbd|s-cute)[-_ ]\d+\b'
+    r'|\b(s1|moodyz|ideapocket|attackers|prestige|wanz|madonna|das|ebod|jul|ssis|ipx|mide|ssni|midv|stars|abw|cawd|dldss|meyd)[-_ ]\d+\b',
     re.IGNORECASE
 )
 RE_AUDIOBOOK = re.compile(
     r'(\b(audiobook|audio\s*book|narrat(ed|or)|unabridged|abridged|read\s*by|performed\s*by|voiced\s*by|'
-    r'audible|audio\s*drama|full[\s\-]cast|\.m4b\b|\.aax\b)\b|\b\d+h\d+m\b|\([A-Za-zА-Яа-я]+[_\s]+[A-Za-zА-Яа-я]\.?\))',
+    r'audible|audio\s*drama|full[\s\-]cast|\.m4b\b|\.aax\b|аудиокнига|читает|озвучка|'
+    r'автор|исполнитель)\b|\b\d+h\d+m\b|\([A-Za-zА-Яа-я]+[_\s]+[A-Za-zА-Яа-я]\.?\))',
     re.IGNORECASE
 )
 RE_BOOK = re.compile(
     r'\b(epub|pdf|mobi|azw3|djvu|cbr|cbz|chm|retail\s*epub|ebook|e-book|course|tutorial|lecture|textbook|'
-    r'udemy|coursera|masterclass|pluralsight|oreilly|packt|wiley|springer|cambridge|oxford|manual)\b',
+    r'udemy|coursera|masterclass|pluralsight|oreilly|packt|wiley|springer|cambridge|oxford|manual|'
+    r'учебник|пособие|руководство|сборник|книга|guide|handbook)\b',
     re.IGNORECASE
 )
 RE_DOCU = re.compile(
     r'\b(bbc|pbs|national\s*geographic|nat\s*geo|discovery(\s*channel)?|docu|documentary|docuseries|'
-    r'nature|history\s*channel|attenborough|planet\s*earth|blue\s*planet|curiositystream|novafilm|imax)\b',
+    r'nature|history\s*channel|attenborough|planet\s*earth|blue\s*planet|curiositystream|novafilm|imax|mvgroup)\b',
     re.IGNORECASE
 )
 RE_GAME = re.compile(
     r'\b(fitgirl|dodi|repack|codex|skidrow|flt|plaza|cso|nsp|xci|playstation|ps4|ps5|ps3|ps2|psx|switch|'
     r'xbox|nintendo|roms?|reloaded|cpy|rune|tenoke|empress|razor1911|elamigos|gog|tinyiso|pc\s*game|'
-    r'steamrip|cracked|kaos|rg\s*mechanics|deluxe\s*edition|definitive\s*edition)\b',
+    r'steamrip|cracked|kaos|rg\s*mechanics|deluxe\s*edition|definitive\s*edition|'
+    r'multi\d+|v\d+(\.\d+)+|build\s*\d+|update\s*v?\d+|dlc|repacks?|patch-?fr)\b',
     re.IGNORECASE
 )
 RE_APP = re.compile(
-    r'\b(adobe|autodesk|microsoft\s*office|windows\s*1\d|macos|crack|keygen|patch|portable|setup|'
-    r'multilingual|v\d+\.\d+|\.dmg\b|\.apk\b|winrar|installer|activator|x64|x86)\b',
+    r'\b(adobe|autodesk|microsoft\s*office|windows\s*1\d|macos|crack|keygen|keymaker|patcher?|portable|setup|'
+    r'multilingual|v\d+\.\d+|\.dmg\b|\.apk\b|winrar|installer|activator|x64|x86|win64|win32|loader|'
+    r'coreldraw|solidworks|cyberlink|corel|acronis|vmware|jetbrains)\b',
     re.IGNORECASE
 )
 RE_MOVIE = re.compile(
-    r'\b(19\d\d|20\d\d)\b.*?\b(1080p|2160p|720p|bluray|bdrip|web-dl|remux|hdr|dvdrip|uhd)\b',
+    r'\b(19\d\d|20\d\d)\b.*?\b(1080p|2160p|720p|bluray|bdrip|web-dl|webrip|remux|hdr|dvdrip|uhd|xvid)\b',
     re.IGNORECASE
 )
 RE_MUSIC = re.compile(
     r'\b(flac|320kbps|alac|lossless|soundtrack|ost|discography|album|single|ep|vinyl|remastered|cd\s*rip|'
-    r'web-flac|qobuz|deezer|tidal|greatest\s*hits)\b',
+    r'web-flac|qobuz|deezer|tidal|greatest\s*hits|deluxe\s*edition)\b',
     re.IGNORECASE
 )
 
@@ -266,6 +294,7 @@ class TorrentFeatureExtractor(BaseEstimator, TransformerMixin):
             min_df=2,
             max_features=60000,
             token_pattern=r'(?u)\b\w+\b',
+            stop_words=CORPUS_STOP_WORDS,
             sublinear_tf=True
         )
         
@@ -274,7 +303,10 @@ class TorrentFeatureExtractor(BaseEstimator, TransformerMixin):
         norm = getattr(self, 'normalize_dense', False)
         dv = getattr(self, 'dense_version', 1)
         for r in records:
-            txt, _ = get_text_and_features(r, normalize_dense=norm, dense_version=dv)
+            if isinstance(r, dict) and 'clean_text' in r:
+                txt = r['clean_text']
+            else:
+                txt, _ = get_text_and_features(r, normalize_dense=norm, dense_version=dv)
             texts.append(txt)
         self.char_vectorizer.fit(texts)
         self.word_vectorizer.fit(texts)
@@ -286,7 +318,11 @@ class TorrentFeatureExtractor(BaseEstimator, TransformerMixin):
         norm = getattr(self, 'normalize_dense', False)
         dv = getattr(self, 'dense_version', 1)
         for r in records:
-            txt, dense = get_text_and_features(r, normalize_dense=norm, dense_version=dv)
+            if isinstance(r, dict) and 'clean_text' in r and 'dense_vector' in r:
+                txt = r['clean_text']
+                dense = r['dense_vector']
+            else:
+                txt, dense = get_text_and_features(r, normalize_dense=norm, dense_version=dv)
             texts.append(txt)
             dense_list.append(dense)
             

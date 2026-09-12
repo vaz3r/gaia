@@ -1,0 +1,6938 @@
+{
+  "metadata": {
+    "total_torrents": 3199684,
+    "total_tokens": 25592242,
+    "vocab_size": 1416848,
+    "review_queue_torrents": 99902,
+    "analyzed_at": "2026-09-12T09:52:21Z",
+    "duration_seconds": 162.3
+  },
+  "top_noise_words": [
+    {
+      "term": "the",
+      "doc_freq": 366696,
+      "entropy": 2.971,
+      "noise_score": 4.98
+    },
+    {
+      "term": "and",
+      "doc_freq": 131157,
+      "entropy": 3.164,
+      "noise_score": 4.87
+    },
+    {
+      "term": "2026",
+      "doc_freq": 110835,
+      "entropy": 3.028,
+      "noise_score": 4.6
+    },
+    {
+      "term": "in",
+      "doc_freq": 67683,
+      "entropy": 3.122,
+      "noise_score": 4.54
+    },
+    {
+      "term": "of",
+      "doc_freq": 144764,
+      "entropy": 2.916,
+      "noise_score": 4.53
+    },
+    {
+      "term": "2025",
+      "doc_freq": 91133,
+      "entropy": 2.942,
+      "noise_score": 4.39
+    },
+    {
+      "term": "new",
+      "doc_freq": 40674,
+      "entropy": 3.153,
+      "noise_score": 4.37
+    },
+    {
+      "term": "2023",
+      "doc_freq": 53312,
+      "entropy": 3.06,
+      "noise_score": 4.35
+    },
+    {
+      "term": "com",
+      "doc_freq": 105074,
+      "entropy": 2.864,
+      "noise_score": 4.33
+    },
+    {
+      "term": "2024",
+      "doc_freq": 60948,
+      "entropy": 2.99,
+      "noise_score": 4.31
+    },
+    {
+      "term": "for",
+      "doc_freq": 36145,
+      "entropy": 3.126,
+      "noise_score": 4.29
+    },
+    {
+      "term": "2021",
+      "doc_freq": 38839,
+      "entropy": 3.032,
+      "noise_score": 4.19
+    },
+    {
+      "term": "2022",
+      "doc_freq": 40241,
+      "entropy": 2.964,
+      "noise_score": 4.11
+    },
+    {
+      "term": "all",
+      "doc_freq": 17838,
+      "entropy": 3.176,
+      "noise_score": 4.06
+    },
+    {
+      "term": "on",
+      "doc_freq": 26343,
+      "entropy": 3.051,
+      "noise_score": 4.06
+    },
+    {
+      "term": "2020",
+      "doc_freq": 29744,
+      "entropy": 3.014,
+      "noise_score": 4.06
+    },
+    {
+      "term": "black",
+      "doc_freq": 21732,
+      "entropy": 3.102,
+      "noise_score": 4.05
+    },
+    {
+      "term": "2019",
+      "doc_freq": 34379,
+      "entropy": 2.952,
+      "noise_score": 4.03
+    },
+    {
+      "term": "me",
+      "doc_freq": 22229,
+      "entropy": 3.079,
+      "noise_score": 4.03
+    },
+    {
+      "term": "my",
+      "doc_freq": 32157,
+      "entropy": 2.947,
+      "noise_score": 4.0
+    },
+    {
+      "term": "to",
+      "doc_freq": 127118,
+      "entropy": 2.602,
+      "noise_score": 4.0
+    },
+    {
+      "term": "it",
+      "doc_freq": 13443,
+      "entropy": 3.206,
+      "noise_score": 3.98
+    },
+    {
+      "term": "03",
+      "doc_freq": 41713,
+      "entropy": 2.858,
+      "noise_score": 3.98
+    },
+    {
+      "term": "02",
+      "doc_freq": 40697,
+      "entropy": 2.853,
+      "noise_score": 3.96
+    },
+    {
+      "term": "by",
+      "doc_freq": 62898,
+      "entropy": 2.74,
+      "noise_score": 3.96
+    },
+    {
+      "term": "04",
+      "doc_freq": 40765,
+      "entropy": 2.84,
+      "noise_score": 3.94
+    },
+    {
+      "term": "2018",
+      "doc_freq": 31500,
+      "entropy": 2.884,
+      "noise_score": 3.91
+    },
+    {
+      "term": "love",
+      "doc_freq": 25176,
+      "entropy": 2.946,
+      "noise_score": 3.9
+    },
+    {
+      "term": "you",
+      "doc_freq": 19189,
+      "entropy": 3.015,
+      "noise_score": 3.89
+    },
+    {
+      "term": "01",
+      "doc_freq": 55335,
+      "entropy": 2.716,
+      "noise_score": 3.88
+    },
+    {
+      "term": "is",
+      "doc_freq": 17658,
+      "entropy": 3.026,
+      "noise_score": 3.87
+    },
+    {
+      "term": "12",
+      "doc_freq": 46420,
+      "entropy": 2.75,
+      "noise_score": 3.86
+    },
+    {
+      "term": "2016",
+      "doc_freq": 27274,
+      "entropy": 2.887,
+      "noise_score": 3.86
+    },
+    {
+      "term": "up",
+      "doc_freq": 10721,
+      "entropy": 3.177,
+      "noise_score": 3.85
+    },
+    {
+      "term": "07",
+      "doc_freq": 45321,
+      "entropy": 2.748,
+      "noise_score": 3.85
+    },
+    {
+      "term": "red",
+      "doc_freq": 8298,
+      "entropy": 3.256,
+      "noise_score": 3.84
+    },
+    {
+      "term": "1080p",
+      "doc_freq": 641669,
+      "entropy": 2.19,
+      "noise_score": 3.83
+    },
+    {
+      "term": "10",
+      "doc_freq": 52398,
+      "entropy": 2.685,
+      "noise_score": 3.81
+    },
+    {
+      "term": "05",
+      "doc_freq": 41500,
+      "entropy": 2.737,
+      "noise_score": 3.81
+    },
+    {
+      "term": "with",
+      "doc_freq": 42481,
+      "entropy": 2.729,
+      "noise_score": 3.8
+    },
+    {
+      "term": "06",
+      "doc_freq": 43104,
+      "entropy": 2.725,
+      "noise_score": 3.8
+    },
+    {
+      "term": "2017",
+      "doc_freq": 28556,
+      "entropy": 2.822,
+      "noise_score": 3.79
+    },
+    {
+      "term": "from",
+      "doc_freq": 16282,
+      "entropy": 2.983,
+      "noise_score": 3.78
+    },
+    {
+      "term": "collection",
+      "doc_freq": 17146,
+      "entropy": 2.968,
+      "noise_score": 3.78
+    },
+    {
+      "term": "your",
+      "doc_freq": 11997,
+      "entropy": 3.048,
+      "noise_score": 3.74
+    },
+    {
+      "term": "time",
+      "doc_freq": 12753,
+      "entropy": 3.02,
+      "noise_score": 3.73
+    },
+    {
+      "term": "08",
+      "doc_freq": 46365,
+      "entropy": 2.651,
+      "noise_score": 3.72
+    },
+    {
+      "term": "2015",
+      "doc_freq": 24150,
+      "entropy": 2.816,
+      "noise_score": 3.72
+    },
+    {
+      "term": "big",
+      "doc_freq": 19065,
+      "entropy": 2.87,
+      "noise_score": 3.7
+    },
+    {
+      "term": "night",
+      "doc_freq": 11290,
+      "entropy": 3.028,
+      "noise_score": 3.69
+    },
+    {
+      "term": "man",
+      "doc_freq": 15330,
+      "entropy": 2.931,
+      "noise_score": 3.69
+    },
+    {
+      "term": "rus",
+      "doc_freq": 28440,
+      "entropy": 2.753,
+      "noise_score": 3.69
+    },
+    {
+      "term": "13",
+      "doc_freq": 21446,
+      "entropy": 2.829,
+      "noise_score": 3.69
+    },
+    {
+      "term": "first",
+      "doc_freq": 11944,
+      "entropy": 3.0,
+      "noise_score": 3.68
+    },
+    {
+      "term": "complete",
+      "doc_freq": 19337,
+      "entropy": 2.838,
+      "noise_score": 3.66
+    },
+    {
+      "term": "2014",
+      "doc_freq": 23229,
+      "entropy": 2.785,
+      "noise_score": 3.66
+    },
+    {
+      "term": "2013",
+      "doc_freq": 22113,
+      "entropy": 2.795,
+      "noise_score": 3.66
+    },
+    {
+      "term": "2012",
+      "doc_freq": 20369,
+      "entropy": 2.814,
+      "noise_score": 3.65
+    },
+    {
+      "term": "king",
+      "doc_freq": 8839,
+      "entropy": 3.072,
+      "noise_score": 3.65
+    },
+    {
+      "term": "club",
+      "doc_freq": 7305,
+      "entropy": 3.136,
+      "noise_score": 3.65
+    },
+    {
+      "term": "2010",
+      "doc_freq": 18102,
+      "entropy": 2.845,
+      "noise_score": 3.65
+    },
+    {
+      "term": "16",
+      "doc_freq": 24766,
+      "entropy": 2.756,
+      "noise_score": 3.64
+    },
+    {
+      "term": "de",
+      "doc_freq": 31968,
+      "entropy": 2.681,
+      "noise_score": 3.64
+    },
+    {
+      "term": "after",
+      "doc_freq": 6132,
+      "entropy": 3.186,
+      "noise_score": 3.63
+    },
+    {
+      "term": "20",
+      "doc_freq": 26938,
+      "entropy": 2.723,
+      "noise_score": 3.63
+    },
+    {
+      "term": "11",
+      "doc_freq": 43904,
+      "entropy": 2.597,
+      "noise_score": 3.63
+    },
+    {
+      "term": "little",
+      "doc_freq": 10570,
+      "entropy": 2.993,
+      "noise_score": 3.63
+    },
+    {
+      "term": "dark",
+      "doc_freq": 8745,
+      "entropy": 3.051,
+      "noise_score": 3.62
+    },
+    {
+      "term": "home",
+      "doc_freq": 6183,
+      "entropy": 3.163,
+      "noise_score": 3.61
+    },
+    {
+      "term": "high",
+      "doc_freq": 6060,
+      "entropy": 3.17,
+      "noise_score": 3.61
+    },
+    {
+      "term": "2011",
+      "doc_freq": 19742,
+      "entropy": 2.79,
+      "noise_score": 3.61
+    },
+    {
+      "term": "day",
+      "doc_freq": 11320,
+      "entropy": 2.947,
+      "noise_score": 3.6
+    },
+    {
+      "term": "17",
+      "doc_freq": 20363,
+      "entropy": 2.77,
+      "noise_score": 3.59
+    },
+    {
+      "term": "30",
+      "doc_freq": 11724,
+      "entropy": 2.928,
+      "noise_score": 3.59
+    },
+    {
+      "term": "09",
+      "doc_freq": 37904,
+      "entropy": 2.599,
+      "noise_score": 3.58
+    },
+    {
+      "term": "last",
+      "doc_freq": 11194,
+      "entropy": 2.93,
+      "noise_score": 3.57
+    },
+    {
+      "term": "old",
+      "doc_freq": 5757,
+      "entropy": 3.155,
+      "noise_score": 3.57
+    },
+    {
+      "term": "summer",
+      "doc_freq": 6865,
+      "entropy": 3.092,
+      "noise_score": 3.57
+    },
+    {
+      "term": "part",
+      "doc_freq": 16834,
+      "entropy": 2.796,
+      "noise_score": 3.56
+    },
+    {
+      "term": "two",
+      "doc_freq": 7531,
+      "entropy": 3.048,
+      "noise_score": 3.56
+    },
+    {
+      "term": "star",
+      "doc_freq": 16813,
+      "entropy": 2.795,
+      "noise_score": 3.56
+    },
+    {
+      "term": "white",
+      "doc_freq": 8224,
+      "entropy": 3.016,
+      "noise_score": 3.55
+    },
+    {
+      "term": "at",
+      "doc_freq": 14236,
+      "entropy": 2.838,
+      "noise_score": 3.55
+    },
+    {
+      "term": "zip",
+      "doc_freq": 167683,
+      "entropy": 2.254,
+      "noise_score": 3.55
+    },
+    {
+      "term": "28",
+      "doc_freq": 11669,
+      "entropy": 2.891,
+      "noise_score": 3.54
+    },
+    {
+      "term": "web",
+      "doc_freq": 346134,
+      "entropy": 2.121,
+      "noise_score": 3.54
+    },
+    {
+      "term": "blue",
+      "doc_freq": 11571,
+      "entropy": 2.883,
+      "noise_score": 3.53
+    },
+    {
+      "term": "18",
+      "doc_freq": 23264,
+      "entropy": 2.673,
+      "noise_score": 3.51
+    },
+    {
+      "term": "720p",
+      "doc_freq": 218980,
+      "entropy": 2.183,
+      "noise_score": 3.51
+    },
+    {
+      "term": "life",
+      "doc_freq": 11744,
+      "entropy": 2.86,
+      "noise_score": 3.5
+    },
+    {
+      "term": "not",
+      "doc_freq": 4894,
+      "entropy": 3.149,
+      "noise_score": 3.5
+    },
+    {
+      "term": "15",
+      "doc_freq": 20067,
+      "entropy": 2.69,
+      "noise_score": 3.48
+    },
+    {
+      "term": "only",
+      "doc_freq": 4362,
+      "entropy": 3.179,
+      "noise_score": 3.48
+    },
+    {
+      "term": "100",
+      "doc_freq": 6802,
+      "entropy": 3.018,
+      "noise_score": 3.48
+    },
+    {
+      "term": "this",
+      "doc_freq": 6578,
+      "entropy": 3.027,
+      "noise_score": 3.48
+    },
+    {
+      "term": "an",
+      "doc_freq": 8189,
+      "entropy": 2.95,
+      "noise_score": 3.48
+    },
+    {
+      "term": "fire",
+      "doc_freq": 6007,
+      "entropy": 3.053,
+      "noise_score": 3.47
+    },
+    {
+      "term": "19",
+      "doc_freq": 25869,
+      "entropy": 2.611,
+      "noise_score": 3.47
+    },
+    {
+      "term": "ru",
+      "doc_freq": 14422,
+      "entropy": 2.765,
+      "noise_score": 3.46
+    },
+    {
+      "term": "project",
+      "doc_freq": 5445,
+      "entropy": 3.074,
+      "noise_score": 3.46
+    },
+    {
+      "term": "may",
+      "doc_freq": 4042,
+      "entropy": 3.177,
+      "noise_score": 3.45
+    },
+    {
+      "term": "do",
+      "doc_freq": 5597,
+      "entropy": 3.057,
+      "noise_score": 3.45
+    },
+    {
+      "term": "21",
+      "doc_freq": 24828,
+      "entropy": 2.605,
+      "noise_score": 3.45
+    },
+    {
+      "term": "art",
+      "doc_freq": 6691,
+      "entropy": 2.978,
+      "noise_score": 3.43
+    },
+    {
+      "term": "way",
+      "doc_freq": 4269,
+      "entropy": 3.136,
+      "noise_score": 3.43
+    },
+    {
+      "term": "dead",
+      "doc_freq": 9701,
+      "entropy": 2.852,
+      "noise_score": 3.42
+    },
+    {
+      "term": "english",
+      "doc_freq": 35497,
+      "entropy": 2.497,
+      "noise_score": 3.42
+    },
+    {
+      "term": "2009",
+      "doc_freq": 16353,
+      "entropy": 2.695,
+      "noise_score": 3.42
+    },
+    {
+      "term": "hd",
+      "doc_freq": 44132,
+      "entropy": 2.442,
+      "noise_score": 3.41
+    },
+    {
+      "term": "2007",
+      "doc_freq": 13161,
+      "entropy": 2.753,
+      "noise_score": 3.41
+    },
+    {
+      "term": "deep",
+      "doc_freq": 7806,
+      "entropy": 2.907,
+      "noise_score": 3.41
+    },
+    {
+      "term": "play",
+      "doc_freq": 3950,
+      "entropy": 3.146,
+      "noise_score": 3.41
+    },
+    {
+      "term": "27",
+      "doc_freq": 11597,
+      "entropy": 2.78,
+      "noise_score": 3.4
+    },
+    {
+      "term": "out",
+      "doc_freq": 7864,
+      "entropy": 2.894,
+      "noise_score": 3.39
+    },
+    {
+      "term": "x265",
+      "doc_freq": 160409,
+      "entropy": 2.165,
+      "noise_score": 3.39
+    },
+    {
+      "term": "us",
+      "doc_freq": 11216,
+      "entropy": 2.78,
+      "noise_score": 3.39
+    },
+    {
+      "term": "22",
+      "doc_freq": 26223,
+      "entropy": 2.544,
+      "noise_score": 3.38
+    },
+    {
+      "term": "14",
+      "doc_freq": 19978,
+      "entropy": 2.613,
+      "noise_score": 3.38
+    },
+    {
+      "term": "super",
+      "doc_freq": 5753,
+      "entropy": 2.989,
+      "noise_score": 3.38
+    },
+    {
+      "term": "29",
+      "doc_freq": 10666,
+      "entropy": 2.783,
+      "noise_score": 3.37
+    },
+    {
+      "term": "back",
+      "doc_freq": 4613,
+      "entropy": 3.059,
+      "noise_score": 3.37
+    },
+    {
+      "term": "can",
+      "doc_freq": 4267,
+      "entropy": 3.087,
+      "noise_score": 3.37
+    },
+    {
+      "term": "room",
+      "doc_freq": 3204,
+      "entropy": 3.194,
+      "noise_score": 3.37
+    },
+    {
+      "term": "are",
+      "doc_freq": 4594,
+      "entropy": 3.043,
+      "noise_score": 3.35
+    },
+    {
+      "term": "we",
+      "doc_freq": 5588,
+      "entropy": 2.973,
+      "noise_score": 3.35
+    },
+    {
+      "term": "heart",
+      "doc_freq": 4638,
+      "entropy": 3.037,
+      "noise_score": 3.35
+    },
+    {
+      "term": "house",
+      "doc_freq": 11878,
+      "entropy": 2.732,
+      "noise_score": 3.35
+    },
+    {
+      "term": "full",
+      "doc_freq": 15023,
+      "entropy": 2.662,
+      "noise_score": 3.35
+    },
+    {
+      "term": "perfect",
+      "doc_freq": 3764,
+      "entropy": 3.108,
+      "noise_score": 3.35
+    },
+    {
+      "term": "hevc",
+      "doc_freq": 144130,
+      "entropy": 2.153,
+      "noise_score": 3.34
+    },
+    {
+      "term": "lady",
+      "doc_freq": 3958,
+      "entropy": 3.081,
+      "noise_score": 3.34
+    },
+    {
+      "term": "31",
+      "doc_freq": 7380,
+      "entropy": 2.862,
+      "noise_score": 3.33
+    },
+    {
+      "term": "be",
+      "doc_freq": 5936,
+      "entropy": 2.934,
+      "noise_score": 3.33
+    },
+    {
+      "term": "who",
+      "doc_freq": 5899,
+      "entropy": 2.933,
+      "noise_score": 3.33
+    },
+    {
+      "term": "true",
+      "doc_freq": 4803,
+      "entropy": 3.003,
+      "noise_score": 3.33
+    },
+    {
+      "term": "here",
+      "doc_freq": 3499,
+      "entropy": 3.12,
+      "noise_score": 3.33
+    },
+    {
+      "term": "2008",
+      "doc_freq": 14605,
+      "entropy": 2.653,
+      "noise_score": 3.33
+    },
+    {
+      "term": "moon",
+      "doc_freq": 4953,
+      "entropy": 2.984,
+      "noise_score": 3.32
+    },
+    {
+      "term": "queen",
+      "doc_freq": 3966,
+      "entropy": 3.064,
+      "noise_score": 3.32
+    },
+    {
+      "term": "en",
+      "doc_freq": 13904,
+      "entropy": 2.658,
+      "noise_score": 3.32
+    },
+    {
+      "term": "2005",
+      "doc_freq": 12200,
+      "entropy": 2.693,
+      "noise_score": 3.31
+    },
+    {
+      "term": "master",
+      "doc_freq": 4439,
+      "entropy": 3.017,
+      "noise_score": 3.31
+    },
+    {
+      "term": "hard",
+      "doc_freq": 7617,
+      "entropy": 2.834,
+      "noise_score": 3.31
+    },
+    {
+      "term": "boy",
+      "doc_freq": 5798,
+      "entropy": 2.92,
+      "noise_score": 3.31
+    },
+    {
+      "term": "city",
+      "doc_freq": 7128,
+      "entropy": 2.851,
+      "noise_score": 3.31
+    },
+    {
+      "term": "world",
+      "doc_freq": 18553,
+      "entropy": 2.57,
+      "noise_score": 3.3
+    },
+    {
+      "term": "50",
+      "doc_freq": 3541,
+      "entropy": 3.09,
+      "noise_score": 3.3
+    },
+    {
+      "term": "magic",
+      "doc_freq": 3532,
+      "entropy": 3.09,
+      "noise_score": 3.3
+    },
+    {
+      "term": "year",
+      "doc_freq": 3966,
+      "entropy": 3.045,
+      "noise_score": 3.3
+    },
+    {
+      "term": "long",
+      "doc_freq": 2881,
+      "entropy": 3.166,
+      "noise_score": 3.3
+    }
+  ],
+  "category_clouds": {
+    "Adult": [
+      {
+        "term": "mp4",
+        "cat_tf": 338978,
+        "global_tf": 390929,
+        "z_score": 530.56
+      },
+      {
+        "term": "26",
+        "cat_tf": 51461,
+        "global_tf": 57611,
+        "z_score": 201.56
+      },
+      {
+        "term": "ai",
+        "cat_tf": 44580,
+        "global_tf": 50962,
+        "z_score": 189.62
+      },
+      {
+        "term": "cc",
+        "cat_tf": 25840,
+        "global_tf": 28501,
+        "z_score": 140.77
+      },
+      {
+        "term": "480p",
+        "cat_tf": 33833,
+        "global_tf": 51493,
+        "z_score": 133.78
+      },
+      {
+        "term": "sex",
+        "cat_tf": 18714,
+        "global_tf": 20939,
+        "z_score": 121.35
+      },
+      {
+        "term": "hot",
+        "cat_tf": 17607,
+        "global_tf": 19678,
+        "z_score": 117.6
+      },
+      {
+        "term": "her",
+        "cat_tf": 17331,
+        "global_tf": 19257,
+        "z_score": 116.1
+      },
+      {
+        "term": "xxx",
+        "cat_tf": 212625,
+        "global_tf": 212808,
+        "z_score": 111.82
+      },
+      {
+        "term": "digital",
+        "cat_tf": 16847,
+        "global_tf": 23841,
+        "z_score": 103.32
+      },
+      {
+        "term": "hardcore",
+        "cat_tf": 24885,
+        "global_tf": 25350,
+        "z_score": 97.96
+      },
+      {
+        "term": "generated",
+        "cat_tf": 39620,
+        "global_tf": 39947,
+        "z_score": 97.79
+      },
+      {
+        "term": "24",
+        "cat_tf": 25927,
+        "global_tf": 44730,
+        "z_score": 95.23
+      },
+      {
+        "term": "teen",
+        "cat_tf": 11965,
+        "global_tf": 13006,
+        "z_score": 93.87
+      },
+      {
+        "term": "bbc",
+        "cat_tf": 11797,
+        "global_tf": 15596,
+        "z_score": 92.38
+      },
+      {
+        "term": "uncensored",
+        "cat_tf": 9974,
+        "global_tf": 11047,
+        "z_score": 87.79
+      },
+      {
+        "term": "fhd",
+        "cat_tf": 8833,
+        "global_tf": 10175,
+        "z_score": 84.47
+      },
+      {
+        "term": "p2p",
+        "cat_tf": 11575,
+        "global_tf": 12113,
+        "z_score": 83.05
+      },
+      {
+        "term": "dl版",
+        "cat_tf": 14374,
+        "global_tf": 14756,
+        "z_score": 81.53
+      },
+      {
+        "term": "001",
+        "cat_tf": 8118,
+        "global_tf": 9246,
+        "z_score": 80.69
+      },
+      {
+        "term": "ass",
+        "cat_tf": 13100,
+        "global_tf": 13485,
+        "z_score": 79.77
+      },
+      {
+        "term": "ppv",
+        "cat_tf": 16356,
+        "global_tf": 16618,
+        "z_score": 76.14
+      },
+      {
+        "term": "sexy",
+        "cat_tf": 10684,
+        "global_tf": 11075,
+        "z_score": 75.8
+      },
+      {
+        "term": "gets",
+        "cat_tf": 10391,
+        "global_tf": 10759,
+        "z_score": 74.21
+      },
+      {
+        "term": "mpg",
+        "cat_tf": 6682,
+        "global_tf": 7497,
+        "z_score": 72.62
+      },
+      {
+        "term": "xyz",
+        "cat_tf": 19335,
+        "global_tf": 19529,
+        "z_score": 72.4
+      },
+      {
+        "term": "rose",
+        "cat_tf": 5979,
+        "global_tf": 6924,
+        "z_score": 69.55
+      },
+      {
+        "term": "blonde",
+        "cat_tf": 9887,
+        "global_tf": 10148,
+        "z_score": 67.5
+      },
+      {
+        "term": "dick",
+        "cat_tf": 6417,
+        "global_tf": 6869,
+        "z_score": 66.67
+      },
+      {
+        "term": "ch",
+        "cat_tf": 5146,
+        "global_tf": 5659,
+        "z_score": 62.56
+      },
+      {
+        "term": "angel",
+        "cat_tf": 5692,
+        "global_tf": 7747,
+        "z_score": 62.5
+      },
+      {
+        "term": "private",
+        "cat_tf": 4705,
+        "global_tf": 5447,
+        "z_score": 61.7
+      },
+      {
+        "term": "double",
+        "cat_tf": 4802,
+        "global_tf": 5923,
+        "z_score": 61.64
+      },
+      {
+        "term": "fuck",
+        "cat_tf": 10635,
+        "global_tf": 10789,
+        "z_score": 59.68
+      },
+      {
+        "term": "young",
+        "cat_tf": 6226,
+        "global_tf": 9328,
+        "z_score": 58.53
+      },
+      {
+        "term": "patreon",
+        "cat_tf": 9950,
+        "global_tf": 10101,
+        "z_score": 58.49
+      },
+      {
+        "term": "sd",
+        "cat_tf": 4364,
+        "global_tf": 5481,
+        "z_score": 58.22
+      },
+      {
+        "term": "n1c",
+        "cat_tf": 4741,
+        "global_tf": 5074,
+        "z_score": 57.28
+      },
+      {
+        "term": "porn",
+        "cat_tf": 11721,
+        "global_tf": 11842,
+        "z_score": 56.84
+      },
+      {
+        "term": "amateur",
+        "cat_tf": 7680,
+        "global_tf": 7846,
+        "z_score": 56.54
+      },
+      {
+        "term": "wife",
+        "cat_tf": 4011,
+        "global_tf": 5013,
+        "z_score": 55.97
+      },
+      {
+        "term": "comic",
+        "cat_tf": 4459,
+        "global_tf": 4737,
+        "z_score": 54.46
+      },
+      {
+        "term": "luna",
+        "cat_tf": 3723,
+        "global_tf": 4190,
+        "z_score": 54.31
+      },
+      {
+        "term": "step",
+        "cat_tf": 4146,
+        "global_tf": 5541,
+        "z_score": 54.24
+      },
+      {
+        "term": "aka",
+        "cat_tf": 3815,
+        "global_tf": 4841,
+        "z_score": 54.11
+      },
+      {
+        "term": "video",
+        "cat_tf": 7348,
+        "global_tf": 12260,
+        "z_score": 53.85
+      },
+      {
+        "term": "asian",
+        "cat_tf": 5122,
+        "global_tf": 5326,
+        "z_score": 53.47
+      },
+      {
+        "term": "mia",
+        "cat_tf": 3473,
+        "global_tf": 4010,
+        "z_score": 52.98
+      },
+      {
+        "term": "sweet",
+        "cat_tf": 3884,
+        "global_tf": 5197,
+        "z_score": 52.44
+      },
+      {
+        "term": "marie",
+        "cat_tf": 3366,
+        "global_tf": 3889,
+        "z_score": 52.16
+      },
+      {
+        "term": "mom",
+        "cat_tf": 3337,
+        "global_tf": 4022,
+        "z_score": 51.8
+      },
+      {
+        "term": "rmvb",
+        "cat_tf": 3239,
+        "global_tf": 3812,
+        "z_score": 51.23
+      },
+      {
+        "term": "rarbg",
+        "cat_tf": 20431,
+        "global_tf": 42918,
+        "z_score": 51.14
+      },
+      {
+        "term": "fox",
+        "cat_tf": 3389,
+        "global_tf": 4320,
+        "z_score": 50.85
+      },
+      {
+        "term": "vixen",
+        "cat_tf": 6787,
+        "global_tf": 6903,
+        "z_score": 49.92
+      },
+      {
+        "term": "rough",
+        "cat_tf": 3518,
+        "global_tf": 3757,
+        "z_score": 49.08
+      },
+      {
+        "term": "chinese",
+        "cat_tf": 3561,
+        "global_tf": 4893,
+        "z_score": 48.97
+      },
+      {
+        "term": "dp",
+        "cat_tf": 5201,
+        "global_tf": 5333,
+        "z_score": 48.47
+      },
+      {
+        "term": "anna",
+        "cat_tf": 3086,
+        "global_tf": 3977,
+        "z_score": 48.16
+      },
+      {
+        "term": "lily",
+        "cat_tf": 3236,
+        "global_tf": 3488,
+        "z_score": 48.07
+      },
+      {
+        "term": "wet",
+        "cat_tf": 3269,
+        "global_tf": 3506,
+        "z_score": 47.8
+      },
+      {
+        "term": "fucking",
+        "cat_tf": 5516,
+        "global_tf": 5631,
+        "z_score": 47.46
+      },
+      {
+        "term": "taylor",
+        "cat_tf": 2908,
+        "global_tf": 3699,
+        "z_score": 47.17
+      },
+      {
+        "term": "cock",
+        "cat_tf": 11772,
+        "global_tf": 11837,
+        "z_score": 47.08
+      },
+      {
+        "term": "mov",
+        "cat_tf": 3043,
+        "global_tf": 3289,
+        "z_score": 46.86
+      },
+      {
+        "term": "scenes",
+        "cat_tf": 2835,
+        "global_tf": 3144,
+        "z_score": 46.85
+      },
+      {
+        "term": "nicole",
+        "cat_tf": 3845,
+        "global_tf": 4006,
+        "z_score": 46.82
+      },
+      {
+        "term": "kate",
+        "cat_tf": 2670,
+        "global_tf": 3080,
+        "z_score": 46.44
+      },
+      {
+        "term": "child",
+        "cat_tf": 3010,
+        "global_tf": 4013,
+        "z_score": 46.31
+      },
+      {
+        "term": "she",
+        "cat_tf": 3046,
+        "global_tf": 4095,
+        "z_score": 46.24
+      },
+      {
+        "term": "sister",
+        "cat_tf": 3038,
+        "global_tf": 4096,
+        "z_score": 46.06
+      },
+      {
+        "term": "emily",
+        "cat_tf": 2619,
+        "global_tf": 3135,
+        "z_score": 45.97
+      },
+      {
+        "term": "videos",
+        "cat_tf": 2611,
+        "global_tf": 3005,
+        "z_score": 45.9
+      },
+      {
+        "term": "content",
+        "cat_tf": 2789,
+        "global_tf": 3058,
+        "z_score": 45.88
+      },
+      {
+        "term": "exclusive",
+        "cat_tf": 2667,
+        "global_tf": 2978,
+        "z_score": 45.71
+      },
+      {
+        "term": "deeper",
+        "cat_tf": 2622,
+        "global_tf": 2963,
+        "z_score": 45.68
+      },
+      {
+        "term": "cute",
+        "cat_tf": 3342,
+        "global_tf": 3515,
+        "z_score": 45.57
+      },
+      {
+        "term": "start",
+        "cat_tf": 2646,
+        "global_tf": 3303,
+        "z_score": 45.48
+      },
+      {
+        "term": "bella",
+        "cat_tf": 3283,
+        "global_tf": 3459,
+        "z_score": 45.47
+      },
+      {
+        "term": "eva",
+        "cat_tf": 2657,
+        "global_tf": 2954,
+        "z_score": 45.46
+      },
+      {
+        "term": "takes",
+        "cat_tf": 2562,
+        "global_tf": 2941,
+        "z_score": 45.44
+      },
+      {
+        "term": "watch",
+        "cat_tf": 2918,
+        "global_tf": 3929,
+        "z_score": 45.2
+      },
+      {
+        "term": "anal",
+        "cat_tf": 31373,
+        "global_tf": 31405,
+        "z_score": 45.09
+      },
+      {
+        "term": "emma",
+        "cat_tf": 2648,
+        "global_tf": 2911,
+        "z_score": 44.85
+      },
+      {
+        "term": "loves",
+        "cat_tf": 2510,
+        "global_tf": 2842,
+        "z_score": 44.74
+      },
+      {
+        "term": "jade",
+        "cat_tf": 2571,
+        "global_tf": 2860,
+        "z_score": 44.74
+      },
+      {
+        "term": "scene",
+        "cat_tf": 2623,
+        "global_tf": 3375,
+        "z_score": 44.45
+      },
+      {
+        "term": "split",
+        "cat_tf": 2467,
+        "global_tf": 2997,
+        "z_score": 44.43
+      },
+      {
+        "term": "petite",
+        "cat_tf": 5548,
+        "global_tf": 5636,
+        "z_score": 44.21
+      },
+      {
+        "term": "cherry",
+        "cat_tf": 2376,
+        "global_tf": 2713,
+        "z_score": 43.69
+      },
+      {
+        "term": "180",
+        "cat_tf": 3789,
+        "global_tf": 3906,
+        "z_score": 43.4
+      },
+      {
+        "term": "chase",
+        "cat_tf": 2228,
+        "global_tf": 2559,
+        "z_score": 42.38
+      },
+      {
+        "term": "violet",
+        "cat_tf": 2229,
+        "global_tf": 2503,
+        "z_score": 41.96
+      },
+      {
+        "term": "lucy",
+        "cat_tf": 2204,
+        "global_tf": 2687,
+        "z_score": 41.95
+      },
+      {
+        "term": "babe",
+        "cat_tf": 3663,
+        "global_tf": 3768,
+        "z_score": 41.92
+      },
+      {
+        "term": "mouth",
+        "cat_tf": 2109,
+        "global_tf": 2421,
+        "z_score": 41.23
+      },
+      {
+        "term": "moore",
+        "cat_tf": 2097,
+        "global_tf": 2456,
+        "z_score": 41.22
+      },
+      {
+        "term": "lolita",
+        "cat_tf": 3761,
+        "global_tf": 3856,
+        "z_score": 41.17
+      },
+      {
+        "term": "naughty",
+        "cat_tf": 2728,
+        "global_tf": 2869,
+        "z_score": 41.16
+      },
+      {
+        "term": "fun",
+        "cat_tf": 2285,
+        "global_tf": 2996,
+        "z_score": 40.91
+      }
+    ],
+    "Anime": [
+      {
+        "term": "mkv",
+        "cat_tf": 106642,
+        "global_tf": 386895,
+        "z_score": 400.45
+      },
+      {
+        "term": "aac",
+        "cat_tf": 49819,
+        "global_tf": 90070,
+        "z_score": 388.43
+      },
+      {
+        "term": "no",
+        "cat_tf": 38215,
+        "global_tf": 74406,
+        "z_score": 332.56
+      },
+      {
+        "term": "avc",
+        "cat_tf": 21149,
+        "global_tf": 49752,
+        "z_score": 228.85
+      },
+      {
+        "term": "aac2",
+        "cat_tf": 16110,
+        "global_tf": 31586,
+        "z_score": 214.62
+      },
+      {
+        "term": "dl",
+        "cat_tf": 44880,
+        "global_tf": 221504,
+        "z_score": 191.55
+      },
+      {
+        "term": "wa",
+        "cat_tf": 8888,
+        "global_tf": 14241,
+        "z_score": 166.44
+      },
+      {
+        "term": "bd",
+        "cat_tf": 7811,
+        "global_tf": 11244,
+        "z_score": 155.99
+      },
+      {
+        "term": "ni",
+        "cat_tf": 8537,
+        "global_tf": 16948,
+        "z_score": 155.38
+      },
+      {
+        "term": "multisub",
+        "cat_tf": 11473,
+        "global_tf": 12523,
+        "z_score": 147.87
+      },
+      {
+        "term": "vostfr",
+        "cat_tf": 8685,
+        "global_tf": 10129,
+        "z_score": 146.65
+      },
+      {
+        "term": "jpn",
+        "cat_tf": 7701,
+        "global_tf": 9266,
+        "z_score": 143.04
+      },
+      {
+        "term": "cr",
+        "cat_tf": 31964,
+        "global_tf": 32412,
+        "z_score": 140.47
+      },
+      {
+        "term": "dual",
+        "cat_tf": 11887,
+        "global_tf": 40140,
+        "z_score": 137.9
+      },
+      {
+        "term": "multi",
+        "cat_tf": 9281,
+        "global_tf": 26695,
+        "z_score": 135.64
+      },
+      {
+        "term": "10bit",
+        "cat_tf": 13050,
+        "global_tf": 52692,
+        "z_score": 125.09
+      },
+      {
+        "term": "subs",
+        "cat_tf": 5827,
+        "global_tf": 13019,
+        "z_score": 122.59
+      },
+      {
+        "term": "264",
+        "cat_tf": 19772,
+        "global_tf": 100368,
+        "z_score": 122.21
+      },
+      {
+        "term": "audio",
+        "cat_tf": 5818,
+        "global_tf": 13095,
+        "z_score": 122.1
+      },
+      {
+        "term": "1920x1080",
+        "cat_tf": 6242,
+        "global_tf": 7080,
+        "z_score": 119.08
+      },
+      {
+        "term": "ga",
+        "cat_tf": 4548,
+        "global_tf": 9600,
+        "z_score": 110.84
+      },
+      {
+        "term": "varyg",
+        "cat_tf": 7439,
+        "global_tf": 7935,
+        "z_score": 109.63
+      },
+      {
+        "term": "msubs",
+        "cat_tf": 6603,
+        "global_tf": 7128,
+        "z_score": 108.21
+      },
+      {
+        "term": "piece",
+        "cat_tf": 3956,
+        "global_tf": 5101,
+        "z_score": 107.59
+      },
+      {
+        "term": "raws",
+        "cat_tf": 31793,
+        "global_tf": 31981,
+        "z_score": 103.95
+      },
+      {
+        "term": "isekai",
+        "cat_tf": 4091,
+        "global_tf": 4779,
+        "z_score": 100.82
+      },
+      {
+        "term": "toonshub",
+        "cat_tf": 8716,
+        "global_tf": 9033,
+        "z_score": 99.62
+      },
+      {
+        "term": "wo",
+        "cat_tf": 3759,
+        "global_tf": 4501,
+        "z_score": 99.42
+      },
+      {
+        "term": "tv",
+        "cat_tf": 6424,
+        "global_tf": 22344,
+        "z_score": 99.04
+      },
+      {
+        "term": "chs",
+        "cat_tf": 3575,
+        "global_tf": 7675,
+        "z_score": 97.59
+      },
+      {
+        "term": "tensei",
+        "cat_tf": 3884,
+        "global_tf": 4460,
+        "z_score": 95.86
+      },
+      {
+        "term": "hero",
+        "cat_tf": 2989,
+        "global_tf": 5405,
+        "z_score": 94.41
+      },
+      {
+        "term": "kun",
+        "cat_tf": 3066,
+        "global_tf": 3869,
+        "z_score": 93.59
+      },
+      {
+        "term": "1280x720",
+        "cat_tf": 3028,
+        "global_tf": 3812,
+        "z_score": 92.88
+      },
+      {
+        "term": "season",
+        "cat_tf": 6718,
+        "global_tf": 26041,
+        "z_score": 92.84
+      },
+      {
+        "term": "multiple",
+        "cat_tf": 4245,
+        "global_tf": 4684,
+        "z_score": 92.59
+      },
+      {
+        "term": "ddp2",
+        "cat_tf": 5311,
+        "global_tf": 18537,
+        "z_score": 89.79
+      },
+      {
+        "term": "s2",
+        "cat_tf": 4468,
+        "global_tf": 4815,
+        "z_score": 88.45
+      },
+      {
+        "term": "cht",
+        "cat_tf": 6626,
+        "global_tf": 6877,
+        "z_score": 87.93
+      },
+      {
+        "term": "dub",
+        "cat_tf": 3420,
+        "global_tf": 9019,
+        "z_score": 86.5
+      },
+      {
+        "term": "opus",
+        "cat_tf": 2421,
+        "global_tf": 4453,
+        "z_score": 84.59
+      },
+      {
+        "term": "av1",
+        "cat_tf": 4037,
+        "global_tf": 13269,
+        "z_score": 81.79
+      },
+      {
+        "term": "gb",
+        "cat_tf": 2084,
+        "global_tf": 3284,
+        "z_score": 80.62
+      },
+      {
+        "term": "adn",
+        "cat_tf": 2149,
+        "global_tf": 4162,
+        "z_score": 78.5
+      },
+      {
+        "term": "san",
+        "cat_tf": 2962,
+        "global_tf": 8180,
+        "z_score": 78.41
+      },
+      {
+        "term": "sama",
+        "cat_tf": 1957,
+        "global_tf": 3134,
+        "z_score": 78.02
+      },
+      {
+        "term": "ken",
+        "cat_tf": 1893,
+        "global_tf": 2798,
+        "z_score": 76.9
+      },
+      {
+        "term": "jap",
+        "cat_tf": 1868,
+        "global_tf": 2899,
+        "z_score": 76.39
+      },
+      {
+        "term": "kimi",
+        "cat_tf": 1866,
+        "global_tf": 2667,
+        "z_score": 76.12
+      },
+      {
+        "term": "conan",
+        "cat_tf": 1978,
+        "global_tf": 2539,
+        "z_score": 75.89
+      },
+      {
+        "term": "ember",
+        "cat_tf": 1924,
+        "global_tf": 2464,
+        "z_score": 74.75
+      },
+      {
+        "term": "detective",
+        "cat_tf": 1884,
+        "global_tf": 3550,
+        "z_score": 74.11
+      },
+      {
+        "term": "judas",
+        "cat_tf": 2825,
+        "global_tf": 3088,
+        "z_score": 73.63
+      },
+      {
+        "term": "slime",
+        "cat_tf": 1939,
+        "global_tf": 2351,
+        "z_score": 72.24
+      },
+      {
+        "term": "boku",
+        "cat_tf": 1736,
+        "global_tf": 3232,
+        "z_score": 71.39
+      },
+      {
+        "term": "s01e11",
+        "cat_tf": 1673,
+        "global_tf": 3021,
+        "z_score": 70.64
+      },
+      {
+        "term": "ani",
+        "cat_tf": 2863,
+        "global_tf": 3078,
+        "z_score": 70.18
+      },
+      {
+        "term": "s01e12",
+        "cat_tf": 1617,
+        "global_tf": 2797,
+        "z_score": 70.12
+      },
+      {
+        "term": "jp",
+        "cat_tf": 1597,
+        "global_tf": 2190,
+        "z_score": 69.88
+      },
+      {
+        "term": "witch",
+        "cat_tf": 1697,
+        "global_tf": 3296,
+        "z_score": 69.69
+      },
+      {
+        "term": "sekai",
+        "cat_tf": 1696,
+        "global_tf": 2143,
+        "z_score": 69.65
+      },
+      {
+        "term": "movie",
+        "cat_tf": 2548,
+        "global_tf": 7583,
+        "z_score": 69.47
+      },
+      {
+        "term": "academia",
+        "cat_tf": 1640,
+        "global_tf": 2091,
+        "z_score": 68.85
+      },
+      {
+        "term": "ova",
+        "cat_tf": 2124,
+        "global_tf": 2392,
+        "z_score": 68.51
+      },
+      {
+        "term": "bleach",
+        "cat_tf": 1482,
+        "global_tf": 2162,
+        "z_score": 67.98
+      },
+      {
+        "term": "koi",
+        "cat_tf": 1476,
+        "global_tf": 2076,
+        "z_score": 67.53
+      },
+      {
+        "term": "2nd",
+        "cat_tf": 1617,
+        "global_tf": 3221,
+        "z_score": 67.47
+      },
+      {
+        "term": "8bit",
+        "cat_tf": 1804,
+        "global_tf": 2114,
+        "z_score": 67.2
+      },
+      {
+        "term": "hen",
+        "cat_tf": 1499,
+        "global_tf": 2743,
+        "z_score": 66.64
+      },
+      {
+        "term": "another",
+        "cat_tf": 1704,
+        "global_tf": 3793,
+        "z_score": 66.35
+      },
+      {
+        "term": "yuusha",
+        "cat_tf": 1996,
+        "global_tf": 2246,
+        "z_score": 66.31
+      },
+      {
+        "term": "desu",
+        "cat_tf": 1403,
+        "global_tf": 2105,
+        "z_score": 66.23
+      },
+      {
+        "term": "webrip",
+        "cat_tf": 15275,
+        "global_tf": 107458,
+        "z_score": 65.86
+      },
+      {
+        "term": "mpeg2",
+        "cat_tf": 2131,
+        "global_tf": 2355,
+        "z_score": 65.84
+      },
+      {
+        "term": "sub",
+        "cat_tf": 3625,
+        "global_tf": 14682,
+        "z_score": 65.59
+      },
+      {
+        "term": "na",
+        "cat_tf": 2458,
+        "global_tf": 7784,
+        "z_score": 65.48
+      },
+      {
+        "term": "s01e10",
+        "cat_tf": 1865,
+        "global_tf": 4821,
+        "z_score": 64.56
+      },
+      {
+        "term": "s01e09",
+        "cat_tf": 1968,
+        "global_tf": 5389,
+        "z_score": 64.22
+      },
+      {
+        "term": "frieren",
+        "cat_tf": 1309,
+        "global_tf": 1846,
+        "z_score": 63.62
+      },
+      {
+        "term": "mushoku",
+        "cat_tf": 1622,
+        "global_tf": 1892,
+        "z_score": 63.34
+      },
+      {
+        "term": "kara",
+        "cat_tf": 1316,
+        "global_tf": 2268,
+        "z_score": 63.3
+      },
+      {
+        "term": "datta",
+        "cat_tf": 1526,
+        "global_tf": 1806,
+        "z_score": 62.54
+      },
+      {
+        "term": "naruto",
+        "cat_tf": 1238,
+        "global_tf": 1835,
+        "z_score": 62.19
+      },
+      {
+        "term": "tsundere",
+        "cat_tf": 9711,
+        "global_tf": 9782,
+        "z_score": 61.8
+      },
+      {
+        "term": "mahou",
+        "cat_tf": 1284,
+        "global_tf": 1654,
+        "z_score": 61.25
+      },
+      {
+        "term": "batch",
+        "cat_tf": 1290,
+        "global_tf": 1623,
+        "z_score": 60.58
+      },
+      {
+        "term": "s3",
+        "cat_tf": 1699,
+        "global_tf": 1900,
+        "z_score": 60.41
+      },
+      {
+        "term": "chan",
+        "cat_tf": 1976,
+        "global_tf": 6017,
+        "z_score": 60.27
+      },
+      {
+        "term": "eac3",
+        "cat_tf": 2370,
+        "global_tf": 8224,
+        "z_score": 60.2
+      },
+      {
+        "term": "anime",
+        "cat_tf": 1173,
+        "global_tf": 1999,
+        "z_score": 59.88
+      },
+      {
+        "term": "ore",
+        "cat_tf": 1210,
+        "global_tf": 2241,
+        "z_score": 59.68
+      },
+      {
+        "term": "shoujo",
+        "cat_tf": 1184,
+        "global_tf": 2207,
+        "z_score": 58.93
+      },
+      {
+        "term": "precure",
+        "cat_tf": 1266,
+        "global_tf": 1521,
+        "z_score": 57.87
+      },
+      {
+        "term": "zero",
+        "cat_tf": 1653,
+        "global_tf": 4678,
+        "z_score": 57.71
+      },
+      {
+        "term": "shitara",
+        "cat_tf": 1323,
+        "global_tf": 1540,
+        "z_score": 57.05
+      },
+      {
+        "term": "animation",
+        "cat_tf": 1163,
+        "global_tf": 2349,
+        "z_score": 56.94
+      },
+      {
+        "term": "end",
+        "cat_tf": 1631,
+        "global_tf": 4813,
+        "z_score": 55.87
+      },
+      {
+        "term": "gundam",
+        "cat_tf": 1070,
+        "global_tf": 1344,
+        "z_score": 55.12
+      },
+      {
+        "term": "suru",
+        "cat_tf": 1146,
+        "global_tf": 2475,
+        "z_score": 55.1
+      },
+      {
+        "term": "really",
+        "cat_tf": 951,
+        "global_tf": 1623,
+        "z_score": 53.9
+      }
+    ],
+    "Applications": [
+      {
+        "term": "iso",
+        "cat_tf": 8586,
+        "global_tf": 15814,
+        "z_score": 251.93
+      },
+      {
+        "term": "pro",
+        "cat_tf": 9908,
+        "global_tf": 11846,
+        "z_score": 220.83
+      },
+      {
+        "term": "exe",
+        "cat_tf": 4655,
+        "global_tf": 12898,
+        "z_score": 178.41
+      },
+      {
+        "term": "windows",
+        "cat_tf": 5082,
+        "global_tf": 6877,
+        "z_score": 177.88
+      },
+      {
+        "term": "repack",
+        "cat_tf": 5602,
+        "global_tf": 26709,
+        "z_score": 167.53
+      },
+      {
+        "term": "build",
+        "cat_tf": 3590,
+        "global_tf": 7919,
+        "z_score": 161.84
+      },
+      {
+        "term": "v1",
+        "cat_tf": 3868,
+        "global_tf": 15834,
+        "z_score": 146.62
+      },
+      {
+        "term": "portable",
+        "cat_tf": 7481,
+        "global_tf": 8012,
+        "z_score": 144.7
+      },
+      {
+        "term": "office",
+        "cat_tf": 2351,
+        "global_tf": 4558,
+        "z_score": 131.63
+      },
+      {
+        "term": "microsoft",
+        "cat_tf": 2632,
+        "global_tf": 3303,
+        "z_score": 120.38
+      },
+      {
+        "term": "64",
+        "cat_tf": 2180,
+        "global_tf": 3134,
+        "z_score": 120.16
+      },
+      {
+        "term": "dmg",
+        "cat_tf": 2323,
+        "global_tf": 2990,
+        "z_score": 115.79
+      },
+      {
+        "term": "plus",
+        "cat_tf": 1600,
+        "global_tf": 3335,
+        "z_score": 108.36
+      },
+      {
+        "term": "gen",
+        "cat_tf": 1591,
+        "global_tf": 3020,
+        "z_score": 108.22
+      },
+      {
+        "term": "apk",
+        "cat_tf": 1631,
+        "global_tf": 2644,
+        "z_score": 107.82
+      },
+      {
+        "term": "win",
+        "cat_tf": 1838,
+        "global_tf": 6008,
+        "z_score": 107.8
+      },
+      {
+        "term": "professional",
+        "cat_tf": 2141,
+        "global_tf": 2645,
+        "z_score": 106.75
+      },
+      {
+        "term": "incl",
+        "cat_tf": 2161,
+        "global_tf": 2653,
+        "z_score": 106.47
+      },
+      {
+        "term": "adobe",
+        "cat_tf": 3884,
+        "global_tf": 4168,
+        "z_score": 105.12
+      },
+      {
+        "term": "pre",
+        "cat_tf": 1620,
+        "global_tf": 2289,
+        "z_score": 102.73
+      },
+      {
+        "term": "premium",
+        "cat_tf": 1592,
+        "global_tf": 4792,
+        "z_score": 102.34
+      },
+      {
+        "term": "release",
+        "cat_tf": 1411,
+        "global_tf": 2943,
+        "z_score": 101.74
+      },
+      {
+        "term": "final",
+        "cat_tf": 1873,
+        "global_tf": 7886,
+        "z_score": 100.95
+      },
+      {
+        "term": "v3",
+        "cat_tf": 1347,
+        "global_tf": 2455,
+        "z_score": 99.4
+      },
+      {
+        "term": "v2",
+        "cat_tf": 1688,
+        "global_tf": 6526,
+        "z_score": 98.5
+      },
+      {
+        "term": "studio",
+        "cat_tf": 1889,
+        "global_tf": 8800,
+        "z_score": 97.86
+      },
+      {
+        "term": "crack",
+        "cat_tf": 2312,
+        "global_tf": 2628,
+        "z_score": 97.21
+      },
+      {
+        "term": "patch",
+        "cat_tf": 1173,
+        "global_tf": 1791,
+        "z_score": 90.07
+      },
+      {
+        "term": "mac",
+        "cat_tf": 1062,
+        "global_tf": 2150,
+        "z_score": 88.36
+      },
+      {
+        "term": "fix",
+        "cat_tf": 1040,
+        "global_tf": 1782,
+        "z_score": 86.85
+      },
+      {
+        "term": "xz",
+        "cat_tf": 1863,
+        "global_tf": 2094,
+        "z_score": 84.97
+      },
+      {
+        "term": "suite",
+        "cat_tf": 1148,
+        "global_tf": 1556,
+        "z_score": 84.51
+      },
+      {
+        "term": "photoshop",
+        "cat_tf": 1513,
+        "global_tf": 1776,
+        "z_score": 83.64
+      },
+      {
+        "term": "img",
+        "cat_tf": 1703,
+        "global_tf": 1938,
+        "z_score": 83.63
+      },
+      {
+        "term": "video",
+        "cat_tf": 1841,
+        "global_tf": 12260,
+        "z_score": 83.26
+      },
+      {
+        "term": "v4",
+        "cat_tf": 999,
+        "global_tf": 1523,
+        "z_score": 83.07
+      },
+      {
+        "term": "x64",
+        "cat_tf": 10445,
+        "global_tf": 10535,
+        "z_score": 82.0
+      },
+      {
+        "term": "downloader",
+        "cat_tf": 903,
+        "global_tf": 1541,
+        "z_score": 80.88
+      },
+      {
+        "term": "enterprise",
+        "cat_tf": 1116,
+        "global_tf": 1429,
+        "z_score": 79.86
+      },
+      {
+        "term": "linux",
+        "cat_tf": 876,
+        "global_tf": 2223,
+        "z_score": 78.45
+      },
+      {
+        "term": "bundle",
+        "cat_tf": 868,
+        "global_tf": 1327,
+        "z_score": 77.5
+      },
+      {
+        "term": "version",
+        "cat_tf": 968,
+        "global_tf": 3618,
+        "z_score": 75.33
+      },
+      {
+        "term": "v5",
+        "cat_tf": 924,
+        "global_tf": 1224,
+        "z_score": 74.65
+      },
+      {
+        "term": "server",
+        "cat_tf": 829,
+        "global_tf": 1168,
+        "z_score": 73.37
+      },
+      {
+        "term": "updated",
+        "cat_tf": 727,
+        "global_tf": 1468,
+        "z_score": 73.1
+      },
+      {
+        "term": "mod",
+        "cat_tf": 818,
+        "global_tf": 2498,
+        "z_score": 73.08
+      },
+      {
+        "term": "manager",
+        "cat_tf": 707,
+        "global_tf": 1616,
+        "z_score": 71.47
+      },
+      {
+        "term": "64bit",
+        "cat_tf": 691,
+        "global_tf": 1401,
+        "z_score": 71.26
+      },
+      {
+        "term": "ultimate",
+        "cat_tf": 1024,
+        "global_tf": 5021,
+        "z_score": 70.66
+      },
+      {
+        "term": "tnt",
+        "cat_tf": 678,
+        "global_tf": 1125,
+        "z_score": 69.78
+      },
+      {
+        "term": "photo",
+        "cat_tf": 691,
+        "global_tf": 1898,
+        "z_score": 68.71
+      },
+      {
+        "term": "desktop",
+        "cat_tf": 901,
+        "global_tf": 1102,
+        "z_score": 68.41
+      },
+      {
+        "term": "v6",
+        "cat_tf": 887,
+        "global_tf": 1060,
+        "z_score": 65.83
+      },
+      {
+        "term": "image",
+        "cat_tf": 612,
+        "global_tf": 1556,
+        "z_score": 65.55
+      },
+      {
+        "term": "macos",
+        "cat_tf": 1090,
+        "global_tf": 1227,
+        "z_score": 65.22
+      },
+      {
+        "term": "lite",
+        "cat_tf": 679,
+        "global_tf": 913,
+        "z_score": 64.65
+      },
+      {
+        "term": "autocad",
+        "cat_tf": 1427,
+        "global_tf": 1534,
+        "z_score": 64.17
+      },
+      {
+        "term": "x86",
+        "cat_tf": 3453,
+        "global_tf": 3520,
+        "z_score": 63.32
+      },
+      {
+        "term": "cracked",
+        "cat_tf": 869,
+        "global_tf": 1019,
+        "z_score": 63.26
+      },
+      {
+        "term": "download",
+        "cat_tf": 569,
+        "global_tf": 1457,
+        "z_score": 63.13
+      },
+      {
+        "term": "videohive",
+        "cat_tf": 562,
+        "global_tf": 886,
+        "z_score": 62.87
+      },
+      {
+        "term": "rar",
+        "cat_tf": 2731,
+        "global_tf": 39747,
+        "z_score": 62.24
+      },
+      {
+        "term": "7z",
+        "cat_tf": 1163,
+        "global_tf": 8907,
+        "z_score": 61.74
+      },
+      {
+        "term": "beta",
+        "cat_tf": 498,
+        "global_tf": 1023,
+        "z_score": 60.46
+      },
+      {
+        "term": "gz",
+        "cat_tf": 511,
+        "global_tf": 837,
+        "z_score": 60.44
+      },
+      {
+        "term": "native",
+        "cat_tf": 492,
+        "global_tf": 904,
+        "z_score": 60.08
+      },
+      {
+        "term": "update",
+        "cat_tf": 676,
+        "global_tf": 3177,
+        "z_score": 58.31
+      },
+      {
+        "term": "dvd",
+        "cat_tf": 1106,
+        "global_tf": 9074,
+        "z_score": 58.05
+      },
+      {
+        "term": "os",
+        "cat_tf": 451,
+        "global_tf": 923,
+        "z_score": 57.54
+      },
+      {
+        "term": "premiere",
+        "cat_tf": 483,
+        "global_tf": 717,
+        "z_score": 57.24
+      },
+      {
+        "term": "autodesk",
+        "cat_tf": 1582,
+        "global_tf": 1652,
+        "z_score": 57.02
+      },
+      {
+        "term": "youtube",
+        "cat_tf": 440,
+        "global_tf": 878,
+        "z_score": 56.88
+      },
+      {
+        "term": "net",
+        "cat_tf": 1245,
+        "global_tf": 11852,
+        "z_score": 56.6
+      },
+      {
+        "term": "topaz",
+        "cat_tf": 557,
+        "global_tf": 714,
+        "z_score": 56.46
+      },
+      {
+        "term": "effects",
+        "cat_tf": 433,
+        "global_tf": 828,
+        "z_score": 56.43
+      },
+      {
+        "term": "disk",
+        "cat_tf": 530,
+        "global_tf": 700,
+        "z_score": 56.41
+      },
+      {
+        "term": "editor",
+        "cat_tf": 936,
+        "global_tf": 1028,
+        "z_score": 56.37
+      },
+      {
+        "term": "advanced",
+        "cat_tf": 476,
+        "global_tf": 1391,
+        "z_score": 56.3
+      },
+      {
+        "term": "tools",
+        "cat_tf": 428,
+        "global_tf": 854,
+        "z_score": 56.1
+      },
+      {
+        "term": "standard",
+        "cat_tf": 444,
+        "global_tf": 688,
+        "z_score": 55.63
+      },
+      {
+        "term": "internet",
+        "cat_tf": 419,
+        "global_tf": 828,
+        "z_score": 55.51
+      },
+      {
+        "term": "recovery",
+        "cat_tf": 701,
+        "global_tf": 811,
+        "z_score": 55.47
+      },
+      {
+        "term": "v7",
+        "cat_tf": 713,
+        "global_tf": 820,
+        "z_score": 55.3
+      },
+      {
+        "term": "driver",
+        "cat_tf": 428,
+        "global_tf": 1061,
+        "z_score": 55.02
+      },
+      {
+        "term": "key",
+        "cat_tf": 446,
+        "global_tf": 1311,
+        "z_score": 54.42
+      },
+      {
+        "term": "dc",
+        "cat_tf": 570,
+        "global_tf": 2562,
+        "z_score": 54.41
+      },
+      {
+        "term": "instruments",
+        "cat_tf": 469,
+        "global_tf": 633,
+        "z_score": 53.86
+      },
+      {
+        "term": "total",
+        "cat_tf": 472,
+        "global_tf": 1654,
+        "z_score": 53.58
+      },
+      {
+        "term": "audio",
+        "cat_tf": 1244,
+        "global_tf": 13095,
+        "z_score": 53.15
+      },
+      {
+        "term": "current",
+        "cat_tf": 470,
+        "global_tf": 617,
+        "z_score": 52.88
+      },
+      {
+        "term": "ml",
+        "cat_tf": 573,
+        "global_tf": 682,
+        "z_score": 52.59
+      },
+      {
+        "term": "player",
+        "cat_tf": 402,
+        "global_tf": 1147,
+        "z_score": 52.0
+      },
+      {
+        "term": "stl",
+        "cat_tf": 419,
+        "global_tf": 1322,
+        "z_score": 51.89
+      },
+      {
+        "term": "edition",
+        "cat_tf": 1507,
+        "global_tf": 19026,
+        "z_score": 51.62
+      },
+      {
+        "term": "32",
+        "cat_tf": 487,
+        "global_tf": 2030,
+        "z_score": 51.6
+      },
+      {
+        "term": "tar",
+        "cat_tf": 388,
+        "global_tf": 1105,
+        "z_score": 51.1
+      },
+      {
+        "term": "v10",
+        "cat_tf": 448,
+        "global_tf": 574,
+        "z_score": 50.61
+      },
+      {
+        "term": "3d",
+        "cat_tf": 706,
+        "global_tf": 4919,
+        "z_score": 50.42
+      },
+      {
+        "term": "setup",
+        "cat_tf": 543,
+        "global_tf": 2805,
+        "z_score": 50.41
+      },
+      {
+        "term": "minimal",
+        "cat_tf": 605,
+        "global_tf": 692,
+        "z_score": 50.38
+      }
+    ],
+    "Audiobooks": [
+      {
+        "term": "mp3",
+        "cat_tf": 4774,
+        "global_tf": 23704,
+        "z_score": 169.0
+      },
+      {
+        "term": "book",
+        "cat_tf": 3184,
+        "global_tf": 7554,
+        "z_score": 162.82
+      },
+      {
+        "term": "александр",
+        "cat_tf": 3074,
+        "global_tf": 4707,
+        "z_score": 154.88
+      },
+      {
+        "term": "книга",
+        "cat_tf": 1950,
+        "global_tf": 3576,
+        "z_score": 127.72
+      },
+      {
+        "term": "сергей",
+        "cat_tf": 2207,
+        "global_tf": 3084,
+        "z_score": 126.04
+      },
+      {
+        "term": "андрей",
+        "cat_tf": 1758,
+        "global_tf": 2659,
+        "z_score": 116.56
+      },
+      {
+        "term": "дмитрий",
+        "cat_tf": 1487,
+        "global_tf": 2214,
+        "z_score": 106.55
+      },
+      {
+        "term": "алексей",
+        "cat_tf": 1323,
+        "global_tf": 2026,
+        "z_score": 101.52
+      },
+      {
+        "term": "олег",
+        "cat_tf": 1241,
+        "global_tf": 1711,
+        "z_score": 93.74
+      },
+      {
+        "term": "том",
+        "cat_tf": 1037,
+        "global_tf": 1788,
+        "z_score": 92.41
+      },
+      {
+        "term": "игорь",
+        "cat_tf": 1070,
+        "global_tf": 1565,
+        "z_score": 89.71
+      },
+      {
+        "term": "юрий",
+        "cat_tf": 998,
+        "global_tf": 1513,
+        "z_score": 87.86
+      },
+      {
+        "term": "михаил",
+        "cat_tf": 919,
+        "global_tf": 1524,
+        "z_score": 86.39
+      },
+      {
+        "term": "владимир",
+        "cat_tf": 872,
+        "global_tf": 1686,
+        "z_score": 85.64
+      },
+      {
+        "term": "kbps",
+        "cat_tf": 925,
+        "global_tf": 3066,
+        "z_score": 83.01
+      },
+      {
+        "term": "евгений",
+        "cat_tf": 799,
+        "global_tf": 1257,
+        "z_score": 79.53
+      },
+      {
+        "term": "максим",
+        "cat_tf": 689,
+        "global_tf": 991,
+        "z_score": 71.43
+      },
+      {
+        "term": "иван",
+        "cat_tf": 599,
+        "global_tf": 1028,
+        "z_score": 70.17
+      },
+      {
+        "term": "николай",
+        "cat_tf": 591,
+        "global_tf": 1040,
+        "z_score": 69.95
+      },
+      {
+        "term": "павел",
+        "cat_tf": 578,
+        "global_tf": 944,
+        "z_score": 68.28
+      },
+      {
+        "term": "виктор",
+        "cat_tf": 564,
+        "global_tf": 960,
+        "z_score": 67.99
+      },
+      {
+        "term": "на",
+        "cat_tf": 1002,
+        "global_tf": 7179,
+        "z_score": 67.18
+      },
+      {
+        "term": "вадим",
+        "cat_tf": 584,
+        "global_tf": 871,
+        "z_score": 66.79
+      },
+      {
+        "term": "ольга",
+        "cat_tf": 586,
+        "global_tf": 866,
+        "z_score": 66.66
+      },
+      {
+        "term": "константин",
+        "cat_tf": 549,
+        "global_tf": 855,
+        "z_score": 65.72
+      },
+      {
+        "term": "nicollubin",
+        "cat_tf": 516,
+        "global_tf": 892,
+        "z_score": 65.19
+      },
+      {
+        "term": "наталья",
+        "cat_tf": 587,
+        "global_tf": 816,
+        "z_score": 64.76
+      },
+      {
+        "term": "елена",
+        "cat_tf": 504,
+        "global_tf": 837,
+        "z_score": 63.98
+      },
+      {
+        "term": "роман",
+        "cat_tf": 463,
+        "global_tf": 1008,
+        "z_score": 62.35
+      },
+      {
+        "term": "анна",
+        "cat_tf": 467,
+        "global_tf": 789,
+        "z_score": 61.79
+      },
+      {
+        "term": "илья",
+        "cat_tf": 557,
+        "global_tf": 741,
+        "z_score": 61.3
+      },
+      {
+        "term": "128",
+        "cat_tf": 481,
+        "global_tf": 1477,
+        "z_score": 60.81
+      },
+      {
+        "term": "татьяна",
+        "cat_tf": 484,
+        "global_tf": 721,
+        "z_score": 60.77
+      },
+      {
+        "term": "борис",
+        "cat_tf": 467,
+        "global_tf": 730,
+        "z_score": 60.68
+      },
+      {
+        "term": "books",
+        "cat_tf": 583,
+        "global_tf": 2671,
+        "z_score": 60.4
+      },
+      {
+        "term": "series",
+        "cat_tf": 1013,
+        "global_tf": 9355,
+        "z_score": 60.08
+      },
+      {
+        "term": "антон",
+        "cat_tf": 467,
+        "global_tf": 691,
+        "z_score": 59.54
+      },
+      {
+        "term": "не",
+        "cat_tf": 561,
+        "global_tf": 2575,
+        "z_score": 59.21
+      },
+      {
+        "term": "audiobook",
+        "cat_tf": 1620,
+        "global_tf": 1689,
+        "z_score": 59.18
+      },
+      {
+        "term": "кирилл",
+        "cat_tf": 474,
+        "global_tf": 679,
+        "z_score": 59.12
+      },
+      {
+        "term": "валерий",
+        "cat_tf": 397,
+        "global_tf": 706,
+        "z_score": 57.4
+      },
+      {
+        "term": "юлия",
+        "cat_tf": 445,
+        "global_tf": 637,
+        "z_score": 57.27
+      },
+      {
+        "term": "екатерина",
+        "cat_tf": 395,
+        "global_tf": 599,
+        "z_score": 55.26
+      },
+      {
+        "term": "мир",
+        "cat_tf": 412,
+        "global_tf": 1528,
+        "z_score": 53.91
+      },
+      {
+        "term": "алекс",
+        "cat_tf": 377,
+        "global_tf": 564,
+        "z_score": 53.72
+      },
+      {
+        "term": "ирина",
+        "cat_tf": 344,
+        "global_tf": 612,
+        "z_score": 53.43
+      },
+      {
+        "term": "кузнецов",
+        "cat_tf": 370,
+        "global_tf": 540,
+        "z_score": 52.68
+      },
+      {
+        "term": "из",
+        "cat_tf": 495,
+        "global_tf": 2856,
+        "z_score": 51.44
+      },
+      {
+        "term": "князев",
+        "cat_tf": 412,
+        "global_tf": 530,
+        "z_score": 51.28
+      },
+      {
+        "term": "чит",
+        "cat_tf": 337,
+        "global_tf": 514,
+        "z_score": 51.14
+      },
+      {
+        "term": "или",
+        "cat_tf": 334,
+        "global_tf": 1006,
+        "z_score": 50.86
+      },
+      {
+        "term": "григорий",
+        "cat_tf": 355,
+        "global_tf": 484,
+        "z_score": 49.77
+      },
+      {
+        "term": "для",
+        "cat_tf": 603,
+        "global_tf": 5739,
+        "z_score": 45.63
+      },
+      {
+        "term": "128kbps",
+        "cat_tf": 320,
+        "global_tf": 414,
+        "z_score": 45.43
+      },
+      {
+        "term": "history",
+        "cat_tf": 429,
+        "global_tf": 3017,
+        "z_score": 44.28
+      },
+      {
+        "term": "unabridged",
+        "cat_tf": 1025,
+        "global_tf": 1055,
+        "z_score": 41.33
+      },
+      {
+        "term": "башков",
+        "cat_tf": 342,
+        "global_tf": 387,
+        "z_score": 38.68
+      },
+      {
+        "term": "как",
+        "cat_tf": 336,
+        "global_tf": 2819,
+        "z_score": 36.22
+      },
+      {
+        "term": "m4b",
+        "cat_tf": 6467,
+        "global_tf": 6477,
+        "z_score": 35.11
+      },
+      {
+        "term": "по",
+        "cat_tf": 380,
+        "global_tf": 4709,
+        "z_score": 31.29
+      },
+      {
+        "term": "james",
+        "cat_tf": 388,
+        "global_tf": 5158,
+        "z_score": 30.27
+      },
+      {
+        "term": "john",
+        "cat_tf": 395,
+        "global_tf": 5734,
+        "z_score": 28.83
+      },
+      {
+        "term": "david",
+        "cat_tf": 324,
+        "global_tf": 4041,
+        "z_score": 28.77
+      },
+      {
+        "term": "pl",
+        "cat_tf": 600,
+        "global_tf": 11933,
+        "z_score": 27.94
+      },
+      {
+        "term": "audio",
+        "cat_tf": 595,
+        "global_tf": 13095,
+        "z_score": 25.36
+      },
+      {
+        "term": "how",
+        "cat_tf": 369,
+        "global_tf": 7195,
+        "z_score": 22.28
+      },
+      {
+        "term": "war",
+        "cat_tf": 370,
+        "global_tf": 8896,
+        "z_score": 18.3
+      }
+    ],
+    "Books & Learning": [
+      {
+        "term": "pdf",
+        "cat_tf": 45958,
+        "global_tf": 47242,
+        "z_score": 227.1
+      },
+      {
+        "term": "el",
+        "cat_tf": 5360,
+        "global_tf": 12482,
+        "z_score": 139.39
+      },
+      {
+        "term": "r1",
+        "cat_tf": 18571,
+        "global_tf": 19020,
+        "z_score": 137.23
+      },
+      {
+        "term": "для",
+        "cat_tf": 3965,
+        "global_tf": 5739,
+        "z_score": 126.32
+      },
+      {
+        "term": "guide",
+        "cat_tf": 3349,
+        "global_tf": 4374,
+        "z_score": 111.71
+      },
+      {
+        "term": "по",
+        "cat_tf": 3039,
+        "global_tf": 4709,
+        "z_score": 111.68
+      },
+      {
+        "term": "del",
+        "cat_tf": 3368,
+        "global_tf": 7935,
+        "z_score": 110.02
+      },
+      {
+        "term": "на",
+        "cat_tf": 3159,
+        "global_tf": 7179,
+        "z_score": 107.77
+      },
+      {
+        "term": "epub",
+        "cat_tf": 34988,
+        "global_tf": 35106,
+        "z_score": 94.37
+      },
+      {
+        "term": "история",
+        "cat_tf": 1944,
+        "global_tf": 2806,
+        "z_score": 88.36
+      },
+      {
+        "term": "los",
+        "cat_tf": 2225,
+        "global_tf": 5427,
+        "z_score": 88.36
+      },
+      {
+        "term": "как",
+        "cat_tf": 1841,
+        "global_tf": 2819,
+        "z_score": 86.81
+      },
+      {
+        "term": "zim",
+        "cat_tf": 2799,
+        "global_tf": 3139,
+        "z_score": 85.55
+      },
+      {
+        "term": "data",
+        "cat_tf": 1758,
+        "global_tf": 2733,
+        "z_score": 84.94
+      },
+      {
+        "term": "books",
+        "cat_tf": 1743,
+        "global_tf": 2671,
+        "z_score": 84.47
+      },
+      {
+        "term": "сборник",
+        "cat_tf": 1654,
+        "global_tf": 2787,
+        "z_score": 82.48
+      },
+      {
+        "term": "cbr",
+        "cat_tf": 1512,
+        "global_tf": 1905,
+        "z_score": 73.3
+      },
+      {
+        "term": "design",
+        "cat_tf": 1220,
+        "global_tf": 1922,
+        "z_score": 70.82
+      },
+      {
+        "term": "серия",
+        "cat_tf": 2129,
+        "global_tf": 2337,
+        "z_score": 70.63
+      },
+      {
+        "term": "las",
+        "cat_tf": 1310,
+        "global_tf": 2987,
+        "z_score": 69.3
+      },
+      {
+        "term": "python",
+        "cat_tf": 1999,
+        "global_tf": 2191,
+        "z_score": 68.14
+      },
+      {
+        "term": "digital",
+        "cat_tf": 3938,
+        "global_tf": 23841,
+        "z_score": 67.88
+      },
+      {
+        "term": "course",
+        "cat_tf": 1245,
+        "global_tf": 1578,
+        "z_score": 66.8
+      },
+      {
+        "term": "how",
+        "cat_tf": 1890,
+        "global_tf": 7195,
+        "z_score": 66.1
+      },
+      {
+        "term": "udemy",
+        "cat_tf": 4500,
+        "global_tf": 4598,
+        "z_score": 65.14
+      },
+      {
+        "term": "learning",
+        "cat_tf": 1168,
+        "global_tf": 1465,
+        "z_score": 64.2
+      },
+      {
+        "term": "book",
+        "cat_tf": 1882,
+        "global_tf": 7554,
+        "z_score": 63.89
+      },
+      {
+        "term": "v01",
+        "cat_tf": 995,
+        "global_tf": 1963,
+        "z_score": 62.67
+      },
+      {
+        "term": "science",
+        "cat_tf": 970,
+        "global_tf": 1891,
+        "z_score": 62.03
+      },
+      {
+        "term": "до",
+        "cat_tf": 932,
+        "global_tf": 1427,
+        "z_score": 61.76
+      },
+      {
+        "term": "книга",
+        "cat_tf": 1234,
+        "global_tf": 3576,
+        "z_score": 61.45
+      },
+      {
+        "term": "learn",
+        "cat_tf": 951,
+        "global_tf": 1339,
+        "z_score": 61.4
+      },
+      {
+        "term": "manga",
+        "cat_tf": 1098,
+        "global_tf": 2852,
+        "z_score": 60.64
+      },
+      {
+        "term": "r2",
+        "cat_tf": 848,
+        "global_tf": 1363,
+        "z_score": 59.08
+      },
+      {
+        "term": "ebook",
+        "cat_tf": 1307,
+        "global_tf": 1458,
+        "z_score": 57.73
+      },
+      {
+        "term": "др",
+        "cat_tf": 923,
+        "global_tf": 1175,
+        "z_score": 57.69
+      },
+      {
+        "term": "doc",
+        "cat_tf": 805,
+        "global_tf": 1553,
+        "z_score": 56.62
+      },
+      {
+        "term": "истории",
+        "cat_tf": 810,
+        "global_tf": 1105,
+        "z_score": 56.06
+      },
+      {
+        "term": "empire",
+        "cat_tf": 991,
+        "global_tf": 2799,
+        "z_score": 55.68
+      },
+      {
+        "term": "historia",
+        "cat_tf": 757,
+        "global_tf": 1081,
+        "z_score": 54.99
+      },
+      {
+        "term": "за",
+        "cat_tf": 872,
+        "global_tf": 2218,
+        "z_score": 54.47
+      },
+      {
+        "term": "от",
+        "cat_tf": 1250,
+        "global_tf": 4667,
+        "z_score": 54.36
+      },
+      {
+        "term": "fb2",
+        "cat_tf": 4376,
+        "global_tf": 4434,
+        "z_score": 54.21
+      },
+      {
+        "term": "ed",
+        "cat_tf": 891,
+        "global_tf": 2404,
+        "z_score": 53.81
+      },
+      {
+        "term": "1r0n",
+        "cat_tf": 747,
+        "global_tf": 1545,
+        "z_score": 53.74
+      },
+      {
+        "term": "курс",
+        "cat_tf": 1040,
+        "global_tf": 1180,
+        "z_score": 53.42
+      },
+      {
+        "term": "advanced",
+        "cat_tf": 709,
+        "global_tf": 1391,
+        "z_score": 52.96
+      },
+      {
+        "term": "history",
+        "cat_tf": 968,
+        "global_tf": 3017,
+        "z_score": 52.62
+      },
+      {
+        "term": "manual",
+        "cat_tf": 692,
+        "global_tf": 988,
+        "z_score": 52.57
+      },
+      {
+        "term": "magazine",
+        "cat_tf": 826,
+        "global_tf": 2165,
+        "z_score": 52.41
+      },
+      {
+        "term": "россии",
+        "cat_tf": 663,
+        "global_tf": 1042,
+        "z_score": 52.19
+      },
+      {
+        "term": "wikipedia",
+        "cat_tf": 849,
+        "global_tf": 1001,
+        "z_score": 51.35
+      },
+      {
+        "term": "introduction",
+        "cat_tf": 752,
+        "global_tf": 933,
+        "z_score": 51.05
+      },
+      {
+        "term": "жизнь",
+        "cat_tf": 699,
+        "global_tf": 1570,
+        "z_score": 50.84
+      },
+      {
+        "term": "novel",
+        "cat_tf": 630,
+        "global_tf": 974,
+        "z_score": 50.82
+      },
+      {
+        "term": "development",
+        "cat_tf": 645,
+        "global_tf": 900,
+        "z_score": 50.42
+      },
+      {
+        "term": "annas",
+        "cat_tf": 620,
+        "global_tf": 913,
+        "z_score": 50.09
+      },
+      {
+        "term": "robert",
+        "cat_tf": 739,
+        "global_tf": 1898,
+        "z_score": 49.96
+      },
+      {
+        "term": "engineering",
+        "cat_tf": 708,
+        "global_tf": 885,
+        "z_score": 49.84
+      },
+      {
+        "term": "maxi",
+        "cat_tf": 605,
+        "global_tf": 1136,
+        "z_score": 49.31
+      },
+      {
+        "term": "edition",
+        "cat_tf": 2723,
+        "global_tf": 19026,
+        "z_score": 48.98
+      },
+      {
+        "term": "aacid",
+        "cat_tf": 598,
+        "global_tf": 860,
+        "z_score": 48.95
+      },
+      {
+        "term": "beginners",
+        "cat_tf": 910,
+        "global_tf": 1016,
+        "z_score": 48.27
+      },
+      {
+        "term": "using",
+        "cat_tf": 595,
+        "global_tf": 801,
+        "z_score": 47.78
+      },
+      {
+        "term": "язык",
+        "cat_tf": 942,
+        "global_tf": 1036,
+        "z_score": 47.23
+      },
+      {
+        "term": "un",
+        "cat_tf": 949,
+        "global_tf": 3609,
+        "z_score": 46.85
+      },
+      {
+        "term": "computer",
+        "cat_tf": 562,
+        "global_tf": 751,
+        "z_score": 46.28
+      },
+      {
+        "term": "linux",
+        "cat_tf": 729,
+        "global_tf": 2223,
+        "z_score": 46.14
+      },
+      {
+        "term": "volume",
+        "cat_tf": 820,
+        "global_tf": 2845,
+        "z_score": 45.86
+      },
+      {
+        "term": "мир",
+        "cat_tf": 608,
+        "global_tf": 1528,
+        "z_score": 45.68
+      },
+      {
+        "term": "language",
+        "cat_tf": 509,
+        "global_tf": 903,
+        "z_score": 45.57
+      },
+      {
+        "term": "mastering",
+        "cat_tf": 564,
+        "global_tf": 720,
+        "z_score": 45.18
+      },
+      {
+        "term": "жизни",
+        "cat_tf": 496,
+        "global_tf": 866,
+        "z_score": 45.05
+      },
+      {
+        "term": "из",
+        "cat_tf": 807,
+        "global_tf": 2856,
+        "z_score": 45.0
+      },
+      {
+        "term": "management",
+        "cat_tf": 525,
+        "global_tf": 702,
+        "z_score": 44.74
+      },
+      {
+        "term": "ред",
+        "cat_tf": 1337,
+        "global_tf": 1394,
+        "z_score": 44.11
+      },
+      {
+        "term": "systems",
+        "cat_tf": 562,
+        "global_tf": 696,
+        "z_score": 44.06
+      },
+      {
+        "term": "practical",
+        "cat_tf": 657,
+        "global_tf": 759,
+        "z_score": 43.84
+      },
+      {
+        "term": "книги",
+        "cat_tf": 667,
+        "global_tf": 767,
+        "z_score": 43.84
+      },
+      {
+        "term": "дж",
+        "cat_tf": 683,
+        "global_tf": 780,
+        "z_score": 43.82
+      },
+      {
+        "term": "без",
+        "cat_tf": 532,
+        "global_tf": 1244,
+        "z_score": 43.8
+      },
+      {
+        "term": "века",
+        "cat_tf": 531,
+        "global_tf": 677,
+        "z_score": 43.8
+      },
+      {
+        "term": "aa",
+        "cat_tf": 487,
+        "global_tf": 669,
+        "z_score": 43.58
+      },
+      {
+        "term": "excel",
+        "cat_tf": 509,
+        "global_tf": 660,
+        "z_score": 43.35
+      },
+      {
+        "term": "trading",
+        "cat_tf": 486,
+        "global_tf": 649,
+        "z_score": 43.02
+      },
+      {
+        "term": "cbz",
+        "cat_tf": 1675,
+        "global_tf": 1720,
+        "z_score": 42.6
+      },
+      {
+        "term": "security",
+        "cat_tf": 474,
+        "global_tf": 1007,
+        "z_score": 42.52
+      },
+      {
+        "term": "app",
+        "cat_tf": 694,
+        "global_tf": 2384,
+        "z_score": 42.41
+      },
+      {
+        "term": "искусство",
+        "cat_tf": 506,
+        "global_tf": 637,
+        "z_score": 42.37
+      },
+      {
+        "term": "ссср",
+        "cat_tf": 455,
+        "global_tf": 907,
+        "z_score": 42.29
+      },
+      {
+        "term": "все",
+        "cat_tf": 481,
+        "global_tf": 1088,
+        "z_score": 42.08
+      },
+      {
+        "term": "русский",
+        "cat_tf": 429,
+        "global_tf": 743,
+        "z_score": 41.92
+      },
+      {
+        "term": "dummies",
+        "cat_tf": 693,
+        "global_tf": 770,
+        "z_score": 41.63
+      },
+      {
+        "term": "masterclass",
+        "cat_tf": 450,
+        "global_tf": 595,
+        "z_score": 41.2
+      },
+      {
+        "term": "一般コミック",
+        "cat_tf": 413,
+        "global_tf": 699,
+        "z_score": 41.19
+      },
+      {
+        "term": "press",
+        "cat_tf": 432,
+        "global_tf": 869,
+        "z_score": 41.12
+      },
+      {
+        "term": "techniques",
+        "cat_tf": 498,
+        "global_tf": 609,
+        "z_score": 41.0
+      },
+      {
+        "term": "que",
+        "cat_tf": 558,
+        "global_tf": 1652,
+        "z_score": 40.92
+      },
+      {
+        "term": "building",
+        "cat_tf": 496,
+        "global_tf": 1279,
+        "z_score": 40.87
+      },
+      {
+        "term": "essential",
+        "cat_tf": 481,
+        "global_tf": 1205,
+        "z_score": 40.68
+      }
+    ],
+    "Documentaries": [
+      {
+        "term": "hdtv",
+        "cat_tf": 4095,
+        "global_tf": 45807,
+        "z_score": 155.06
+      },
+      {
+        "term": "bbc",
+        "cat_tf": 2562,
+        "global_tf": 15596,
+        "z_score": 149.23
+      },
+      {
+        "term": "org",
+        "cat_tf": 5449,
+        "global_tf": 137722,
+        "z_score": 121.42
+      },
+      {
+        "term": "aac",
+        "cat_tf": 3838,
+        "global_tf": 90070,
+        "z_score": 106.01
+      },
+      {
+        "term": "x264",
+        "cat_tf": 4985,
+        "global_tf": 174803,
+        "z_score": 93.12
+      },
+      {
+        "term": "secrets",
+        "cat_tf": 794,
+        "global_tf": 2995,
+        "z_score": 92.34
+      },
+      {
+        "term": "forum",
+        "cat_tf": 900,
+        "global_tf": 1216,
+        "z_score": 90.07
+      },
+      {
+        "term": "ancient",
+        "cat_tf": 638,
+        "global_tf": 1281,
+        "z_score": 86.49
+      },
+      {
+        "term": "planet",
+        "cat_tf": 642,
+        "global_tf": 2319,
+        "z_score": 83.63
+      },
+      {
+        "term": "series",
+        "cat_tf": 916,
+        "global_tf": 9355,
+        "z_score": 75.45
+      },
+      {
+        "term": "cbfm",
+        "cat_tf": 626,
+        "global_tf": 3767,
+        "z_score": 73.78
+      },
+      {
+        "term": "pdtv",
+        "cat_tf": 422,
+        "global_tf": 975,
+        "z_score": 70.7
+      },
+      {
+        "term": "war",
+        "cat_tf": 790,
+        "global_tf": 8896,
+        "z_score": 67.52
+      },
+      {
+        "term": "aliens",
+        "cat_tf": 360,
+        "global_tf": 833,
+        "z_score": 65.29
+      },
+      {
+        "term": "ac3",
+        "cat_tf": 1438,
+        "global_tf": 37157,
+        "z_score": 60.94
+      },
+      {
+        "term": "mkv",
+        "cat_tf": 6202,
+        "global_tf": 386895,
+        "z_score": 58.79
+      },
+      {
+        "term": "nova",
+        "cat_tf": 352,
+        "global_tf": 1821,
+        "z_score": 57.5
+      },
+      {
+        "term": "mvgroup",
+        "cat_tf": 5134,
+        "global_tf": 5167,
+        "z_score": 57.43
+      },
+      {
+        "term": "great",
+        "cat_tf": 511,
+        "global_tf": 5253,
+        "z_score": 56.17
+      },
+      {
+        "term": "wealthxin",
+        "cat_tf": 393,
+        "global_tf": 2818,
+        "z_score": 55.57
+      },
+      {
+        "term": "h264",
+        "cat_tf": 2185,
+        "global_tf": 89478,
+        "z_score": 53.97
+      },
+      {
+        "term": "mysteries",
+        "cat_tf": 329,
+        "global_tf": 2176,
+        "z_score": 52.07
+      },
+      {
+        "term": "david",
+        "cat_tf": 414,
+        "global_tf": 4041,
+        "z_score": 51.51
+      },
+      {
+        "term": "earth",
+        "cat_tf": 388,
+        "global_tf": 3590,
+        "z_score": 50.82
+      },
+      {
+        "term": "eztvx",
+        "cat_tf": 1702,
+        "global_tf": 65912,
+        "z_score": 49.85
+      },
+      {
+        "term": "pbs",
+        "cat_tf": 486,
+        "global_tf": 541,
+        "z_score": 49.36
+      },
+      {
+        "term": "history",
+        "cat_tf": 346,
+        "global_tf": 3017,
+        "z_score": 48.98
+      },
+      {
+        "term": "documentary",
+        "cat_tf": 397,
+        "global_tf": 457,
+        "z_score": 48.6
+      },
+      {
+        "term": "eztv",
+        "cat_tf": 813,
+        "global_tf": 20492,
+        "z_score": 46.44
+      },
+      {
+        "term": "story",
+        "cat_tf": 455,
+        "global_tf": 7735,
+        "z_score": 42.89
+      },
+      {
+        "term": "xvid",
+        "cat_tf": 1122,
+        "global_tf": 41424,
+        "z_score": 41.99
+      },
+      {
+        "term": "rawr",
+        "cat_tf": 343,
+        "global_tf": 6539,
+        "z_score": 35.18
+      },
+      {
+        "term": "ii",
+        "cat_tf": 431,
+        "global_tf": 10768,
+        "z_score": 33.96
+      },
+      {
+        "term": "re",
+        "cat_tf": 490,
+        "global_tf": 15624,
+        "z_score": 30.91
+      },
+      {
+        "term": "megusta",
+        "cat_tf": 776,
+        "global_tf": 38482,
+        "z_score": 26.74
+      },
+      {
+        "term": "s01e02",
+        "cat_tf": 346,
+        "global_tf": 11775,
+        "z_score": 24.76
+      },
+      {
+        "term": "avi",
+        "cat_tf": 1340,
+        "global_tf": 88633,
+        "z_score": 24.72
+      },
+      {
+        "term": "www",
+        "cat_tf": 1949,
+        "global_tf": 177798,
+        "z_score": 15.72
+      },
+      {
+        "term": "uindex",
+        "cat_tf": 1251,
+        "global_tf": 119295,
+        "z_score": 10.99
+      },
+      {
+        "term": "aac2",
+        "cat_tf": 410,
+        "global_tf": 31586,
+        "z_score": 10.56
+      },
+      {
+        "term": "s01",
+        "cat_tf": 484,
+        "global_tf": 48642,
+        "z_score": 5.67
+      },
+      {
+        "term": "rarbg",
+        "cat_tf": 417,
+        "global_tf": 42918,
+        "z_score": 4.78
+      },
+      {
+        "term": "webrip",
+        "cat_tf": 943,
+        "global_tf": 107458,
+        "z_score": 4.09
+      },
+      {
+        "term": "264",
+        "cat_tf": 769,
+        "global_tf": 100368,
+        "z_score": -0.06
+      },
+      {
+        "term": "480p",
+        "cat_tf": 359,
+        "global_tf": 51493,
+        "z_score": -1.82
+      },
+      {
+        "term": "amzn",
+        "cat_tf": 380,
+        "global_tf": 58576,
+        "z_score": -3.26
+      },
+      {
+        "term": "10bit",
+        "cat_tf": 319,
+        "global_tf": 52692,
+        "z_score": -4.22
+      },
+      {
+        "term": "dl",
+        "cat_tf": 1261,
+        "global_tf": 221504,
+        "z_score": -10.61
+      },
+      {
+        "term": "bluray",
+        "cat_tf": 381,
+        "global_tf": 112662,
+        "z_score": -15.94
+      },
+      {
+        "term": "mp4",
+        "cat_tf": 2101,
+        "global_tf": 390929,
+        "z_score": -16.43
+      }
+    ],
+    "Games": [
+      {
+        "term": "rar",
+        "cat_tf": 19003,
+        "global_tf": 39747,
+        "z_score": 348.89
+      },
+      {
+        "term": "repack",
+        "cat_tf": 14698,
+        "global_tf": 26709,
+        "z_score": 307.88
+      },
+      {
+        "term": "v1",
+        "cat_tf": 10705,
+        "global_tf": 15834,
+        "z_score": 254.12
+      },
+      {
+        "term": "exe",
+        "cat_tf": 6204,
+        "global_tf": 12898,
+        "z_score": 198.44
+      },
+      {
+        "term": "7z",
+        "cat_tf": 6015,
+        "global_tf": 8907,
+        "z_score": 190.26
+      },
+      {
+        "term": "edition",
+        "cat_tf": 5823,
+        "global_tf": 19026,
+        "z_score": 175.07
+      },
+      {
+        "term": "win",
+        "cat_tf": 3589,
+        "global_tf": 6008,
+        "z_score": 150.69
+      },
+      {
+        "term": "build",
+        "cat_tf": 3420,
+        "global_tf": 7919,
+        "z_score": 145.24
+      },
+      {
+        "term": "iso",
+        "cat_tf": 3506,
+        "global_tf": 15814,
+        "z_score": 120.88
+      },
+      {
+        "term": "v0",
+        "cat_tf": 2873,
+        "global_tf": 3510,
+        "z_score": 115.9
+      },
+      {
+        "term": "update",
+        "cat_tf": 1764,
+        "global_tf": 3177,
+        "z_score": 106.12
+      },
+      {
+        "term": "setup",
+        "cat_tf": 2207,
+        "global_tf": 2805,
+        "z_score": 105.72
+      },
+      {
+        "term": "pc",
+        "cat_tf": 1908,
+        "global_tf": 2593,
+        "z_score": 103.09
+      },
+      {
+        "term": "v2",
+        "cat_tf": 1869,
+        "global_tf": 6526,
+        "z_score": 96.94
+      },
+      {
+        "term": "mod",
+        "cat_tf": 1445,
+        "global_tf": 2498,
+        "z_score": 95.83
+      },
+      {
+        "term": "ii",
+        "cat_tf": 2199,
+        "global_tf": 10768,
+        "z_score": 92.37
+      },
+      {
+        "term": "usa",
+        "cat_tf": 1264,
+        "global_tf": 3624,
+        "z_score": 84.41
+      },
+      {
+        "term": "ce",
+        "cat_tf": 1128,
+        "global_tf": 1602,
+        "z_score": 80.99
+      },
+      {
+        "term": "win10",
+        "cat_tf": 1523,
+        "global_tf": 1774,
+        "z_score": 78.84
+      },
+      {
+        "term": "call",
+        "cat_tf": 1212,
+        "global_tf": 4200,
+        "z_score": 78.23
+      },
+      {
+        "term": "apk",
+        "cat_tf": 979,
+        "global_tf": 2644,
+        "z_score": 75.36
+      },
+      {
+        "term": "heroes",
+        "cat_tf": 922,
+        "global_tf": 2266,
+        "z_score": 74.57
+      },
+      {
+        "term": "duty",
+        "cat_tf": 885,
+        "global_tf": 1438,
+        "z_score": 74.46
+      },
+      {
+        "term": "sh",
+        "cat_tf": 1002,
+        "global_tf": 1343,
+        "z_score": 74.07
+      },
+      {
+        "term": "war",
+        "cat_tf": 1541,
+        "global_tf": 8896,
+        "z_score": 71.55
+      },
+      {
+        "term": "rune",
+        "cat_tf": 1816,
+        "global_tf": 1966,
+        "z_score": 71.39
+      },
+      {
+        "term": "deluxe",
+        "cat_tf": 1248,
+        "global_tf": 5847,
+        "z_score": 70.89
+      },
+      {
+        "term": "auto",
+        "cat_tf": 779,
+        "global_tf": 1340,
+        "z_score": 70.32
+      },
+      {
+        "term": "airport",
+        "cat_tf": 933,
+        "global_tf": 1208,
+        "z_score": 69.78
+      },
+      {
+        "term": "games",
+        "cat_tf": 948,
+        "global_tf": 3526,
+        "z_score": 67.55
+      },
+      {
+        "term": "speed",
+        "cat_tf": 733,
+        "global_tf": 1636,
+        "z_score": 67.52
+      },
+      {
+        "term": "windows",
+        "cat_tf": 1273,
+        "global_tf": 6877,
+        "z_score": 67.16
+      },
+      {
+        "term": "64bit",
+        "cat_tf": 707,
+        "global_tf": 1401,
+        "z_score": 67.07
+      },
+      {
+        "term": "mechanics",
+        "cat_tf": 957,
+        "global_tf": 1163,
+        "z_score": 66.43
+      },
+      {
+        "term": "definitive",
+        "cat_tf": 714,
+        "global_tf": 1109,
+        "z_score": 66.3
+      },
+      {
+        "term": "v2026",
+        "cat_tf": 877,
+        "global_tf": 1104,
+        "z_score": 66.04
+      },
+      {
+        "term": "age",
+        "cat_tf": 856,
+        "global_tf": 2947,
+        "z_score": 65.87
+      },
+      {
+        "term": "need",
+        "cat_tf": 719,
+        "global_tf": 1859,
+        "z_score": 65.19
+      },
+      {
+        "term": "creed",
+        "cat_tf": 664,
+        "global_tf": 1218,
+        "z_score": 65.11
+      },
+      {
+        "term": "resident",
+        "cat_tf": 720,
+        "global_tf": 1886,
+        "z_score": 65.06
+      },
+      {
+        "term": "iii",
+        "cat_tf": 970,
+        "global_tf": 4162,
+        "z_score": 64.79
+      },
+      {
+        "term": "ultimate",
+        "cat_tf": 1027,
+        "global_tf": 5021,
+        "z_score": 63.13
+      },
+      {
+        "term": "europe",
+        "cat_tf": 628,
+        "global_tf": 1342,
+        "z_score": 62.83
+      },
+      {
+        "term": "fr",
+        "cat_tf": 691,
+        "global_tf": 2125,
+        "z_score": 61.23
+      },
+      {
+        "term": "wine",
+        "cat_tf": 645,
+        "global_tf": 902,
+        "z_score": 60.81
+      },
+      {
+        "term": "pioneer",
+        "cat_tf": 1653,
+        "global_tf": 1747,
+        "z_score": 60.74
+      },
+      {
+        "term": "iv",
+        "cat_tf": 671,
+        "global_tf": 2082,
+        "z_score": 60.19
+      },
+      {
+        "term": "early",
+        "cat_tf": 565,
+        "global_tf": 1334,
+        "z_score": 58.78
+      },
+      {
+        "term": "truck",
+        "cat_tf": 546,
+        "global_tf": 879,
+        "z_score": 58.39
+      },
+      {
+        "term": "tar",
+        "cat_tf": 538,
+        "global_tf": 1105,
+        "z_score": 58.36
+      },
+      {
+        "term": "minecraft",
+        "cat_tf": 546,
+        "global_tf": 839,
+        "z_score": 57.83
+      },
+      {
+        "term": "cry",
+        "cat_tf": 549,
+        "global_tf": 1322,
+        "z_score": 57.75
+      },
+      {
+        "term": "access",
+        "cat_tf": 558,
+        "global_tf": 819,
+        "z_score": 57.68
+      },
+      {
+        "term": "sims",
+        "cat_tf": 865,
+        "global_tf": 988,
+        "z_score": 57.26
+      },
+      {
+        "term": "simulator",
+        "cat_tf": 3268,
+        "global_tf": 3325,
+        "z_score": 57.25
+      },
+      {
+        "term": "evil",
+        "cat_tf": 935,
+        "global_tf": 5134,
+        "z_score": 57.1
+      },
+      {
+        "term": "theft",
+        "cat_tf": 748,
+        "global_tf": 888,
+        "z_score": 56.93
+      },
+      {
+        "term": "warhammer",
+        "cat_tf": 513,
+        "global_tf": 853,
+        "z_score": 56.86
+      },
+      {
+        "term": "steam",
+        "cat_tf": 1124,
+        "global_tf": 1220,
+        "z_score": 56.71
+      },
+      {
+        "term": "win7",
+        "cat_tf": 852,
+        "global_tf": 965,
+        "z_score": 55.81
+      },
+      {
+        "term": "win11",
+        "cat_tf": 515,
+        "global_tf": 755,
+        "z_score": 55.39
+      },
+      {
+        "term": "legacy",
+        "cat_tf": 625,
+        "global_tf": 2295,
+        "z_score": 55.09
+      },
+      {
+        "term": "minerva",
+        "cat_tf": 584,
+        "global_tf": 743,
+        "z_score": 54.41
+      },
+      {
+        "term": "enhanced",
+        "cat_tf": 468,
+        "global_tf": 971,
+        "z_score": 54.39
+      },
+      {
+        "term": "warfare",
+        "cat_tf": 455,
+        "global_tf": 795,
+        "z_score": 53.8
+      },
+      {
+        "term": "v3",
+        "cat_tf": 625,
+        "global_tf": 2455,
+        "z_score": 53.78
+      },
+      {
+        "term": "ver",
+        "cat_tf": 553,
+        "global_tf": 1817,
+        "z_score": 53.72
+      },
+      {
+        "term": "remastered",
+        "cat_tf": 1103,
+        "global_tf": 7946,
+        "z_score": 53.69
+      },
+      {
+        "term": "cs",
+        "cat_tf": 451,
+        "global_tf": 866,
+        "z_score": 53.63
+      },
+      {
+        "term": "myrient",
+        "cat_tf": 587,
+        "global_tf": 733,
+        "z_score": 53.6
+      },
+      {
+        "term": "dlc",
+        "cat_tf": 811,
+        "global_tf": 910,
+        "z_score": 53.27
+      },
+      {
+        "term": "reloaded",
+        "cat_tf": 460,
+        "global_tf": 692,
+        "z_score": 52.77
+      },
+      {
+        "term": "switch",
+        "cat_tf": 438,
+        "global_tf": 880,
+        "z_score": 52.74
+      },
+      {
+        "term": "codex",
+        "cat_tf": 999,
+        "global_tf": 1079,
+        "z_score": 52.46
+      },
+      {
+        "term": "remake",
+        "cat_tf": 474,
+        "global_tf": 663,
+        "z_score": 52.13
+      },
+      {
+        "term": "far",
+        "cat_tf": 471,
+        "global_tf": 1290,
+        "z_score": 52.09
+      },
+      {
+        "term": "horizon",
+        "cat_tf": 473,
+        "global_tf": 1355,
+        "z_score": 51.63
+      },
+      {
+        "term": "linux",
+        "cat_tf": 568,
+        "global_tf": 2223,
+        "z_score": 51.34
+      },
+      {
+        "term": "quest",
+        "cat_tf": 521,
+        "global_tf": 1861,
+        "z_score": 50.77
+      },
+      {
+        "term": "lego",
+        "cat_tf": 455,
+        "global_tf": 1314,
+        "z_score": 50.53
+      },
+      {
+        "term": "might",
+        "cat_tf": 434,
+        "global_tf": 622,
+        "z_score": 50.42
+      },
+      {
+        "term": "bsp",
+        "cat_tf": 2384,
+        "global_tf": 2429,
+        "z_score": 50.28
+      },
+      {
+        "term": "car",
+        "cat_tf": 499,
+        "global_tf": 1735,
+        "z_score": 50.13
+      },
+      {
+        "term": "space",
+        "cat_tf": 676,
+        "global_tf": 3544,
+        "z_score": 49.61
+      },
+      {
+        "term": "drive",
+        "cat_tf": 554,
+        "global_tf": 2317,
+        "z_score": 49.45
+      },
+      {
+        "term": "mario",
+        "cat_tf": 441,
+        "global_tf": 1310,
+        "z_score": 49.38
+      },
+      {
+        "term": "fifa",
+        "cat_tf": 432,
+        "global_tf": 1250,
+        "z_score": 49.21
+      },
+      {
+        "term": "gog",
+        "cat_tf": 6591,
+        "global_tf": 6620,
+        "z_score": 49.18
+      },
+      {
+        "term": "es",
+        "cat_tf": 621,
+        "global_tf": 3093,
+        "z_score": 48.67
+      },
+      {
+        "term": "rogue",
+        "cat_tf": 397,
+        "global_tf": 1017,
+        "z_score": 48.53
+      },
+      {
+        "term": "other",
+        "cat_tf": 632,
+        "global_tf": 3232,
+        "z_score": 48.52
+      },
+      {
+        "term": "grand",
+        "cat_tf": 852,
+        "global_tf": 5881,
+        "z_score": 48.36
+      },
+      {
+        "term": "assassins",
+        "cat_tf": 364,
+        "global_tf": 654,
+        "z_score": 48.18
+      },
+      {
+        "term": "legends",
+        "cat_tf": 469,
+        "global_tf": 1757,
+        "z_score": 47.38
+      },
+      {
+        "term": "strike",
+        "cat_tf": 403,
+        "global_tf": 1211,
+        "z_score": 47.06
+      },
+      {
+        "term": "dungeon",
+        "cat_tf": 490,
+        "global_tf": 2061,
+        "z_score": 46.4
+      },
+      {
+        "term": "racing",
+        "cat_tf": 341,
+        "global_tf": 517,
+        "z_score": 45.54
+      },
+      {
+        "term": "plaza",
+        "cat_tf": 481,
+        "global_tf": 567,
+        "z_score": 45.17
+      },
+      {
+        "term": "souls",
+        "cat_tf": 326,
+        "global_tf": 750,
+        "z_score": 44.83
+      },
+      {
+        "term": "patch",
+        "cat_tf": 443,
+        "global_tf": 1791,
+        "z_score": 44.79
+      }
+    ],
+    "Movies": [
+      {
+        "term": "bluray",
+        "cat_tf": 99278,
+        "global_tf": 112662,
+        "z_score": 396.44
+      },
+      {
+        "term": "mkv",
+        "cat_tf": 150003,
+        "global_tf": 386895,
+        "z_score": 360.85
+      },
+      {
+        "term": "bdrip",
+        "cat_tf": 47926,
+        "global_tf": 57044,
+        "z_score": 288.25
+      },
+      {
+        "term": "avi",
+        "cat_tf": 49611,
+        "global_tf": 88633,
+        "z_score": 276.74
+      },
+      {
+        "term": "x264",
+        "cat_tf": 73188,
+        "global_tf": 174803,
+        "z_score": 269.61
+      },
+      {
+        "term": "webrip",
+        "cat_tf": 48048,
+        "global_tf": 107458,
+        "z_score": 231.26
+      },
+      {
+        "term": "ac3",
+        "cat_tf": 27387,
+        "global_tf": 37157,
+        "z_score": 225.67
+      },
+      {
+        "term": "dvdrip",
+        "cat_tf": 21508,
+        "global_tf": 31080,
+        "z_score": 198.32
+      },
+      {
+        "term": "ita",
+        "cat_tf": 19907,
+        "global_tf": 32377,
+        "z_score": 183.38
+      },
+      {
+        "term": "xvid",
+        "cat_tf": 22295,
+        "global_tf": 41424,
+        "z_score": 180.61
+      },
+      {
+        "term": "dts",
+        "cat_tf": 18437,
+        "global_tf": 22015,
+        "z_score": 178.82
+      },
+      {
+        "term": "dlrip",
+        "cat_tf": 17482,
+        "global_tf": 27397,
+        "z_score": 174.45
+      },
+      {
+        "term": "2160p",
+        "cat_tf": 31442,
+        "global_tf": 76629,
+        "z_score": 172.28
+      },
+      {
+        "term": "www",
+        "cat_tf": 53424,
+        "global_tf": 177798,
+        "z_score": 151.68
+      },
+      {
+        "term": "hdr",
+        "cat_tf": 13674,
+        "global_tf": 22628,
+        "z_score": 150.69
+      },
+      {
+        "term": "avc",
+        "cat_tf": 21600,
+        "global_tf": 49752,
+        "z_score": 150.51
+      },
+      {
+        "term": "10bit",
+        "cat_tf": 21733,
+        "global_tf": 52692,
+        "z_score": 143.79
+      },
+      {
+        "term": "ma",
+        "cat_tf": 10013,
+        "global_tf": 12865,
+        "z_score": 135.72
+      },
+      {
+        "term": "remux",
+        "cat_tf": 9933,
+        "global_tf": 14774,
+        "z_score": 133.69
+      },
+      {
+        "term": "hdrip",
+        "cat_tf": 16446,
+        "global_tf": 17203,
+        "z_score": 126.71
+      },
+      {
+        "term": "mx",
+        "cat_tf": 26446,
+        "global_tf": 26973,
+        "z_score": 126.42
+      },
+      {
+        "term": "yts",
+        "cat_tf": 46626,
+        "global_tf": 47001,
+        "z_score": 125.56
+      },
+      {
+        "term": "hq",
+        "cat_tf": 8152,
+        "global_tf": 10967,
+        "z_score": 122.94
+      },
+      {
+        "term": "dl",
+        "cat_tf": 58023,
+        "global_tf": 221504,
+        "z_score": 122.74
+      },
+      {
+        "term": "dv",
+        "cat_tf": 9527,
+        "global_tf": 16892,
+        "z_score": 121.28
+      },
+      {
+        "term": "sub",
+        "cat_tf": 8866,
+        "global_tf": 14682,
+        "z_score": 121.24
+      },
+      {
+        "term": "esub",
+        "cat_tf": 7570,
+        "global_tf": 9422,
+        "z_score": 116.97
+      },
+      {
+        "term": "uhd",
+        "cat_tf": 10021,
+        "global_tf": 10843,
+        "z_score": 113.77
+      },
+      {
+        "term": "atmos",
+        "cat_tf": 10972,
+        "global_tf": 23995,
+        "z_score": 112.14
+      },
+      {
+        "term": "ddp",
+        "cat_tf": 6658,
+        "global_tf": 10015,
+        "z_score": 109.06
+      },
+      {
+        "term": "ukr",
+        "cat_tf": 6155,
+        "global_tf": 7896,
+        "z_score": 106.35
+      },
+      {
+        "term": "dual",
+        "cat_tf": 14725,
+        "global_tf": 40140,
+        "z_score": 104.2
+      },
+      {
+        "term": "pl",
+        "cat_tf": 6849,
+        "global_tf": 11933,
+        "z_score": 103.81
+      },
+      {
+        "term": "bdremux",
+        "cat_tf": 8365,
+        "global_tf": 8990,
+        "z_score": 101.79
+      },
+      {
+        "term": "hurtom",
+        "cat_tf": 5847,
+        "global_tf": 7052,
+        "z_score": 101.26
+      },
+      {
+        "term": "aac",
+        "cat_tf": 26210,
+        "global_tf": 90070,
+        "z_score": 100.25
+      },
+      {
+        "term": "selezen",
+        "cat_tf": 5262,
+        "global_tf": 6657,
+        "z_score": 98.01
+      },
+      {
+        "term": "hdr10",
+        "cat_tf": 5440,
+        "global_tf": 6375,
+        "z_score": 95.62
+      },
+      {
+        "term": "h265",
+        "cat_tf": 7571,
+        "global_tf": 16040,
+        "z_score": 95.58
+      },
+      {
+        "term": "truehd",
+        "cat_tf": 5259,
+        "global_tf": 6264,
+        "z_score": 95.25
+      },
+      {
+        "term": "am",
+        "cat_tf": 4603,
+        "global_tf": 6655,
+        "z_score": 91.6
+      },
+      {
+        "term": "2004",
+        "cat_tf": 5709,
+        "global_tf": 10962,
+        "z_score": 89.27
+      },
+      {
+        "term": "blu",
+        "cat_tf": 4389,
+        "global_tf": 6606,
+        "z_score": 88.51
+      },
+      {
+        "term": "dd",
+        "cat_tf": 9062,
+        "global_tf": 22995,
+        "z_score": 88.47
+      },
+      {
+        "term": "rarbg",
+        "cat_tf": 13886,
+        "global_tf": 42918,
+        "z_score": 85.98
+      },
+      {
+        "term": "2001",
+        "cat_tf": 5051,
+        "global_tf": 9400,
+        "z_score": 85.71
+      },
+      {
+        "term": "sdr",
+        "cat_tf": 3956,
+        "global_tf": 5297,
+        "z_score": 85.61
+      },
+      {
+        "term": "hindi",
+        "cat_tf": 4279,
+        "global_tf": 5009,
+        "z_score": 84.72
+      },
+      {
+        "term": "dd5",
+        "cat_tf": 5433,
+        "global_tf": 10851,
+        "z_score": 84.7
+      },
+      {
+        "term": "2002",
+        "cat_tf": 4858,
+        "global_tf": 9146,
+        "z_score": 83.43
+      },
+      {
+        "term": "bone",
+        "cat_tf": 3718,
+        "global_tf": 5215,
+        "z_score": 82.75
+      },
+      {
+        "term": "ray",
+        "cat_tf": 4443,
+        "global_tf": 7973,
+        "z_score": 82.2
+      },
+      {
+        "term": "2003",
+        "cat_tf": 5020,
+        "global_tf": 9900,
+        "z_score": 82.16
+      },
+      {
+        "term": "brrip",
+        "cat_tf": 5337,
+        "global_tf": 5746,
+        "z_score": 81.76
+      },
+      {
+        "term": "1998",
+        "cat_tf": 4284,
+        "global_tf": 7672,
+        "z_score": 80.81
+      },
+      {
+        "term": "1995",
+        "cat_tf": 4275,
+        "global_tf": 7771,
+        "z_score": 80.01
+      },
+      {
+        "term": "org",
+        "cat_tf": 33547,
+        "global_tf": 137722,
+        "z_score": 78.51
+      },
+      {
+        "term": "1997",
+        "cat_tf": 4395,
+        "global_tf": 8415,
+        "z_score": 78.47
+      },
+      {
+        "term": "dub",
+        "cat_tf": 4507,
+        "global_tf": 9019,
+        "z_score": 77.03
+      },
+      {
+        "term": "1999",
+        "cat_tf": 4216,
+        "global_tf": 8127,
+        "z_score": 76.5
+      },
+      {
+        "term": "2000",
+        "cat_tf": 4442,
+        "global_tf": 8891,
+        "z_score": 76.46
+      },
+      {
+        "term": "4k",
+        "cat_tf": 6806,
+        "global_tf": 17509,
+        "z_score": 75.53
+      },
+      {
+        "term": "1994",
+        "cat_tf": 3757,
+        "global_tf": 6966,
+        "z_score": 74.09
+      },
+      {
+        "term": "cut",
+        "cat_tf": 2960,
+        "global_tf": 4222,
+        "z_score": 73.64
+      },
+      {
+        "term": "bz",
+        "cat_tf": 7972,
+        "global_tf": 8164,
+        "z_score": 73.44
+      },
+      {
+        "term": "1993",
+        "cat_tf": 3561,
+        "global_tf": 6421,
+        "z_score": 73.37
+      },
+      {
+        "term": "mircrew",
+        "cat_tf": 3460,
+        "global_tf": 3888,
+        "z_score": 72.49
+      },
+      {
+        "term": "exkinoray",
+        "cat_tf": 3802,
+        "global_tf": 7406,
+        "z_score": 72.12
+      },
+      {
+        "term": "gg",
+        "cat_tf": 3446,
+        "global_tf": 3850,
+        "z_score": 71.65
+      },
+      {
+        "term": "1996",
+        "cat_tf": 3653,
+        "global_tf": 7049,
+        "z_score": 71.15
+      },
+      {
+        "term": "1tamilmv",
+        "cat_tf": 2822,
+        "global_tf": 3412,
+        "z_score": 70.44
+      },
+      {
+        "term": "1992",
+        "cat_tf": 3268,
+        "global_tf": 5906,
+        "z_score": 70.19
+      },
+      {
+        "term": "extended",
+        "cat_tf": 2699,
+        "global_tf": 3888,
+        "z_score": 70.18
+      },
+      {
+        "term": "1987",
+        "cat_tf": 3125,
+        "global_tf": 5479,
+        "z_score": 69.85
+      },
+      {
+        "term": "1988",
+        "cat_tf": 3167,
+        "global_tf": 5623,
+        "z_score": 69.82
+      },
+      {
+        "term": "oft",
+        "cat_tf": 2975,
+        "global_tf": 5011,
+        "z_score": 69.61
+      },
+      {
+        "term": "1986",
+        "cat_tf": 3017,
+        "global_tf": 5197,
+        "z_score": 69.3
+      },
+      {
+        "term": "lat",
+        "cat_tf": 5796,
+        "global_tf": 15043,
+        "z_score": 69.02
+      },
+      {
+        "term": "cz",
+        "cat_tf": 2563,
+        "global_tf": 3556,
+        "z_score": 68.79
+      },
+      {
+        "term": "1990",
+        "cat_tf": 3278,
+        "global_tf": 6183,
+        "z_score": 68.44
+      },
+      {
+        "term": "1985",
+        "cat_tf": 3028,
+        "global_tf": 5465,
+        "z_score": 67.62
+      },
+      {
+        "term": "1984",
+        "cat_tf": 2926,
+        "global_tf": 5173,
+        "z_score": 67.27
+      },
+      {
+        "term": "movie",
+        "cat_tf": 3642,
+        "global_tf": 7583,
+        "z_score": 67.19
+      },
+      {
+        "term": "lt",
+        "cat_tf": 3084,
+        "global_tf": 3417,
+        "z_score": 66.75
+      },
+      {
+        "term": "1991",
+        "cat_tf": 3124,
+        "global_tf": 5909,
+        "z_score": 66.69
+      },
+      {
+        "term": "pirates",
+        "cat_tf": 2693,
+        "global_tf": 3098,
+        "z_score": 66.02
+      },
+      {
+        "term": "mvo",
+        "cat_tf": 2359,
+        "global_tf": 2913,
+        "z_score": 65.07
+      },
+      {
+        "term": "5movierulz",
+        "cat_tf": 3972,
+        "global_tf": 4186,
+        "z_score": 64.82
+      },
+      {
+        "term": "wealthxin",
+        "cat_tf": 2222,
+        "global_tf": 2818,
+        "z_score": 63.71
+      },
+      {
+        "term": "简繁英字幕",
+        "cat_tf": 2671,
+        "global_tf": 4799,
+        "z_score": 63.68
+      },
+      {
+        "term": "uindex",
+        "cat_tf": 27797,
+        "global_tf": 119295,
+        "z_score": 63.34
+      },
+      {
+        "term": "rip",
+        "cat_tf": 3030,
+        "global_tf": 6064,
+        "z_score": 63.14
+      },
+      {
+        "term": "h264",
+        "cat_tf": 21674,
+        "global_tf": 89478,
+        "z_score": 62.07
+      },
+      {
+        "term": "1982",
+        "cat_tf": 2450,
+        "global_tf": 4292,
+        "z_score": 61.87
+      },
+      {
+        "term": "1981",
+        "cat_tf": 2389,
+        "global_tf": 4193,
+        "z_score": 61.04
+      },
+      {
+        "term": "lektor",
+        "cat_tf": 2065,
+        "global_tf": 2566,
+        "z_score": 61.03
+      },
+      {
+        "term": "192kbps",
+        "cat_tf": 2376,
+        "global_tf": 2685,
+        "z_score": 60.59
+      },
+      {
+        "term": "1989",
+        "cat_tf": 2846,
+        "global_tf": 5814,
+        "z_score": 60.26
+      },
+      {
+        "term": "subs",
+        "cat_tf": 4821,
+        "global_tf": 13019,
+        "z_score": 60.19
+      },
+      {
+        "term": "torrenting",
+        "cat_tf": 4762,
+        "global_tf": 12850,
+        "z_score": 59.87
+      }
+    ],
+    "Music": [
+      {
+        "term": "flac",
+        "cat_tf": 56225,
+        "global_tf": 64005,
+        "z_score": 372.26
+      },
+      {
+        "term": "ts",
+        "cat_tf": 38144,
+        "global_tf": 52942,
+        "z_score": 357.36
+      },
+      {
+        "term": "mp3",
+        "cat_tf": 17043,
+        "global_tf": 23704,
+        "z_score": 238.26
+      },
+      {
+        "term": "24",
+        "cat_tf": 13686,
+        "global_tf": 44730,
+        "z_score": 163.92
+      },
+      {
+        "term": "live",
+        "cat_tf": 7365,
+        "global_tf": 13018,
+        "z_score": 156.25
+      },
+      {
+        "term": "44",
+        "cat_tf": 10635,
+        "global_tf": 11762,
+        "z_score": 151.53
+      },
+      {
+        "term": "music",
+        "cat_tf": 5473,
+        "global_tf": 7094,
+        "z_score": 131.36
+      },
+      {
+        "term": "cd",
+        "cat_tf": 6148,
+        "global_tf": 7336,
+        "z_score": 130.71
+      },
+      {
+        "term": "rock",
+        "cat_tf": 4079,
+        "global_tf": 6637,
+        "z_score": 117.5
+      },
+      {
+        "term": "deluxe",
+        "cat_tf": 4083,
+        "global_tf": 5847,
+        "z_score": 117.09
+      },
+      {
+        "term": "edition",
+        "cat_tf": 6171,
+        "global_tf": 19026,
+        "z_score": 113.9
+      },
+      {
+        "term": "best",
+        "cat_tf": 4819,
+        "global_tf": 12498,
+        "z_score": 110.53
+      },
+      {
+        "term": "va",
+        "cat_tf": 12678,
+        "global_tf": 13001,
+        "z_score": 109.8
+      },
+      {
+        "term": "96",
+        "cat_tf": 5259,
+        "global_tf": 5833,
+        "z_score": 107.25
+      },
+      {
+        "term": "ep",
+        "cat_tf": 3185,
+        "global_tf": 5152,
+        "z_score": 103.86
+      },
+      {
+        "term": "320",
+        "cat_tf": 5563,
+        "global_tf": 5921,
+        "z_score": 96.2
+      },
+      {
+        "term": "original",
+        "cat_tf": 2586,
+        "global_tf": 4891,
+        "z_score": 91.15
+      },
+      {
+        "term": "greatest",
+        "cat_tf": 2521,
+        "global_tf": 3457,
+        "z_score": 91.1
+      },
+      {
+        "term": "48",
+        "cat_tf": 2386,
+        "global_tf": 3620,
+        "z_score": 89.99
+      },
+      {
+        "term": "various",
+        "cat_tf": 2696,
+        "global_tf": 3341,
+        "z_score": 89.59
+      },
+      {
+        "term": "pop",
+        "cat_tf": 2406,
+        "global_tf": 3324,
+        "z_score": 89.18
+      },
+      {
+        "term": "single",
+        "cat_tf": 2509,
+        "global_tf": 3167,
+        "z_score": 87.56
+      },
+      {
+        "term": "japan",
+        "cat_tf": 2238,
+        "global_tf": 3618,
+        "z_score": 87.05
+      },
+      {
+        "term": "lp",
+        "cat_tf": 2831,
+        "global_tf": 3311,
+        "z_score": 86.54
+      },
+      {
+        "term": "kbps",
+        "cat_tf": 2095,
+        "global_tf": 3066,
+        "z_score": 84.1
+      },
+      {
+        "term": "192",
+        "cat_tf": 2241,
+        "global_tf": 2798,
+        "z_score": 82.13
+      },
+      {
+        "term": "blues",
+        "cat_tf": 2036,
+        "global_tf": 2627,
+        "z_score": 79.9
+      },
+      {
+        "term": "songs",
+        "cat_tf": 2138,
+        "global_tf": 2619,
+        "z_score": 79.03
+      },
+      {
+        "term": "band",
+        "cat_tf": 1823,
+        "global_tf": 2490,
+        "z_score": 77.37
+      },
+      {
+        "term": "jazz",
+        "cat_tf": 2328,
+        "global_tf": 2693,
+        "z_score": 77.27
+      },
+      {
+        "term": "hits",
+        "cat_tf": 4160,
+        "global_tf": 4353,
+        "z_score": 75.71
+      },
+      {
+        "term": "anniversary",
+        "cat_tf": 1619,
+        "global_tf": 2588,
+        "z_score": 74.08
+      },
+      {
+        "term": "sound",
+        "cat_tf": 1637,
+        "global_tf": 2961,
+        "z_score": 73.26
+      },
+      {
+        "term": "88",
+        "cat_tf": 1615,
+        "global_tf": 2092,
+        "z_score": 71.3
+      },
+      {
+        "term": "john",
+        "cat_tf": 2099,
+        "global_tf": 5734,
+        "z_score": 71.02
+      },
+      {
+        "term": "records",
+        "cat_tf": 2030,
+        "global_tf": 2319,
+        "z_score": 70.72
+      },
+      {
+        "term": "hi",
+        "cat_tf": 1587,
+        "global_tf": 3132,
+        "z_score": 70.58
+      },
+      {
+        "term": "eac",
+        "cat_tf": 1845,
+        "global_tf": 2128,
+        "z_score": 68.48
+      },
+      {
+        "term": "dj",
+        "cat_tf": 1534,
+        "global_tf": 1895,
+        "z_score": 67.4
+      },
+      {
+        "term": "piano",
+        "cat_tf": 1387,
+        "global_tf": 1845,
+        "z_score": 66.87
+      },
+      {
+        "term": "dance",
+        "cat_tf": 1468,
+        "global_tf": 3232,
+        "z_score": 65.44
+      },
+      {
+        "term": "1996",
+        "cat_tf": 2171,
+        "global_tf": 7049,
+        "z_score": 65.37
+      },
+      {
+        "term": "2000",
+        "cat_tf": 2463,
+        "global_tf": 8891,
+        "z_score": 64.86
+      },
+      {
+        "term": "orchestra",
+        "cat_tf": 1438,
+        "global_tf": 1759,
+        "z_score": 64.73
+      },
+      {
+        "term": "soul",
+        "cat_tf": 1299,
+        "global_tf": 2516,
+        "z_score": 64.19
+      },
+      {
+        "term": "mix",
+        "cat_tf": 1205,
+        "global_tf": 1971,
+        "z_score": 63.81
+      },
+      {
+        "term": "1994",
+        "cat_tf": 2110,
+        "global_tf": 6966,
+        "z_score": 63.76
+      },
+      {
+        "term": "soundtrack",
+        "cat_tf": 2890,
+        "global_tf": 3026,
+        "z_score": 63.36
+      },
+      {
+        "term": "remaster",
+        "cat_tf": 1170,
+        "global_tf": 1722,
+        "z_score": 62.88
+      },
+      {
+        "term": "atm",
+        "cat_tf": 1225,
+        "global_tf": 2338,
+        "z_score": 62.58
+      },
+      {
+        "term": "2cd",
+        "cat_tf": 2261,
+        "global_tf": 2416,
+        "z_score": 62.39
+      },
+      {
+        "term": "2003",
+        "cat_tf": 2536,
+        "global_tf": 9900,
+        "z_score": 62.12
+      },
+      {
+        "term": "1995",
+        "cat_tf": 2175,
+        "global_tf": 7771,
+        "z_score": 61.39
+      },
+      {
+        "term": "box",
+        "cat_tf": 1284,
+        "global_tf": 2848,
+        "z_score": 61.03
+      },
+      {
+        "term": "david",
+        "cat_tf": 1505,
+        "global_tf": 4041,
+        "z_score": 60.66
+      },
+      {
+        "term": "1999",
+        "cat_tf": 2204,
+        "global_tf": 8127,
+        "z_score": 60.42
+      },
+      {
+        "term": "artists",
+        "cat_tf": 2125,
+        "global_tf": 2268,
+        "z_score": 60.18
+      },
+      {
+        "term": "pink",
+        "cat_tf": 1511,
+        "global_tf": 4153,
+        "z_score": 60.05
+      },
+      {
+        "term": "album",
+        "cat_tf": 2356,
+        "global_tf": 2486,
+        "z_score": 59.92
+      },
+      {
+        "term": "ost",
+        "cat_tf": 1185,
+        "global_tf": 1462,
+        "z_score": 59.18
+      },
+      {
+        "term": "2002",
+        "cat_tf": 2312,
+        "global_tf": 9146,
+        "z_score": 58.71
+      },
+      {
+        "term": "2004",
+        "cat_tf": 2536,
+        "global_tf": 10962,
+        "z_score": 57.2
+      },
+      {
+        "term": "1970",
+        "cat_tf": 1236,
+        "global_tf": 3064,
+        "z_score": 57.14
+      },
+      {
+        "term": "1997",
+        "cat_tf": 2151,
+        "global_tf": 8415,
+        "z_score": 57.11
+      },
+      {
+        "term": "res",
+        "cat_tf": 1434,
+        "global_tf": 1604,
+        "z_score": 57.08
+      },
+      {
+        "term": "radio",
+        "cat_tf": 959,
+        "global_tf": 1574,
+        "z_score": 56.9
+      },
+      {
+        "term": "2001",
+        "cat_tf": 2291,
+        "global_tf": 9400,
+        "z_score": 56.77
+      },
+      {
+        "term": "feat",
+        "cat_tf": 1099,
+        "global_tf": 1347,
+        "z_score": 56.68
+      },
+      {
+        "term": "1998",
+        "cat_tf": 2008,
+        "global_tf": 7672,
+        "z_score": 56.18
+      },
+      {
+        "term": "floyd",
+        "cat_tf": 1300,
+        "global_tf": 1462,
+        "z_score": 54.97
+      },
+      {
+        "term": "beats",
+        "cat_tf": 1008,
+        "global_tf": 1238,
+        "z_score": 54.38
+      },
+      {
+        "term": "коллекция",
+        "cat_tf": 853,
+        "global_tf": 1233,
+        "z_score": 53.57
+      },
+      {
+        "term": "1992",
+        "cat_tf": 1652,
+        "global_tf": 5906,
+        "z_score": 53.47
+      },
+      {
+        "term": "disco",
+        "cat_tf": 969,
+        "global_tf": 1193,
+        "z_score": 53.42
+      },
+      {
+        "term": "remix",
+        "cat_tf": 840,
+        "global_tf": 1206,
+        "z_score": 53.11
+      },
+      {
+        "term": "classics",
+        "cat_tf": 925,
+        "global_tf": 1923,
+        "z_score": 53.01
+      },
+      {
+        "term": "paul",
+        "cat_tf": 1034,
+        "global_tf": 2501,
+        "z_score": 52.84
+      },
+      {
+        "term": "van",
+        "cat_tf": 940,
+        "global_tf": 2055,
+        "z_score": 52.5
+      },
+      {
+        "term": "1972",
+        "cat_tf": 1206,
+        "global_tf": 3555,
+        "z_score": 51.63
+      },
+      {
+        "term": "remastered",
+        "cat_tf": 1920,
+        "global_tf": 7946,
+        "z_score": 51.6
+      },
+      {
+        "term": "1993",
+        "cat_tf": 1686,
+        "global_tf": 6421,
+        "z_score": 51.6
+      },
+      {
+        "term": "1969",
+        "cat_tf": 1072,
+        "global_tf": 2861,
+        "z_score": 51.35
+      },
+      {
+        "term": "trio",
+        "cat_tf": 854,
+        "global_tf": 1084,
+        "z_score": 51.25
+      },
+      {
+        "term": "restored",
+        "cat_tf": 775,
+        "global_tf": 1149,
+        "z_score": 51.2
+      },
+      {
+        "term": "symphony",
+        "cat_tf": 894,
+        "global_tf": 1088,
+        "z_score": 50.8
+      },
+      {
+        "term": "1971",
+        "cat_tf": 1174,
+        "global_tf": 3496,
+        "z_score": 50.64
+      },
+      {
+        "term": "singles",
+        "cat_tf": 1141,
+        "global_tf": 1272,
+        "z_score": 50.53
+      },
+      {
+        "term": "1973",
+        "cat_tf": 1223,
+        "global_tf": 3786,
+        "z_score": 50.52
+      },
+      {
+        "term": "michael",
+        "cat_tf": 1116,
+        "global_tf": 3209,
+        "z_score": 50.36
+      },
+      {
+        "term": "1991",
+        "cat_tf": 1572,
+        "global_tf": 5909,
+        "z_score": 50.31
+      },
+      {
+        "term": "1990",
+        "cat_tf": 1615,
+        "global_tf": 6183,
+        "z_score": 50.3
+      },
+      {
+        "term": "lossless",
+        "cat_tf": 1926,
+        "global_tf": 2006,
+        "z_score": 49.83
+      },
+      {
+        "term": "1989",
+        "cat_tf": 1541,
+        "global_tf": 5814,
+        "z_score": 49.67
+      },
+      {
+        "term": "concert",
+        "cat_tf": 729,
+        "global_tf": 1068,
+        "z_score": 49.6
+      },
+      {
+        "term": "hop",
+        "cat_tf": 727,
+        "global_tf": 1047,
+        "z_score": 49.43
+      },
+      {
+        "term": "metal",
+        "cat_tf": 914,
+        "global_tf": 2248,
+        "z_score": 49.31
+      },
+      {
+        "term": "1977",
+        "cat_tf": 1208,
+        "global_tf": 3854,
+        "z_score": 49.29
+      },
+      {
+        "term": "volume",
+        "cat_tf": 1022,
+        "global_tf": 2845,
+        "z_score": 49.05
+      },
+      {
+        "term": "uk",
+        "cat_tf": 1164,
+        "global_tf": 3634,
+        "z_score": 49.03
+      },
+      {
+        "term": "hip",
+        "cat_tf": 705,
+        "global_tf": 1043,
+        "z_score": 48.83
+      }
+    ],
+    "Television": [
+      {
+        "term": "www",
+        "cat_tf": 107328,
+        "global_tf": 177798,
+        "z_score": 393.62
+      },
+      {
+        "term": "uindex",
+        "cat_tf": 85203,
+        "global_tf": 119295,
+        "z_score": 374.63
+      },
+      {
+        "term": "org",
+        "cat_tf": 88463,
+        "global_tf": 137722,
+        "z_score": 368.25
+      },
+      {
+        "term": "dl",
+        "cat_tf": 113137,
+        "global_tf": 221504,
+        "z_score": 360.02
+      },
+      {
+        "term": "264",
+        "cat_tf": 64144,
+        "global_tf": 100368,
+        "z_score": 312.16
+      },
+      {
+        "term": "h264",
+        "cat_tf": 59008,
+        "global_tf": 89478,
+        "z_score": 303.4
+      },
+      {
+        "term": "ddp5",
+        "cat_tf": 46441,
+        "global_tf": 63071,
+        "z_score": 277.14
+      },
+      {
+        "term": "s01",
+        "cat_tf": 42095,
+        "global_tf": 48642,
+        "z_score": 251.3
+      },
+      {
+        "term": "amzn",
+        "cat_tf": 38974,
+        "global_tf": 58576,
+        "z_score": 247.02
+      },
+      {
+        "term": "eztvx",
+        "cat_tf": 62729,
+        "global_tf": 65912,
+        "z_score": 245.86
+      },
+      {
+        "term": "hdtv",
+        "cat_tf": 39224,
+        "global_tf": 45807,
+        "z_score": 244.89
+      },
+      {
+        "term": "x264",
+        "cat_tf": 69160,
+        "global_tf": 174803,
+        "z_score": 215.58
+      },
+      {
+        "term": "mkv",
+        "cat_tf": 113275,
+        "global_tf": 386895,
+        "z_score": 169.14
+      },
+      {
+        "term": "tgx",
+        "cat_tf": 17431,
+        "global_tf": 24963,
+        "z_score": 167.59
+      },
+      {
+        "term": "season",
+        "cat_tf": 17363,
+        "global_tf": 26041,
+        "z_score": 164.7
+      },
+      {
+        "term": "webrip",
+        "cat_tf": 41388,
+        "global_tf": 107458,
+        "z_score": 160.55
+      },
+      {
+        "term": "megusta",
+        "cat_tf": 37490,
+        "global_tf": 38482,
+        "z_score": 159.16
+      },
+      {
+        "term": "dsnp",
+        "cat_tf": 14679,
+        "global_tf": 17460,
+        "z_score": 151.61
+      },
+      {
+        "term": "s01e01",
+        "cat_tf": 12472,
+        "global_tf": 15080,
+        "z_score": 141.01
+      },
+      {
+        "term": "eztv",
+        "cat_tf": 19443,
+        "global_tf": 20492,
+        "z_score": 138.7
+      },
+      {
+        "term": "nf",
+        "cat_tf": 13781,
+        "global_tf": 23507,
+        "z_score": 137.38
+      },
+      {
+        "term": "s02",
+        "cat_tf": 13260,
+        "global_tf": 14764,
+        "z_score": 134.11
+      },
+      {
+        "term": "re",
+        "cat_tf": 10948,
+        "global_tf": 15624,
+        "z_score": 132.87
+      },
+      {
+        "term": "dd",
+        "cat_tf": 13191,
+        "global_tf": 22995,
+        "z_score": 132.55
+      },
+      {
+        "term": "265",
+        "cat_tf": 12016,
+        "global_tf": 20066,
+        "z_score": 129.92
+      },
+      {
+        "term": "playweb",
+        "cat_tf": 14997,
+        "global_tf": 15974,
+        "z_score": 127.38
+      },
+      {
+        "term": "s01e02",
+        "cat_tf": 9461,
+        "global_tf": 11775,
+        "z_score": 124.13
+      },
+      {
+        "term": "s01e03",
+        "cat_tf": 9108,
+        "global_tf": 11316,
+        "z_score": 121.73
+      },
+      {
+        "term": "atmos",
+        "cat_tf": 12614,
+        "global_tf": 23995,
+        "z_score": 121.71
+      },
+      {
+        "term": "ddp2",
+        "cat_tf": 10473,
+        "global_tf": 18537,
+        "z_score": 116.89
+      },
+      {
+        "term": "kitsune",
+        "cat_tf": 8217,
+        "global_tf": 11228,
+        "z_score": 116.14
+      },
+      {
+        "term": "s01e04",
+        "cat_tf": 8137,
+        "global_tf": 10350,
+        "z_score": 115.64
+      },
+      {
+        "term": "flux",
+        "cat_tf": 8919,
+        "global_tf": 10310,
+        "z_score": 115.48
+      },
+      {
+        "term": "cap",
+        "cat_tf": 13921,
+        "global_tf": 14612,
+        "z_score": 114.92
+      },
+      {
+        "term": "s01e05",
+        "cat_tf": 7706,
+        "global_tf": 9759,
+        "z_score": 112.45
+      },
+      {
+        "term": "psa",
+        "cat_tf": 7530,
+        "global_tf": 9973,
+        "z_score": 111.48
+      },
+      {
+        "term": "lat",
+        "cat_tf": 8899,
+        "global_tf": 15043,
+        "z_score": 110.96
+      },
+      {
+        "term": "s01e06",
+        "cat_tf": 7349,
+        "global_tf": 9369,
+        "z_score": 109.93
+      },
+      {
+        "term": "ntb",
+        "cat_tf": 19514,
+        "global_tf": 19893,
+        "z_score": 104.71
+      },
+      {
+        "term": "castellano",
+        "cat_tf": 7145,
+        "global_tf": 11181,
+        "z_score": 103.65
+      },
+      {
+        "term": "tv",
+        "cat_tf": 10576,
+        "global_tf": 22344,
+        "z_score": 101.76
+      },
+      {
+        "term": "s01e07",
+        "cat_tf": 5882,
+        "global_tf": 7882,
+        "z_score": 98.45
+      },
+      {
+        "term": "xvid",
+        "cat_tf": 15738,
+        "global_tf": 41424,
+        "z_score": 96.9
+      },
+      {
+        "term": "s03",
+        "cat_tf": 7766,
+        "global_tf": 8376,
+        "z_score": 95.52
+      },
+      {
+        "term": "aac2",
+        "cat_tf": 12773,
+        "global_tf": 31586,
+        "z_score": 94.48
+      },
+      {
+        "term": "s01e08",
+        "cat_tf": 5419,
+        "global_tf": 7499,
+        "z_score": 94.1
+      },
+      {
+        "term": "edith",
+        "cat_tf": 8456,
+        "global_tf": 8960,
+        "z_score": 93.65
+      },
+      {
+        "term": "lostfilm",
+        "cat_tf": 7362,
+        "global_tf": 7927,
+        "z_score": 92.54
+      },
+      {
+        "term": "atvp",
+        "cat_tf": 6421,
+        "global_tf": 7071,
+        "z_score": 91.39
+      },
+      {
+        "term": "msd",
+        "cat_tf": 7614,
+        "global_tf": 8087,
+        "z_score": 89.73
+      },
+      {
+        "term": "files",
+        "cat_tf": 5039,
+        "global_tf": 8274,
+        "z_score": 84.89
+      },
+      {
+        "term": "elite",
+        "cat_tf": 4312,
+        "global_tf": 5812,
+        "z_score": 84.24
+      },
+      {
+        "term": "s02e01",
+        "cat_tf": 4605,
+        "global_tf": 5390,
+        "z_score": 83.89
+      },
+      {
+        "term": "10bit",
+        "cat_tf": 17436,
+        "global_tf": 52692,
+        "z_score": 82.8
+      },
+      {
+        "term": "6ch",
+        "cat_tf": 4274,
+        "global_tf": 6714,
+        "z_score": 80.0
+      },
+      {
+        "term": "torrenting",
+        "cat_tf": 6233,
+        "global_tf": 12850,
+        "z_score": 79.87
+      },
+      {
+        "term": "h265",
+        "cat_tf": 7200,
+        "global_tf": 16040,
+        "z_score": 79.65
+      },
+      {
+        "term": "rawr",
+        "cat_tf": 6190,
+        "global_tf": 6539,
+        "z_score": 79.05
+      },
+      {
+        "term": "trek",
+        "cat_tf": 4010,
+        "global_tf": 4738,
+        "z_score": 78.84
+      },
+      {
+        "term": "afg",
+        "cat_tf": 6474,
+        "global_tf": 6801,
+        "z_score": 78.69
+      },
+      {
+        "term": "show",
+        "cat_tf": 4313,
+        "global_tf": 7089,
+        "z_score": 78.49
+      },
+      {
+        "term": "s02e02",
+        "cat_tf": 4000,
+        "global_tf": 4653,
+        "z_score": 77.77
+      },
+      {
+        "term": "s02e03",
+        "cat_tf": 4015,
+        "global_tf": 4653,
+        "z_score": 77.65
+      },
+      {
+        "term": "guy",
+        "cat_tf": 3764,
+        "global_tf": 5496,
+        "z_score": 77.33
+      },
+      {
+        "term": "s04",
+        "cat_tf": 4708,
+        "global_tf": 5139,
+        "z_score": 76.74
+      },
+      {
+        "term": "s02e04",
+        "cat_tf": 3680,
+        "global_tf": 4416,
+        "z_score": 76.25
+      },
+      {
+        "term": "s02e05",
+        "cat_tf": 3806,
+        "global_tf": 4454,
+        "z_score": 76.25
+      },
+      {
+        "term": "s02e06",
+        "cat_tf": 3701,
+        "global_tf": 4346,
+        "z_score": 75.39
+      },
+      {
+        "term": "hmax",
+        "cat_tf": 3657,
+        "global_tf": 4309,
+        "z_score": 75.14
+      },
+      {
+        "term": "american",
+        "cat_tf": 4497,
+        "global_tf": 8177,
+        "z_score": 75.12
+      },
+      {
+        "term": "dd5",
+        "cat_tf": 5325,
+        "global_tf": 10851,
+        "z_score": 74.59
+      },
+      {
+        "term": "2ch",
+        "cat_tf": 3548,
+        "global_tf": 4170,
+        "z_score": 73.87
+      },
+      {
+        "term": "高清剧集网发布",
+        "cat_tf": 4613,
+        "global_tf": 4975,
+        "z_score": 73.59
+      },
+      {
+        "term": "1080i",
+        "cat_tf": 3243,
+        "global_tf": 4219,
+        "z_score": 73.13
+      },
+      {
+        "term": "dual",
+        "cat_tf": 13325,
+        "global_tf": 40140,
+        "z_score": 72.73
+      },
+      {
+        "term": "hdr",
+        "cat_tf": 8644,
+        "global_tf": 22628,
+        "z_score": 72.27
+      },
+      {
+        "term": "s02e07",
+        "cat_tf": 3296,
+        "global_tf": 3937,
+        "z_score": 71.97
+      },
+      {
+        "term": "s01e09",
+        "cat_tf": 3399,
+        "global_tf": 5389,
+        "z_score": 71.01
+      },
+      {
+        "term": "race",
+        "cat_tf": 3139,
+        "global_tf": 3773,
+        "z_score": 70.49
+      },
+      {
+        "term": "cbfm",
+        "cat_tf": 3024,
+        "global_tf": 3767,
+        "z_score": 70.16
+      },
+      {
+        "term": "s02e08",
+        "cat_tf": 3073,
+        "global_tf": 3723,
+        "z_score": 70.02
+      },
+      {
+        "term": "dlrip",
+        "cat_tf": 9774,
+        "global_tf": 27397,
+        "z_score": 69.81
+      },
+      {
+        "term": "next",
+        "cat_tf": 3540,
+        "global_tf": 6023,
+        "z_score": 69.67
+      },
+      {
+        "term": "law",
+        "cat_tf": 2922,
+        "global_tf": 3973,
+        "z_score": 69.27
+      },
+      {
+        "term": "vs",
+        "cat_tf": 4344,
+        "global_tf": 8644,
+        "z_score": 68.77
+      },
+      {
+        "term": "dv",
+        "cat_tf": 6758,
+        "global_tf": 16892,
+        "z_score": 67.77
+      },
+      {
+        "term": "ethel",
+        "cat_tf": 3294,
+        "global_tf": 3673,
+        "z_score": 66.97
+      },
+      {
+        "term": "jff",
+        "cat_tf": 4728,
+        "global_tf": 4932,
+        "z_score": 64.58
+      },
+      {
+        "term": "s01e10",
+        "cat_tf": 2927,
+        "global_tf": 4821,
+        "z_score": 64.58
+      },
+      {
+        "term": "walking",
+        "cat_tf": 2478,
+        "global_tf": 3062,
+        "z_score": 63.36
+      },
+      {
+        "term": "s03e01",
+        "cat_tf": 2995,
+        "global_tf": 3320,
+        "z_score": 63.21
+      },
+      {
+        "term": "rick",
+        "cat_tf": 2389,
+        "global_tf": 2887,
+        "z_score": 61.66
+      },
+      {
+        "term": "chicago",
+        "cat_tf": 2295,
+        "global_tf": 2768,
+        "z_score": 60.37
+      },
+      {
+        "term": "exkinoray",
+        "cat_tf": 3571,
+        "global_tf": 7406,
+        "z_score": 60.11
+      },
+      {
+        "term": "bae",
+        "cat_tf": 2246,
+        "global_tf": 2740,
+        "z_score": 60.04
+      },
+      {
+        "term": "s03e02",
+        "cat_tf": 2579,
+        "global_tf": 2888,
+        "z_score": 59.67
+      },
+      {
+        "term": "blacktv",
+        "cat_tf": 3152,
+        "global_tf": 3375,
+        "z_score": 59.46
+      },
+      {
+        "term": "io",
+        "cat_tf": 2336,
+        "global_tf": 3626,
+        "z_score": 59.46
+      },
+      {
+        "term": "сезон",
+        "cat_tf": 2933,
+        "global_tf": 3178,
+        "z_score": 59.45
+      },
+      {
+        "term": "hulu",
+        "cat_tf": 2207,
+        "global_tf": 2670,
+        "z_score": 59.29
+      }
+    ]
+  },
+  "review_queue_fingerprint": [
+    {
+      "term": "gen",
+      "queue_tf": 1757,
+      "z_score": 110.54
+    },
+    {
+      "term": "rar",
+      "queue_tf": 3867,
+      "z_score": 90.08
+    },
+    {
+      "term": "generated",
+      "queue_tf": 2495,
+      "z_score": 50.42
+    },
+    {
+      "term": "ai",
+      "queue_tf": 2841,
+      "z_score": 47.76
+    },
+    {
+      "term": "8i2",
+      "queue_tf": 312,
+      "z_score": 44.88
+    },
+    {
+      "term": "fit",
+      "queue_tf": 320,
+      "z_score": 36.06
+    },
+    {
+      "term": "avi",
+      "queue_tf": 3633,
+      "z_score": 35.42
+    },
+    {
+      "term": "ts",
+      "queue_tf": 2456,
+      "z_score": 35.25
+    },
+    {
+      "term": "dvd",
+      "queue_tf": 697,
+      "z_score": 32.02
+    },
+    {
+      "term": "rmvb",
+      "queue_tf": 402,
+      "z_score": 30.52
+    },
+    {
+      "term": "no",
+      "queue_tf": 2873,
+      "z_score": 28.24
+    },
+    {
+      "term": "pthc",
+      "queue_tf": 1099,
+      "z_score": 27.77
+    },
+    {
+      "term": "digital",
+      "queue_tf": 1199,
+      "z_score": 27.4
+    },
+    {
+      "term": "高清首发",
+      "queue_tf": 144,
+      "z_score": 27.19
+    },
+    {
+      "term": "主演",
+      "queue_tf": 150,
+      "z_score": 26.49
+    },
+    {
+      "term": "dlraw",
+      "queue_tf": 207,
+      "z_score": 26.43
+    },
+    {
+      "term": "patreon",
+      "queue_tf": 648,
+      "z_score": 26.32
+    },
+    {
+      "term": "txt",
+      "queue_tf": 161,
+      "z_score": 25.97
+    },
+    {
+      "term": "dl版",
+      "queue_tf": 829,
+      "z_score": 25.97
+    },
+    {
+      "term": "playboy",
+      "queue_tf": 147,
+      "z_score": 25.66
+    },
+    {
+      "term": "iso",
+      "queue_tf": 853,
+      "z_score": 25.15
+    },
+    {
+      "term": "mpg",
+      "queue_tf": 510,
+      "z_score": 24.67
+    },
+    {
+      "term": "326388",
+      "queue_tf": 119,
+      "z_score": 24.55
+    },
+    {
+      "term": "brego",
+      "queue_tf": 92,
+      "z_score": 24.23
+    },
+    {
+      "term": "rrg",
+      "queue_tf": 92,
+      "z_score": 24.17
+    },
+    {
+      "term": "culturedcommissions",
+      "queue_tf": 91,
+      "z_score": 23.77
+    },
+    {
+      "term": "中国翻訳",
+      "queue_tf": 472,
+      "z_score": 23.47
+    },
+    {
+      "term": "backup",
+      "queue_tf": 125,
+      "z_score": 21.24
+    },
+    {
+      "term": "animation",
+      "queue_tf": 218,
+      "z_score": 20.64
+    },
+    {
+      "term": "オリジナル",
+      "queue_tf": 514,
+      "z_score": 20.25
+    },
+    {
+      "term": "torrent",
+      "queue_tf": 200,
+      "z_score": 19.66
+    },
+    {
+      "term": "pedo",
+      "queue_tf": 446,
+      "z_score": 19.15
+    },
+    {
+      "term": "chan",
+      "queue_tf": 357,
+      "z_score": 18.06
+    },
+    {
+      "term": "exe",
+      "queue_tf": 609,
+      "z_score": 17.95
+    },
+    {
+      "term": "同人誌",
+      "queue_tf": 443,
+      "z_score": 17.87
+    },
+    {
+      "term": "archive",
+      "queue_tf": 394,
+      "z_score": 17.7
+    },
+    {
+      "term": "ni",
+      "queue_tf": 736,
+      "z_score": 17.46
+    },
+    {
+      "term": "1080",
+      "queue_tf": 414,
+      "z_score": 17.45
+    },
+    {
+      "term": "shoujo",
+      "queue_tf": 182,
+      "z_score": 17.3
+    },
+    {
+      "term": "1280x",
+      "queue_tf": 196,
+      "z_score": 17.28
+    },
+    {
+      "term": "国语",
+      "queue_tf": 65,
+      "z_score": 17.25
+    },
+    {
+      "term": "wmv",
+      "queue_tf": 567,
+      "z_score": 17.02
+    },
+    {
+      "term": "worldmkv",
+      "queue_tf": 136,
+      "z_score": 16.89
+    },
+    {
+      "term": "chinese",
+      "queue_tf": 297,
+      "z_score": 16.86
+    },
+    {
+      "term": "raw",
+      "queue_tf": 266,
+      "z_score": 16.73
+    },
+    {
+      "term": "pokemon",
+      "queue_tf": 139,
+      "z_score": 16.58
+    },
+    {
+      "term": "video",
+      "queue_tf": 561,
+      "z_score": 16.48
+    },
+    {
+      "term": "cbfm",
+      "queue_tf": 244,
+      "z_score": 16.3
+    },
+    {
+      "term": "v01",
+      "queue_tf": 161,
+      "z_score": 16.2
+    },
+    {
+      "term": "13dl",
+      "queue_tf": 99,
+      "z_score": 16.18
+    },
+    {
+      "term": "pokémon",
+      "queue_tf": 85,
+      "z_score": 15.94
+    },
+    {
+      "term": "720",
+      "queue_tf": 255,
+      "z_score": 15.7
+    },
+    {
+      "term": "poths",
+      "queue_tf": 48,
+      "z_score": 15.66
+    },
+    {
+      "term": "同人cg集",
+      "queue_tf": 224,
+      "z_score": 15.4
+    },
+    {
+      "term": "岛遇",
+      "queue_tf": 48,
+      "z_score": 15.34
+    },
+    {
+      "term": "eigo",
+      "queue_tf": 35,
+      "z_score": 15.29
+    },
+    {
+      "term": "backupebd",
+      "queue_tf": 33,
+      "z_score": 15.22
+    },
+    {
+      "term": "ga",
+      "queue_tf": 446,
+      "z_score": 15.02
+    },
+    {
+      "term": "7z",
+      "queue_tf": 421,
+      "z_score": 14.95
+    },
+    {
+      "term": "ttc",
+      "queue_tf": 63,
+      "z_score": 14.65
+    },
+    {
+      "term": "2160",
+      "queue_tf": 72,
+      "z_score": 14.07
+    },
+    {
+      "term": "ピンクパイナップル",
+      "queue_tf": 39,
+      "z_score": 13.98
+    },
+    {
+      "term": "magazine",
+      "queue_tf": 153,
+      "z_score": 13.97
+    },
+    {
+      "term": "jpg",
+      "queue_tf": 180,
+      "z_score": 13.96
+    },
+    {
+      "term": "未知",
+      "queue_tf": 30,
+      "z_score": 13.94
+    },
+    {
+      "term": "sex",
+      "queue_tf": 785,
+      "z_score": 13.89
+    },
+    {
+      "term": "library",
+      "queue_tf": 99,
+      "z_score": 13.85
+    },
+    {
+      "term": "mds",
+      "queue_tf": 61,
+      "z_score": 13.8
+    },
+    {
+      "term": "sets",
+      "queue_tf": 84,
+      "z_score": 13.72
+    },
+    {
+      "term": "carib",
+      "queue_tf": 184,
+      "z_score": 13.64
+    },
+    {
+      "term": "yiyidj",
+      "queue_tf": 34,
+      "z_score": 13.57
+    },
+    {
+      "term": "bonus",
+      "queue_tf": 121,
+      "z_score": 13.51
+    },
+    {
+      "term": "第03巻",
+      "queue_tf": 32,
+      "z_score": 13.49
+    },
+    {
+      "term": "成年コミック",
+      "queue_tf": 269,
+      "z_score": 13.45
+    },
+    {
+      "term": "historys",
+      "queue_tf": 50,
+      "z_score": 13.36
+    },
+    {
+      "term": "nude",
+      "queue_tf": 163,
+      "z_score": 13.27
+    },
+    {
+      "term": "spray",
+      "queue_tf": 31,
+      "z_score": 13.26
+    },
+    {
+      "term": "fc2ppv",
+      "queue_tf": 448,
+      "z_score": 13.2
+    },
+    {
+      "term": "cosplay",
+      "queue_tf": 119,
+      "z_score": 13.18
+    },
+    {
+      "term": "փq",
+      "queue_tf": 28,
+      "z_score": 13.11
+    },
+    {
+      "term": "langust022",
+      "queue_tf": 33,
+      "z_score": 13.1
+    },
+    {
+      "term": "rail",
+      "queue_tf": 71,
+      "z_score": 13.06
+    },
+    {
+      "term": "youtube",
+      "queue_tf": 83,
+      "z_score": 12.9
+    },
+    {
+      "term": "桜都字幕组",
+      "queue_tf": 31,
+      "z_score": 12.73
+    },
+    {
+      "term": "mag",
+      "queue_tf": 57,
+      "z_score": 12.69
+    },
+    {
+      "term": "story",
+      "queue_tf": 347,
+      "z_score": 12.59
+    },
+    {
+      "term": "浏览器打开",
+      "queue_tf": 28,
+      "z_score": 12.54
+    },
+    {
+      "term": "kamen",
+      "queue_tf": 117,
+      "z_score": 12.45
+    },
+    {
+      "term": "sailor",
+      "queue_tf": 79,
+      "z_score": 12.45
+    },
+    {
+      "term": "tr",
+      "queue_tf": 69,
+      "z_score": 12.44
+    },
+    {
+      "term": "wallpapers",
+      "queue_tf": 60,
+      "z_score": 12.39
+    },
+    {
+      "term": "se",
+      "queue_tf": 131,
+      "z_score": 12.37
+    },
+    {
+      "term": "request",
+      "queue_tf": 88,
+      "z_score": 12.36
+    },
+    {
+      "term": "tfile",
+      "queue_tf": 130,
+      "z_score": 12.3
+    },
+    {
+      "term": "comic1",
+      "queue_tf": 92,
+      "z_score": 12.28
+    },
+    {
+      "term": "preteen",
+      "queue_tf": 316,
+      "z_score": 12.26
+    },
+    {
+      "term": "hgh",
+      "queue_tf": 22,
+      "z_score": 12.13
+    },
+    {
+      "term": "日本語",
+      "queue_tf": 31,
+      "z_score": 12.13
+    },
+    {
+      "term": "ch",
+      "queue_tf": 270,
+      "z_score": 12.12
+    },
+    {
+      "term": "pixiv",
+      "queue_tf": 146,
+      "z_score": 12.12
+    }
+  ]
+}

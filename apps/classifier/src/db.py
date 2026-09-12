@@ -315,13 +315,14 @@ def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = Non
             metadata_quality_score = r[11] if len(r) > 11 and r[11] is not None else 100
             policy_action = str(r[12]) if len(r) > 12 and r[12] else 'ALLOW'
 
-            if isinstance(files, str):
-                try:
-                    files = json.loads(files)
-                except Exception:
-                    files = []
-            if isinstance(files, list):
-                files = files[:100]
+            # Eager feature extraction: compute text and dense vectors immediately to discard raw files JSON
+            from feature_extractor import get_text_and_features
+            clean_text, dense_vec = get_text_and_features({
+                "name": name,
+                "total_size": size,
+                "file_count": count_val,
+                "files": files,
+            }, normalize_dense=True, dense_version=2)
 
             records.append({
                 "infohash": ih,
@@ -329,9 +330,10 @@ def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = Non
                 "confidence": conf,
                 "source": source,
                 "name": name,
+                "clean_text": clean_text,
+                "dense_vector": dense_vec,
                 "total_size": size,
                 "file_count": count_val,
-                "files": files or [],
                 "labeled_at": labeled_at,
                 "integrity_score": integrity_score,
                 "model_safe_probability": model_safe_probability,
@@ -339,7 +341,7 @@ def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = Non
                 "policy_action": policy_action
             })
             if count % 10000 == 0:
-                print(f"      Loaded {count:,} records from database...", flush=True)
+                print(f"      Loaded and extracted {count:,} records from database...", flush=True)
         cur.close()
         conn.commit()
         return records

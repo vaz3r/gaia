@@ -21,6 +21,7 @@ from feature_extractor import (
     RE_APP,
     RE_MOVIE,
     RE_MUSIC,
+    RE_JAV,
 )
 from model_manager import get_active_model_path, get_active_model_info
 
@@ -37,9 +38,6 @@ CATEGORY_REGEX_RULES = {
     "Movies": RE_MOVIE,
     "Music": RE_MUSIC,
 }
-
-# JAV (Japanese Adult Video) scene code regex: e.g. SNIS-851, IPX-292, ABP-108, FC2-PPV
-RE_JAV = re.compile(r'\b[A-Za-z]{2,6}[-_ ]\d{3,5}\b|\bFC2\b', re.IGNORECASE)
 
 CATEGORY_EXT_MAPPING = {
     "Audiobooks": "audiobook",
@@ -216,20 +214,27 @@ class TorrentClassifierService:
             g_vec = extract_gating_vector(probas, item)
             p_correct = float(self.gating_model.predict_proba([g_vec])[0, 1])
 
+            rule = CATEGORY_REGEX_RULES.get(top1["category"])
+            rule_matched = bool(rule and rule.search(name))
+            if top1["category"] == "Adult" and not rule_matched and RE_JAV.search(name):
+                rule_matched = True
+
             # Adult Sanity Lock: Prevent clean foreign titles from defaulting to Adult
-            if top1["category"] == "Adult" and not (RE_ADULT.search(name) or RE_JAV.search(name)):
+            if top1["category"] == "Adult" and not rule_matched:
                 p_correct = min(p_correct, 0.40)
 
-            if p_correct >= 0.95:
+            cert_threshold = 0.85 if rule_matched else 0.95
+
+            if p_correct >= cert_threshold:
                 needs_review = False
                 review_reason = None
                 review_type = "accepted"
             else:
                 needs_review = True
-                review_reason = f"Gating ML flagged: P(Correct) is {p_correct*100:.1f}% (below 95% certitude threshold)."
+                review_reason = f"Gating ML flagged: P(Correct) is {p_correct*100:.1f}% (below {cert_threshold*100:.0f}% certitude threshold)."
                 review_type = "low_confidence"
-            eff_conf, eff_margin = 0.95, 0.0
-            has_manifest, rule_matched = bool(item.get("files")), False
+            eff_conf, eff_margin = cert_threshold, 0.0
+            has_manifest = bool(item.get("files"))
         else:
             p_correct = None
             if adaptive_thresholds:
@@ -338,16 +343,21 @@ class TorrentClassifierService:
 
             if p_correct_batch is not None:
                 p_corr = float(p_correct_batch[i])
+                rule = CATEGORY_REGEX_RULES.get(top1_cat)
+                rule_matched = bool(rule and rule.search(name))
+                if top1_cat == "Adult" and not rule_matched and RE_JAV.search(name):
+                    rule_matched = True
+
                 # Adult Sanity Lock
-                if top1_cat == "Adult" and not (RE_ADULT.search(name) or RE_JAV.search(name)):
+                if top1_cat == "Adult" and not rule_matched:
                     p_corr = min(p_corr, 0.40)
 
-                needs_review = p_corr < 0.95
+                cert_threshold = 0.85 if rule_matched else 0.95
+                needs_review = p_corr < cert_threshold
                 review_type = "accepted" if not needs_review else "low_confidence"
-                eff_conf = 0.95
+                eff_conf = cert_threshold
                 eff_margin = 0.0
                 has_manifest = bool(item.get("files"))
-                rule_matched = False
             else:
                 if adaptive_thresholds:
                     eff_conf, eff_margin, has_manifest, rule_matched = compute_effective_thresholds(

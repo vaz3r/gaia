@@ -53,7 +53,9 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
     print(f"      Target classes ({len(classes)}): {classes}", flush=True)
 
     indices = np.arange(len(records))
-    train_idx, val_idx = train_test_split(indices, test_size=0.15, stratify=y, random_state=42)
+    class_counts_raw = Counter(y)
+    can_stratify = all(cnt >= 2 for cnt in class_counts_raw.values())
+    train_idx, val_idx = train_test_split(indices, test_size=0.15, stratify=y if can_stratify else None, random_state=42)
     train_records = [records[i] for i in train_idx]
     val_records = [records[i] for i in val_idx]
     y_train = y[train_idx]
@@ -63,7 +65,7 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
     # 3. Fit Candidate Feature Extractor and Search for Best Regularization
     print("\n[3/6] Fitting candidate feature extractor and searching hyperparameter space...", flush=True)
     t1 = time.time()
-    extractor = TorrentFeatureExtractor(max_features=250000, normalize_dense=True)
+    extractor = TorrentFeatureExtractor(max_features=120000, normalize_dense=True)
     X_train = extractor.fit_transform(train_records)
     print(f"      Extracted {X_train.shape[1]:,} features in {time.time() - t1:.1f}s", flush=True)
 
