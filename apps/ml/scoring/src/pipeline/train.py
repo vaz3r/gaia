@@ -44,24 +44,38 @@ def load_training_data(limit_per_split: int = 10000):
     with get_db_cursor() as cur:
         for split_name, (start_dt, end_dt) in splits.items():
             print(f"Loading {split_name} split ({start_dt} to {end_dt})...")
-            # Sample clean torrents
+            # Sample clean torrents (strictly excluding media executables)
             cur.execute("""
                 SELECT infohash, name, piece_length, total_size, file_count, files, category, verified_at
                 FROM torrents
                 WHERE verified_at >= %s AND verified_at < %s
                   AND total_size > 1024
+                  AND NOT (
+                    category IN ('Movies', 'Television', 'Anime', 'Documentaries', 'Music', 'Audiobooks', 'Books & Learning', 'Adult')
+                    AND name ~* '\\.(exe|scr|bat|cmd|vbs|js|jse|wsf|wsh|ps1|com|pif|hta|cpl|jar|msi|reg)$'
+                  )
+                  AND NOT (name ~ '[\\u202E\\u202D\\u202C]')
                 ORDER BY verified_at ASC
                 LIMIT %s;
             """, (start_dt, end_dt, limit_per_split))
             clean_rows = cur.fetchall()
 
-            # Sample known fake torrents
+            # Sample known fake/malicious torrents (empty payloads, deceptive exts, media executables, RTLO)
             cur.execute("""
                 SELECT infohash, name, piece_length, total_size, file_count, files, category, verified_at
                 FROM torrents
-                WHERE (total_size <= 1024 OR name ~* '\\.(mp4|avi|mkv)\\.exe$')
-                  AND verified_at >= %s AND verified_at < %s
-                LIMIT 500;
+                WHERE (
+                    total_size <= 1024 
+                    OR name ~* '\\.(mp4|avi|mkv)\\.exe$'
+                    OR (
+                        category IN ('Movies', 'Television', 'Anime', 'Documentaries', 'Music', 'Audiobooks', 'Books & Learning', 'Adult')
+                        AND name ~* '\\.(exe|scr|bat|cmd|vbs|js|jse|wsf|wsh|ps1|com|pif|hta|cpl|jar|msi|reg)$'
+                    )
+                    OR name ~ '[\\u202E\\u202D\\u202C]'
+                    OR name ~* '\\.scr$'
+                )
+                AND verified_at >= %s AND verified_at < %s
+                LIMIT 1000;
             """, (start_dt, end_dt))
             fake_rows = cur.fetchall()
 
@@ -76,6 +90,7 @@ def load_training_data(limit_per_split: int = 10000):
                     file_count=r["file_count"],
                     piece_length=r["piece_length"],
                     files=r["files"],
+                    category=r["category"],
                 )
                 X_list.append(list(feats.values()))
                 y_list.append(1)
@@ -87,6 +102,7 @@ def load_training_data(limit_per_split: int = 10000):
                     file_count=r["file_count"],
                     piece_length=r["piece_length"],
                     files=r["files"],
+                    category=r["category"],
                 )
                 X_list.append(list(feats.values()))
                 y_list.append(0)
@@ -152,6 +168,7 @@ def run_training_pipeline():
             file_count=item["file_count"],
             piece_length=item["piece_length"],
             files=item.get("files"),
+            category=item.get("category"),
         )
         p_safe = classifier.predict_safe_probability(np.array([list(feats.values())], dtype=np.float32))[0]
 

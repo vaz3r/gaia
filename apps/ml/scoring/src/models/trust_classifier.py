@@ -41,6 +41,14 @@ class TrustClassifier:
             "spam_keyword_count",
             "path_has_non_ascii",
             "deceptive_double_extension",
+            "category_is_media",
+            "category_is_software",
+            "media_executable_mismatch",
+            "media_standalone_executable",
+            "has_rtlo_spoofing",
+            "has_dangerous_script",
+            "software_implausible_size",
+            "executable_file_count",
         ]
         self.is_trained = False
 

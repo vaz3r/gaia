@@ -207,6 +207,9 @@ def evaluate_policy(
         ReasonCode.CRITICAL_SHA1_MISMATCH,
         ReasonCode.EMPTY_PAYLOAD_FAKE,
         ReasonCode.DECEPTIVE_DOUBLE_EXTENSION,
+        ReasonCode.EXECUTABLE_IN_MEDIA_SWARM,
+        ReasonCode.RTLO_CHAR_SPOOFING,
+        ReasonCode.STANDALONE_SCRIPT_EXPLOIT,
     }
     has_critical = any(r in critical_invariants for r in triggered_reasons)
 
@@ -228,6 +231,9 @@ def evaluate_policy(
 
         if ReasonCode.HOMOGLYPH_PATH_SPOOFING in triggered_reasons:
             deductions += 50
+
+        if ReasonCode.IMPLAUSIBLE_SOFTWARE_PAYLOAD in triggered_reasons:
+            deductions += 60
 
         # Check spam keywords in title
         name_lower = (name or "").lower()

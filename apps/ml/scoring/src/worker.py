@@ -85,6 +85,7 @@ class ScoringWorker:
                 file_count=r[4],
                 piece_length=r[2],
                 files=r[5],
+                category=r[6],
             )
             feat_matrix.append(list(feats.values()))
 
