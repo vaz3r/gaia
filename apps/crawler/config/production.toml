@@ -1,43 +1,66 @@
-# Production profile (zerone).
-# Only values that differ from default.toml belong here.
-# Everything is env-overridable via CRAW_* vars.
-#
-# NOTE: Env vars (compose CRAW_*) take precedence over these values. Keys that
-# ARE env-overridden in docker-compose.yml: walker_alpha, walker_interval_ms,
-# source_deadline_ms, sybil_count, rate_limit_per_sec, global_fetch_limit,
-# race_peers, metadata_timeout_secs, utp_enabled. Keys NOT env-overridden (true
-# TOML-only tuning surface): source_query_timeout_secs, source_k, source_alpha,
-# tcp/utp_timeout_secs, retry.*, storage.*, cache.*, harvest.*.
+# Production profile (gaia-node).
+# Baseline defaults are inherited from default.toml; values here specialize for production.
+# This file is the SINGLE SOURCE OF TRUTH for production crawler tuning.
+
+# Top-level operational tuning
+worker_threads = 2
+nodes = 1
+port_base = 6882
+channel_capacity = 8192
+trace_sample_rate = 0.01
 
 [dht]
 walker_alpha = 3
-walker_interval_ms = 250
-source_deadline_ms = 15000
-source_max_queries = 48
+walker_interval_ms = 10
+walker_self_explore_prob = 0.25
+sybil_count = 256
 sybil_bep42_ratio = 1.0
+find_node_response_percent = 100
+source_deadline_ms = 25000
+source_max_queries = 48
 source_query_timeout_secs = 5
-sybil_count = 16
 rate_limit_per_sec = 8.0
 
 [fetch]
-global_fetch_limit = 1200
-race_peers = 8
-metadata_timeout_secs = 25
+pipeline_limit = 4000
+global_fetch_limit = 1500
+race_peers = 12
+metadata_timeout_secs = 35
+connect_deadline_ms = 15000
+lead_source_grace_ms = 1000
+tcp_timeout_secs = 5
+utp_timeout_secs = 5
 utp_enabled = true
 max_connections_per_ip = 1
 transport_race_concurrent = false
 ip_cooldown_secs = 300
+ip_cooldown_max_entries = 200000
 abuse_blacklist_path = "/etc/crawler/config/abuse_blacklist.txt"
+conn_limiter_ttl_secs = 60
 conn_limiter_max_entries = 500000
+fresh_channel_capacity = 8192
 
 [cache]
+peer_cache_ttl_secs = 120
 peer_cache_max_entries = 250000
 announce_cache_max_entries = 100000
+peer_cache_failure_threshold = 1
+
+[retry]
+no_peers_terminal_on_first = false
+no_peers_max_retries = 2
+
+[storage]
+janitor_interval_secs = 300
+janitor_batch_size = 100000
+janitor_batch_sleep_ms = 10
+janitor_dead_retention_secs = 3600
+metrics_flush_interval_secs = 15
 
 [logging]
 log_dir = "/data/logs"
 log_json = true
-log_file_max_bytes = 50000000
-log_total_max_bytes = 500000000
+log_file_max_bytes = 5242880
+log_total_max_bytes = 524288000
 log_flush_interval_ms = 500
 log_buffer_capacity = 8192
