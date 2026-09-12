@@ -28,44 +28,116 @@ from model_manager import (
 )
 
 
-def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int = None):
+def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int = None, use_cache: bool = False):
     print("=" * 80, flush=True)
     print("GAIA TORRENT CLASSIFIER: DIRECT DB RETRAINING PIPELINE", flush=True)
     print("=" * 80, flush=True)
 
-    # 1. Fetch training data directly from PostgreSQL
-    print("\n[1/6] Extracting high-confidence labels from PostgreSQL (labeled_results JOIN torrents)...", flush=True)
-    t0 = time.time()
-    records = db.fetch_training_data(min_confidence="high", limit=max_samples)
+    # 1. Fetch training data directly from PostgreSQL or local cache
+    cache_path = SRC_DIR.parent / "data" / "training_cache.joblib"
+    if use_cache and cache_path.exists():
+        print(f"\n[1/6] Loading cached training data from {cache_path}...", flush=True)
+        t0 = time.time()
+        records = joblib.load(cache_path)
+        print(f"      Loaded {len(records):,} records from cache in {time.time() - t0:.2f}s", flush=True)
+        # Refresh domain anchors and regex features in cached records
+        import re
+        from feature_extractor import (
+            RE_ADULT, RE_JAV, RE_ANIME, RE_DOCU, RE_AUDIOBOOK, RE_BOOK,
+            RE_APP, RE_GAME, RE_TV, RE_MOVIE, RE_MUSIC
+        )
+        for r in records:
+            orig = r.get("clean_text", "")
+            raw = re.sub(r'\bdom(adult|anime|docu|tv|audiobook|book|game|app|movie|music)\b', '', orig)
+            raw = re.sub(r'\s+', ' ', raw).strip()
+            has_adult = bool(RE_ADULT.search(raw)) or bool(RE_JAV.search(raw))
+            has_anime = bool(RE_ANIME.search(raw))
+            has_docu = bool(RE_DOCU.search(raw))
+            has_audiobook = bool(RE_AUDIOBOOK.search(raw))
+            has_book = bool(RE_BOOK.search(raw)) and (not has_audiobook)
+            has_app = bool(RE_APP.search(raw))
+            has_game = bool(RE_GAME.search(raw)) and (not has_app)
+            has_tv = bool(RE_TV.search(raw)) and (not has_anime) and (not has_docu) and (not has_game)
+            has_movie = bool(RE_MOVIE.search(raw)) and (not has_tv) and (not has_docu) and (not has_anime) and (not has_game)
+            has_music = bool(RE_MUSIC.search(raw)) and (not has_audiobook) and (not has_game)
+
+            anchors = []
+            if has_adult: anchors.extend(["domadult", "domadult"])
+            if has_anime: anchors.extend(["domanime", "domanime"])
+            if has_docu: anchors.extend(["domdocu", "domdocu", "domdocu"])
+            if has_tv: anchors.extend(["domtv", "domtv"])
+            if has_audiobook: anchors.extend(["domaudiobook", "domaudiobook"])
+            if has_book: anchors.extend(["dombook", "dombook"])
+            if has_game: anchors.extend(["domgame", "domgame"])
+            if has_app: anchors.extend(["domapp", "domapp"])
+            if has_movie: anchors.extend(["dommovie", "dommovie"])
+            if has_music: anchors.extend(["dommusic", "dommusic"])
+            r["clean_text"] = (raw + " " + " ".join(anchors)).strip()
+
+            if "dense_vector" in r and len(r["dense_vector"]) >= 21:
+                rf = [
+                    1.0 if has_tv else 0.0,
+                    1.0 if has_anime else 0.0,
+                    1.0 if has_adult else 0.0,
+                    1.0 if has_audiobook else 0.0,
+                    1.0 if has_book else 0.0,
+                    1.0 if has_docu else 0.0,
+                    1.0 if has_game else 0.0,
+                    1.0 if has_app else 0.0,
+                    1.0 if has_movie else 0.0,
+                    1.0 if has_music else 0.0,
+                ]
+                r["dense_vector"] = r["dense_vector"][:11] + [f * 2.0 for f in rf] + r["dense_vector"][21:]
+    else:
+        print("\n[1/6] Extracting labels from PostgreSQL (labeled_results JOIN torrents)...", flush=True)
+        t0 = time.time()
+        records = db.fetch_training_data(min_confidence="medium", limit=max_samples)
+        if not max_samples:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            joblib.dump(records, cache_path, compress=3)
+            print(f"      Cached {len(records):,} records to {cache_path}", flush=True)
+        print(f"      Retrieved {len(records):,} records across 10 classes in {time.time() - t0:.2f}s", flush=True)
+
     if max_samples and max_samples < len(records):
         records = records[:max_samples]
-    print(f"      Retrieved {len(records):,} records across 10 classes in {time.time() - t0:.2f}s", flush=True)
     if len(records) < 1000:
         raise ValueError(f"Insufficient training records in database ({len(records)} found).")
 
     # 2. Encode labels and split train / validation
-    # 2. Encode labels and split train / validation
+    # Ground-truth holdout for fair gating against v7 baseline
     print("\n[2/6] Preparing stratified 85/15 train/validation split...", flush=True)
-    labels = [r["label_category"] for r in records]
+    high_conf_indices = [i for i, r in enumerate(records) if r.get("confidence") == "high"]
+    medium_conf_indices = [i for i, r in enumerate(records) if r.get("confidence") != "high"]
+
+    labels_high = [records[i]["label_category"] for i in high_conf_indices]
     le = LabelEncoder()
-    y = le.fit_transform(labels)
+    y_high = le.fit_transform(labels_high)
     classes = list(le.classes_)
     print(f"      Target classes ({len(classes)}): {classes}", flush=True)
 
-    indices = np.arange(len(records))
-    class_counts_raw = Counter(y)
-    can_stratify = all(cnt >= 2 for cnt in class_counts_raw.values())
-    train_idx, val_idx = train_test_split(indices, test_size=0.15, stratify=y if can_stratify else None, random_state=42)
+    can_stratify = all(cnt >= 2 for cnt in Counter(y_high).values())
+    train_high_idx, val_high_idx = train_test_split(
+        high_conf_indices, test_size=0.15, stratify=y_high if can_stratify else None, random_state=42
+    )
+
+    # Train on 85% high confidence + all medium confidence; evaluate holdout on clean ground-truth
+    train_idx = list(train_high_idx) + medium_conf_indices
+    val_idx = list(val_high_idx)
+
     train_records = [records[i] for i in train_idx]
     val_records = [records[i] for i in val_idx]
-    y_train = y[train_idx]
-    y_val = y[val_idx]
-    print(f"      Train set: {len(train_records):,} | Validation holdout: {len(val_records):,}", flush=True)
+
+    labels_all = [r["label_category"] for r in records]
+    y_all = le.transform(labels_all)
+    y_train = np.array([y_all[i] for i in train_idx])
+    y_val = np.array([y_all[i] for i in val_idx])
+
+    print(f"      Train set: {len(train_records):,} ({len(train_high_idx):,} high + {len(medium_conf_indices):,} medium) | Validation holdout: {len(val_records):,} (pure high-conf)", flush=True)
 
     # 3. Fit Candidate Feature Extractor and Search for Best Regularization
     print("\n[3/6] Fitting candidate feature extractor and searching hyperparameter space...", flush=True)
     t1 = time.time()
-    extractor = TorrentFeatureExtractor(max_features=120000, normalize_dense=True)
+    extractor = TorrentFeatureExtractor(max_features=250000, normalize_dense=True, dense_version=2)
     X_train = extractor.fit_transform(train_records)
     print(f"      Extracted {X_train.shape[1]:,} features in {time.time() - t1:.1f}s", flush=True)
 
@@ -82,17 +154,24 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
         for cls_idx, count in class_counts.items()
     }
 
-    # Sample weighting: slightly downweight low-confidence review queue labels (mcp_opencode) to dampen noise
-    sample_weights = np.array([0.90 if r.get('source') == 'mcp_opencode' else 1.0 for r in train_records])
+    # Sample weighting: calibrate ground truth, medium confidence, and review sources
+    sample_weights = np.array([
+        (0.75 if r.get('confidence') == 'medium' else 1.0) *
+        (0.85 if r.get('source') == 'mcp_opencode' else 1.0)
+        for r in train_records
+    ])
 
     # Grid search for optimal regularization and loss
     param_grid = [
         {"loss": "modified_huber", "alpha": 3.5e-5, "weighting": "smoothed"},
+        {"loss": "modified_huber", "alpha": 4.5e-5, "weighting": "smoothed"},
         {"loss": "modified_huber", "alpha": 5e-5, "weighting": "smoothed"},
         {"loss": "modified_huber", "alpha": 6e-5, "weighting": "smoothed"},
         {"loss": "modified_huber", "alpha": 7e-5, "weighting": "smoothed"},
         {"loss": "modified_huber", "alpha": 8e-5, "weighting": "smoothed"},
+        {"loss": "modified_huber", "alpha": 4.5e-5, "weighting": "balanced"},
         {"loss": "modified_huber", "alpha": 5e-5, "weighting": "balanced"},
+        {"loss": "modified_huber", "alpha": 6e-5, "weighting": "balanced"},
         {"loss": "modified_huber", "alpha": 7e-5, "weighting": "balanced"},
         {"loss": "log_loss", "alpha": 5e-5, "weighting": "smoothed"},
         {"loss": "log_loss", "alpha": 7e-5, "weighting": "smoothed"},
@@ -171,7 +250,7 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
     val_preds = clf.predict(X_val)
     cand_acc = float(accuracy_score(y_val, val_preds))
     cand_macro_f1 = float(best_macro_f1)
-    cand_report = classification_report(y_val, val_preds, target_names=classes, output_dict=True)
+    cand_report = classification_report(y_val, val_preds, labels=list(range(len(classes))), target_names=classes, output_dict=True, zero_division=0)
 
     val_probas = clf.predict_proba(X_val)
     X_gate_val = []
@@ -215,12 +294,12 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
 
     try:
         active_path = get_active_model_path()
-        active_exists = active_path.exists()
+        active_exists = active_path is not None and active_path.exists()
     except Exception:
         active_path = None
         active_exists = False
 
-    active_name = active_path.name if active_path else active_info.get("filename", "torrent_classifier_v2.joblib")
+    active_name = active_path.name if active_path else active_info.get("filename", "torrent_classifier_v7.joblib")
     print(f"      Active baseline: {active_info.get('version', 'unknown')} ({active_name})", flush=True)
 
     dyn_eval_succeeded = False
@@ -238,7 +317,7 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
 
             dyn_acc = float(accuracy_score(val_labels_str, act_pred_labels))
             dyn_macro_f1 = float(f1_score(val_labels_str, act_pred_labels, average="macro"))
-            dyn_report = classification_report(val_labels_str, act_pred_labels, target_names=classes, output_dict=True)
+            dyn_report = classification_report(val_labels_str, act_pred_labels, labels=classes, target_names=classes, output_dict=True, zero_division=0)
             active_macro_f1 = dyn_macro_f1
             active_acc = dyn_acc
             active_class_f1 = {c: float(dyn_report[c]["f1-score"]) for c in classes}
@@ -278,21 +357,28 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
     canary_warnings = []
     canary_stats = {}
 
-    if canary_slice and active_exists:
+    if canary_slice:
         try:
             cand_canary_X = extractor.transform(canary_slice)
             cand_canary_preds = [classes[i] for i in clf.predict(cand_canary_X)]
             cand_counts = Counter(cand_canary_preds)
 
-            act_canary_X = active_ext.transform(canary_slice)
-            act_canary_preds = [active_classes[i] for i in active_clf.predict(act_canary_X)]
-            act_counts = Counter(act_canary_preds)
+            if active_exists:
+                act_canary_X = active_ext.transform(canary_slice)
+                act_canary_preds = [active_classes[i] for i in active_clf.predict(act_canary_X)]
+                act_counts = Counter(act_canary_preds)
+            else:
+                act_counts = None
+                stored_canary = active_info.get("canary_stats", {})
 
             print(f"{'Category':<20} | {'Active Share':<14} | {'Candidate Share':<16} | {'Rel Shift':<10}", flush=True)
             print("-" * 70, flush=True)
             total_slice = len(canary_slice)
             for c in classes:
-                act_share = act_counts.get(c, 0) / total_slice
+                if act_counts:
+                    act_share = act_counts.get(c, 0) / total_slice
+                else:
+                    act_share = stored_canary.get(c, {}).get("candidate_share", 0.0)
                 cand_share = cand_counts.get(c, 0) / total_slice
                 canary_stats[c] = {"active_share": round(act_share, 4), "candidate_share": round(cand_share, 4)}
                 if act_share > 0.02:  # Only evaluate shifts on categories with at least 2% share
@@ -307,6 +393,70 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
             print("-" * 70, flush=True)
         except Exception as e:
             print(f"      Canary comparison skipped: {e}", flush=True)
+
+    # 5b. Benchmark on Real Review Queue Slice
+    print("\n[5b/6] Benchmarking candidate on 1,000 live review queue items...", flush=True)
+    try:
+        queue_slice = db.fetch_review_queue_slice(limit=1000)
+        if queue_slice:
+            q_X = extractor.transform(queue_slice)
+            q_preds = [classes[i] for i in clf.predict(q_X)]
+            q_probas = clf.predict_proba(q_X)
+
+            X_gate_queue = []
+            for i in range(len(queue_slice)):
+                p = q_probas[i]
+                r = queue_slice[i]
+                sorted_p = np.sort(p)[::-1]
+                top1_p = float(sorted_p[0])
+                top2_p = float(sorted_p[1]) if len(sorted_p) > 1 else 0.0
+                top3_p = float(sorted_p[2]) if len(sorted_p) > 2 else 0.0
+                m1_2 = top1_p - top2_p
+                m2_3 = top2_p - top3_p
+                ent = float(-np.sum(p * np.log(p + 1e-12)))
+
+                tot_size = float(r.get("total_size") or 0.0)
+                f_count = float(r.get("file_count") or 1.0)
+                log_s = float(np.log10(max(tot_size, 1.0)) / 12.0)
+                log_c = float(np.log10(max(f_count, 1.0)) / 5.0)
+                is_s = 1.0 if f_count <= 1 else 0.0
+
+                integ = float(r.get("integrity_score") if r.get("integrity_score") is not None else 100.0) / 100.0
+                safe_p = float(r.get("model_safe_probability") if r.get("model_safe_probability") is not None else 1.0)
+                meta_q = float(r.get("metadata_quality_score") if r.get("metadata_quality_score") is not None else 100.0) / 100.0
+                X_gate_queue.append([top1_p, m1_2, m2_3, ent, log_s, log_c, is_s, integ, safe_p, meta_q])
+
+            p_correct_queue = gating_model.predict_proba(X_gate_queue)[:, 1]
+            from feature_extractor import CATEGORY_REGEX_RULES, RE_JAV
+
+            q_auto_accepted_strict = sum(1 for p in p_correct_queue if p >= 0.95)
+            q_auto_accepted_rule = 0
+            q_cat_counts = Counter()
+
+            for i in range(len(queue_slice)):
+                p_c = float(p_correct_queue[i])
+                pred_c = q_preds[i]
+                r = queue_slice[i]
+                nm = r.get("name", "")
+
+                rule = CATEGORY_REGEX_RULES.get(pred_c)
+                rule_matched = bool(rule and rule.search(nm))
+                if pred_c == "Adult" and not rule_matched and RE_JAV.search(nm):
+                    rule_matched = True
+
+                thresh = 0.85 if rule_matched else 0.95
+                if p_c >= thresh:
+                    q_auto_accepted_rule += 1
+                    q_cat_counts[pred_c] += 1
+
+            q_accept_rate_strict = q_auto_accepted_strict / len(queue_slice)
+            q_accept_rate_rule = q_auto_accepted_rule / len(queue_slice)
+
+            print(f"      * Queue Auto-Acceptance Rate (Strict P >= 0.95): {q_auto_accepted_strict}/{len(queue_slice)} ({q_accept_rate_strict*100:.1f}%)", flush=True)
+            print(f"      * Queue Auto-Acceptance Rate (Rule-Aware P >= 0.85): {q_auto_accepted_rule}/{len(queue_slice)} ({q_accept_rate_rule*100:.1f}%)", flush=True)
+            print(f"      * Auto-Accepted by Category (Rule-Aware): {dict(q_cat_counts.most_common())}", flush=True)
+    except Exception as e:
+        print(f"      Review queue benchmark skipped: {e}", flush=True)
 
     # 6. Quality Gate Verification & Promotion
     print("\n[6/6] Verifying Comparative Quality Gate...", flush=True)
@@ -415,6 +565,7 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true", help="Evaluate and gate candidate without saving/activating")
     parser.add_argument("--force", action="store_true", help="Bypass quality gates and force model activation")
     parser.add_argument("--max-samples", type=int, default=None, help="Sample limit for fast validation tests")
+    parser.add_argument("--use-cache", action="store_true", help="Use locally cached training records if available")
     args = parser.parse_args()
 
-    run_retraining(dry_run=args.dry_run, force=args.force, max_samples=args.max_samples)
+    run_retraining(dry_run=args.dry_run, force=args.force, max_samples=args.max_samples, use_cache=args.use_cache)

@@ -262,7 +262,7 @@ def get_torrent_by_infohash(hex_infohash: str) -> Optional[Dict[str, Any]]:
     finally:
         p.putconn(conn)
 
-def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = None) -> List[Dict[str, Any]]:
+def fetch_training_data(min_confidence: str = 'medium', limit: Optional[int] = None) -> List[Dict[str, Any]]:
     """Query ground truth dataset directly from labeled_results joined with torrents.
     Excludes 'Other' to preserve the 10-class open-set boundary."""
     p = get_pool()
@@ -273,7 +273,12 @@ def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = Non
     cur = conn.cursor(name=cursor_name)
     cur.itersize = 1500
     try:
-        query = """
+        if min_confidence == 'high':
+            conf_cond = "l.confidence = 'high'"
+        else:
+            conf_cond = "l.confidence IN ('high', 'medium')"
+
+        query = f"""
             SELECT 
                 l.infohash,
                 l.label_category,
@@ -290,9 +295,9 @@ def fetch_training_data(min_confidence: str = 'high', limit: Optional[int] = Non
                 t.policy_action
             FROM labeled_results l
             JOIN torrents t ON l.infohash = t.infohash
-            WHERE l.confidence = %s AND l.label_category != 'Other'
+            WHERE {conf_cond} AND l.label_category != 'Other'
         """
-        params = [min_confidence]
+        params = []
         if limit:
             query += " LIMIT %s"
             params.append(limit)
@@ -358,12 +363,14 @@ def fetch_recent_canary_slice(limit: int = 1000) -> List[Dict[str, Any]]:
     conn = p.getconn()
     try:
         with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = 30000;")
             cur.execute(
                 """
                 SELECT infohash, name, total_size, file_count, files,
                        integrity_score, model_safe_probability, metadata_quality_score, policy_action
                 FROM torrents
-                ORDER BY verified_at DESC NULLS LAST
+                WHERE verified_at IS NOT NULL
+                ORDER BY verified_at DESC
                 LIMIT %s;
                 """,
                 (limit,)
@@ -389,6 +396,51 @@ def fetch_recent_canary_slice(limit: int = 1000) -> List[Dict[str, Any]]:
                     "model_safe_probability": r[6] if len(r) > 6 and r[6] is not None else 1.0,
                     "metadata_quality_score": r[7] if len(r) > 7 and r[7] is not None else 100,
                     "policy_action": str(r[8]) if len(r) > 8 and r[8] else "ALLOW"
+                })
+            return items
+    finally:
+        p.putconn(conn)
+
+def fetch_review_queue_slice(limit: int = 2000) -> List[Dict[str, Any]]:
+    """Fetch torrents that currently require review (needs_review = true) for model validation."""
+    p = get_pool()
+    conn = p.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = 30000;")
+            cur.execute(
+                """
+                SELECT infohash, name, total_size, file_count, files,
+                       integrity_score, model_safe_probability, metadata_quality_score, policy_action, category
+                FROM torrents
+                WHERE needs_review = true
+                ORDER BY popularity_score DESC
+                LIMIT %s;
+                """,
+                (limit,)
+            )
+            rows = cur.fetchall()
+            items = []
+            for r in rows:
+                files = r[4]
+                if isinstance(files, str):
+                    try:
+                        files = json.loads(files)
+                    except Exception:
+                        files = []
+                if isinstance(files, list):
+                    files = files[:100]
+                items.append({
+                    "infohash": bytea_to_hex(r[0]),
+                    "name": r[1] or "",
+                    "total_size": r[2] or 0,
+                    "file_count": r[3] or 1,
+                    "files": files or [],
+                    "integrity_score": r[5] if len(r) > 5 and r[5] is not None else 100,
+                    "model_safe_probability": r[6] if len(r) > 6 and r[6] is not None else 1.0,
+                    "metadata_quality_score": r[7] if len(r) > 7 and r[7] is not None else 100,
+                    "policy_action": str(r[8]) if len(r) > 8 and r[8] else "ALLOW",
+                    "current_category": r[9]
                 })
             return items
     finally:

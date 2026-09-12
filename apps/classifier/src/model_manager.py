@@ -57,14 +57,14 @@ def get_active_model_info() -> Dict[str, Any]:
         return {"version": "v2", "filename": "torrent_classifier_v2.joblib", "model_path": str(DEFAULT_MODEL_PATH)}
 
 
-def get_active_model_path() -> Path:
+def get_active_model_path() -> Optional[Path]:
     info = get_active_model_info()
     path = MODELS_DIR / info.get("filename", "torrent_classifier_v2.joblib")
     if path.exists():
         return path
     if DEFAULT_MODEL_PATH.exists():
         return DEFAULT_MODEL_PATH
-    raise FileNotFoundError(f"Active model not found at {path} or {DEFAULT_MODEL_PATH}")
+    return None
 
 
 def list_available_models() -> List[Dict[str, Any]]:

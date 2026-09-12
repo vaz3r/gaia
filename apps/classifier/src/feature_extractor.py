@@ -17,20 +17,25 @@ CORPUS_STOP_WORDS = [
 # Regex patterns for domain scene rules (empirically expanded from 3.2M analysis)
 RE_TV = re.compile(
     r'\b[sS]\d{1,2}[eE]\d{1,2}\b|\b\d{1,2}x\d{1,2}\b|\bseason\s*\d+\b|\bepisode\s*\d+\b|\bcomplete\s+series\b'
-    r'|\bseries\s*\d+\b|\bpart\s*\d+\b|\bep\s*\d+\b|\[第\d+集\]|\[第\d+话\]|\[第\d+期\]|全\d+集|更新至'
-    r'|\b(eztvx?|hdtv|dsnp|amzn|ddp5|s01|s02|s03|s04|s05|tgx|megusta)\b',
+    r'|\bseries\s*\d+\b|\bpart\s*\d+\b|\bep\s*\d+\b|\[第\d+集\]|\[第\d+话\]|\[第\d+期\]|全\d+集|更新至|\d+[-_ ]\d+集|\d+[-_ ]\d+期'
+    r'|\b(eztvx?|hdtv|dsnp|amzn|ddp5|s01|s02|s03|s04|s05|tgx|megusta|miniseries|mini[\s\-_]*series|docuseries)\b'
+    r'|\b(seri[iy]|seriya|serii)\b|\b\d+[-_ ]\d+\s*seri[iy]\b'
+    r'|\b(motogp|formula\s*1|f1\b.*?\b(?:race|qualifying|grand\s*prix)|ufc\b|wwe\b|aew\b|nba\b|nfl\b|supercross|superbike|fim\s*wsx)\b',
     re.IGNORECASE
 )
 RE_ANIME = re.compile(
-    r'\[(horriblesubs|erai-raws|subsplease|judas|asw|commie|chyu|doki|hatsuyuki|kamigami|nekketsu|vcb-studio|'
-    r'moozzi2|lolihouse|ember|coalgirls|reinforce|anime\s*time|baha|hr|ohys-raws|leopard-raws|nyaa)\]'
+    r'\[(horriblesubs|erai[\s\-_]*raws|subsplease|judas|asw|commie|chyu|doki|hatsuyuki|kamigami|nekketsu|vcb[\s\-_]*studio|'
+    r'moozzi2|lolihouse|ember|coalgirls|reinforce|anime[\s\-_]*time|baha|hr|ohys[\s\-_]*raws|leopard[\s\-_]*raws|nyaa|'
+    r'tsundere[\s\-_]*raws|anilibria|pascal|seadex|nanodesu|neodesu|smokers|sc-raws|kaitou|lostyears|dragsterps|cleo|deanzel|bluraydesu)\]'
+    r'|\b(horriblesubs|erai[\s\-_]*raws|subsplease|tsundere[\s\-_]*raws|vcb[\s\-_]*studio|moozzi2|lolihouse|anilibria|neodesu)\b'
     r'|[\u3040-\u30ff\u31f0-\u31ff]'
     r'|\b(kimetsu|yaiba|jujutsu|kaisen|shingeki|one\s*piece|naruto|bleach|boku\s*no\s*hero|dragon\s*ball|'
     r'chainsaw\s*man|spy\s*x\s*family|frieren|dungeon\s*meshi|solo\s*leveling|oshi\s*no\s*ko|'
     r'rezero|isekai|shaman\s*king|yu-gi-oh|yugioh|gundam|evangelion|fullmetal|death\s*note|'
     r'gintama|haikyuu|jojo|tokyo\s*ghoul|vinland|mushoku\s*tensei|slime|danmachi|baki|berserk|'
     r'monogatari|konosuba|overlord|fate|boruto|inuyasha|dandadan|sousou|kaiju|wind\s*breaker|'
-    r'dual[\s\-]audio|multi[\s\-]sub|multi[\s\-]audio|hi10p|10[\s\-]bit|nced|ncop|bdrip|anilibria|vostfr|multisub)\b',
+    r'dr[\s\.]*stone|megalobox|'
+    r'dual[\s\-]audio|multi[\s\-]sub|multi[\s\-]audio|hi10p|10[\s\-]bit|nced|ncop|bdrip|anilibria|vostfr|multisub|subfrench)\b',
     re.IGNORECASE
 )
 RE_ADULT = re.compile(
@@ -42,20 +47,27 @@ RE_ADULT = re.compile(
     r'bonga|stripchat|cam4|camsoda|fansly|manyvids|nud(e|ity)|voyeur|'
     r'dmm|tokyo[\s\-]?hot|1pondo|caribbeancom|heyzo|s-cute|pacopacomama|10musume|heydouga|'
     r'一本道|無修正|素人|中国翻訳|オリジナル|同人|同人誌|エロ|裏アカ|成年コミック|'
-    r'секс|порно|эротика|минет|шлюхи)\b'
+    r'секс|порно|эротика|минет|шлюхи|prn[a-z0-9_-]*|nsfw|wifey|cougar|swapping|femdom|incest)\b'
     r'|\[ai\s*generated\]|\bai[\s\-_]*gen(erated)?\b'
     r'|\[\d{5,7}\]',
     re.IGNORECASE
 )
+JAV_PREFIXES = (
+    'ipx|ssni|ssis|midv|mide|stars|jul|ebod|cawd|dldss|meyd|abw|das|wanz|prestige|'
+    'abp|snis|ipz|miad|pgd|sivr|soe|sdde|sdmu|tek|adn|hbad|star|pppd|jufe|mifd|mida|'
+    'dasd|pred|hunt|fset|scute|sw|emu|xvsr|sky|tre|kmhr|rbd|mkmp|shkd|fone|dand|scop|'
+    'chrg|onsd|bgn|mgt|dandy|vdd|vov|vrzm|nsps|venx|dvaj|dvdes|dvdms|dopl|bthe|cbr|kbi|'
+    'svdvd|gvh|gvg|nhdt|kire|rki|nass|chn|hmn|mvg|sora|smd|dcv|hzgd|bf|club|bbf|mby|'
+    'cesd|scpx|kawd|gar|hawa|simm|mkbd|siro|c0930|h0930|h4610'
+)
 RE_JAV = re.compile(
-    r'\b[A-Za-z]{2,6}[-_ ]\d{3,5}\b'
+    rf'\b({JAV_PREFIXES})[-_ ]?\d{{2,5}}\b'
     r'|\bFC2[-_ ]?(PPV)?[-_ ]?\d+\b'
-    r'|\b(carib|1pon|10mu|heyd|c0930|h0930|h4610|siro|mkbd|s-cute)[-_ ]\d+\b'
-    r'|\b(s1|moodyz|ideapocket|attackers|prestige|wanz|madonna|das|ebod|jul|ssis|ipx|mide|ssni|midv|stars|abw|cawd|dldss|meyd)[-_ ]\d+\b',
+    r'|\b(carib(bean)?(com)?|1pon(do)?|10mu(sume)?|heyzo|pacopacomama|s-cute)[-_ ]?\d+\b',
     re.IGNORECASE
 )
 RE_AUDIOBOOK = re.compile(
-    r'(\b(audiobook|audio\s*book|narrat(ed|or)|unabridged|abridged|read\s*by|performed\s*by|voiced\s*by|'
+    r'(\b(audiobook|audio\s*book|audiolibro[s]?|livre\s*audio|hörbuch|hörspiel|narrat(ed|or)|unabridged|abridged|read\s*by|performed\s*by|voiced\s*by|'
     r'audible|audio\s*drama|full[\s\-]cast|\.m4b\b|\.aax\b|аудиокнига|читает|озвучка|'
     r'автор|исполнитель)\b|\b\d+h\d+m\b|\([A-Za-zА-Яа-я]+[_\s]+[A-Za-zА-Яа-я]\.?\))',
     re.IGNORECASE
@@ -63,25 +75,31 @@ RE_AUDIOBOOK = re.compile(
 RE_BOOK = re.compile(
     r'\b(epub|pdf|mobi|azw3|djvu|cbr|cbz|chm|retail\s*epub|ebook|e-book|course|tutorial|lecture|textbook|'
     r'udemy|coursera|masterclass|pluralsight|oreilly|packt|wiley|springer|cambridge|oxford|manual|'
+    r'manga|manhwa|manhua|comics?|livre[s]?|libro[s]?|buch|magazine|'
     r'учебник|пособие|руководство|сборник|книга|guide|handbook)\b',
     re.IGNORECASE
 )
 RE_DOCU = re.compile(
     r'\b(bbc|pbs|national\s*geographic|nat\s*geo|discovery(\s*channel)?|docu|documentary|docuseries|'
-    r'nature|history\s*channel|attenborough|planet\s*earth|blue\s*planet|curiositystream|novafilm|imax|mvgroup)\b',
+    r'nature|history\s*channel|attenborough|planet\s*earth|blue\s*planet|curiositystream|novafilm|imax|mvgroup|'
+    r'документальный|документалка|д\/ф|докфильм|dokumentation|doku|documentaire)\b',
     re.IGNORECASE
 )
 RE_GAME = re.compile(
     r'\b(fitgirl|dodi|repack|codex|skidrow|flt|plaza|cso|nsp|xci|playstation|ps4|ps5|ps3|ps2|psx|switch|'
     r'xbox|nintendo|roms?|reloaded|cpy|rune|tenoke|empress|razor1911|elamigos|gog|tinyiso|pc\s*game|'
-    r'steamrip|cracked|kaos|rg\s*mechanics|deluxe\s*edition|definitive\s*edition|'
-    r'multi\d+|v\d+(\.\d+)+|build\s*\d+|update\s*v?\d+|dlc|repacks?|patch-?fr)\b',
+    r'steamrip|cracked|kaos|rg\s*mechanics|deluxe\s*edition|definitive\s*edition|vrex|'
+    r'multi\d+|update\s*v?\d+|dlc|repacks?|patch-?fr|'
+    r'game\s*version|game|games|gameplay|steam|emulator|trainer|iso\s*game|goty|game\s*of\s*the\s*year)\b',
     re.IGNORECASE
 )
 RE_APP = re.compile(
     r'\b(adobe|autodesk|microsoft\s*office|windows\s*1\d|macos|crack|keygen|keymaker|patcher?|portable|setup|'
     r'multilingual|v\d+\.\d+|\.dmg\b|\.apk\b|winrar|installer|activator|x64|x86|win64|win32|loader|'
-    r'coreldraw|solidworks|cyberlink|corel|acronis|vmware|jetbrains)\b',
+    r'coreldraw|solidworks|cyberlink|corel|acronis|vmware|jetbrains|plugins?|vst[23]?|presets?|drivers?|firmware|'
+    r'guitar\s*pro|kontakt|soundbank[s]?|m0nkrus|monkrus|kpojiuk|krolik|elchupacabra|d!akov|diakov|'
+    r'драйвер[ыа]?|диск\s*от\s*ноутбука|recovery\s*disc|образ\s*диска|utility|utilities|'
+    r'sample\s*library|sound\s*library|soundfont|sound\s*fonts?)\b',
     re.IGNORECASE
 )
 RE_MOVIE = re.compile(
@@ -94,14 +112,28 @@ RE_MUSIC = re.compile(
     re.IGNORECASE
 )
 
+CATEGORY_REGEX_RULES = {
+    "Adult": RE_ADULT,
+    "Anime": RE_ANIME,
+    "Television": RE_TV,
+    "Audiobooks": RE_AUDIOBOOK,
+    "Books & Learning": RE_BOOK,
+    "Documentaries": RE_DOCU,
+    "Games": RE_GAME,
+    "Applications": RE_APP,
+    "Movies": RE_MOVIE,
+    "Music": RE_MUSIC,
+}
+
 EXT_CATEGORIES = {
     'video': {'mkv', 'mp4', 'avi', 'ts', 'wmv', 'vob', 'm4v', 'webm', 'mpg', 'mpeg', 'flv', 'mov', '3gp', 'm2ts'},
     'audio': {'flac', 'mp3', 'm4a', 'aac', 'wav', 'alac', 'ogg', 'ape', 'opus', 'wma', 'cue'},
     'audiobook': {'m4b', 'aax', 'aa'},
-    'ebook': {'pdf', 'epub', 'mobi', 'azw3', 'djvu', 'fb2', 'cbr', 'cbz', 'chm'},
+    'ebook': {'pdf', 'epub', 'mobi', 'azw3', 'djvu', 'fb2', 'cbr', 'cbz', 'chm', 'zim'},
     'archive': {'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'iso', 'bin'},
     'software': {'exe', 'msi', 'dmg', 'pkg', 'deb', 'rpm', 'appimage', 'apk'},
-    'game_rom': {'nsp', 'xci', 'cia', 'vpk', 'nds', '3ds', 'wbfs', 'gcm', 'rom', 'wad'},
+    'game_rom': {'nsp', 'xci', 'cia', 'vpk', 'nds', '3ds', 'wbfs', 'gcm', 'rom', 'wad', 'rvz', 'chd', 'cso'},
+    '3d_model': {'stl', 'obj', 'fbx', 'blend', 'max', 'c4d'},
 }
 
 def extract_extension(filename):
@@ -181,16 +213,16 @@ def get_text_and_features(item, normalize_dense=True, dense_version=1):
     
     combined_name = name + " " + " ".join(file_paths[:5])
     
-    has_adult = bool(RE_ADULT.search(combined_name))
+    has_adult = bool(RE_ADULT.search(combined_name)) or bool(RE_JAV.search(combined_name))
     has_anime = bool(RE_ANIME.search(combined_name))
     has_docu = bool(RE_DOCU.search(combined_name))
-    has_tv = bool(RE_TV.search(combined_name)) and (not has_anime) and (not has_docu)
     has_audiobook = bool(RE_AUDIOBOOK.search(combined_name))
-    has_book = bool(RE_BOOK.search(combined_name))
-    has_game = bool(RE_GAME.search(combined_name))
-    has_app = bool(RE_APP.search(combined_name)) and (not has_game)
-    has_movie = bool(RE_MOVIE.search(combined_name)) and (not has_tv) and (not has_docu) and (not has_anime)
-    has_music = bool(RE_MUSIC.search(combined_name)) and (not has_audiobook)
+    has_book = bool(RE_BOOK.search(combined_name)) and (not has_audiobook)
+    has_app = bool(RE_APP.search(combined_name))
+    has_game = bool(RE_GAME.search(combined_name)) and (not has_app)
+    has_tv = bool(RE_TV.search(combined_name)) and (not has_anime) and (not has_docu) and (not has_game)
+    has_movie = bool(RE_MOVIE.search(combined_name)) and (not has_tv) and (not has_docu) and (not has_anime) and (not has_game)
+    has_music = bool(RE_MUSIC.search(combined_name)) and (not has_audiobook) and (not has_game)
     
     regex_feats = [
         1.0 if has_tv else 0.0,
@@ -205,6 +237,23 @@ def get_text_and_features(item, normalize_dense=True, dense_version=1):
         1.0 if has_music else 0.0,
     ]
     
+    # Domain anchor tokens injected into text for TF-IDF attention
+    domain_anchors = []
+    if has_adult: domain_anchors.extend(["domadult", "domadult"])
+    if has_anime: domain_anchors.extend(["domanime", "domanime"])
+    if has_docu: domain_anchors.extend(["domdocu", "domdocu", "domdocu"])
+    if has_tv: domain_anchors.extend(["domtv", "domtv"])
+    if has_audiobook: domain_anchors.extend(["domaudiobook", "domaudiobook"])
+    if has_book: domain_anchors.extend(["dombook", "dombook"])
+    if has_game: domain_anchors.extend(["domgame", "domgame"])
+    if has_app: domain_anchors.extend(["domapp", "domapp"])
+    if has_movie: domain_anchors.extend(["dommovie", "dommovie"])
+    if has_music: domain_anchors.extend(["dommusic", "dommusic"])
+    anchor_str = " ".join(domain_anchors)
+    
+    # Scale regex features in dense vector for gradient impact
+    scaled_regex_feats = [f * 2.0 for f in regex_feats]
+    
     if dense_version >= 2:
         largest_file_ratio = min(max_file_len / denom, 1.0)
         meta_feats = [
@@ -214,13 +263,13 @@ def get_text_and_features(item, normalize_dense=True, dense_version=1):
             has_cue,
             has_setup_exe
         ]
-        dense_vector = [eff_log_size, eff_log_count, is_single] + ext_ratios + regex_feats + meta_feats
+        dense_vector = [eff_log_size, eff_log_count, is_single] + ext_ratios + scaled_regex_feats + meta_feats
         # Select informative file paths for text
         selected_paths = file_paths[:20] if len(file_paths) <= 20 else file_paths[:10] + file_paths[-10:]
-        text_content = name + " " + " ".join(selected_paths)
+        text_content = name + " " + anchor_str + " " + " ".join(selected_paths)
     else:
-        dense_vector = [eff_log_size, eff_log_count, is_single] + ext_ratios + regex_feats
-        text_content = name + " " + " ".join(file_paths[:15])
+        dense_vector = [eff_log_size, eff_log_count, is_single] + ext_ratios + scaled_regex_feats
+        text_content = name + " " + anchor_str + " " + " ".join(file_paths[:15])
 
     clean_text = re.sub(r'[\._\-\+\[\]\(\)\{\}]', ' ', text_content)
     clean_text = re.sub(r'\s+', ' ', clean_text).strip()
