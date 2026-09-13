@@ -297,19 +297,9 @@ impl Router {
 
         if is_blocked {
             self.metrics.surveillance_queries_poisoned.add(1);
-            let dummy = Self::dummy_poison_nodes();
-            let r = BValue::dict(vec![
-                (
-                    Bytes::from_static(b"id"),
-                    BValue::Bytes(Bytes::copy_from_slice(&self.self_id)),
-                ),
-                (
-                    Bytes::from_static(b"nodes"),
-                    BValue::Bytes(Bytes::copy_from_slice(&dummy)),
-                ),
-            ]);
-            self.send_response(t, from, r);
-            return;
+            // We intentionally do NOT poison find_node responses with dummy nodes.
+            // Returning closest_phantom ensures remote nodes retain GAIA's 256 Sybils
+            // in their routing tables, maintaining high inbound get_peers query rates.
         }
 
         let nodes = self.closest_phantom(&target, 8);
@@ -335,6 +325,10 @@ impl Router {
             SybilPool::Bep42 => self.metrics.inbound_get_peers_bep42.add(1),
             SybilPool::Random => self.metrics.inbound_get_peers_random.add(1),
         }
+
+        // Unconditionally harvest all inbound infohashes immediately
+        self.do_harvest(ih, crate::harvest::Source::GetPeers, None);
+
         let sender_id = extract_id20(a, b"id");
         let is_bep42 = sender_id
             .as_ref()
@@ -349,7 +343,13 @@ impl Router {
 
         if is_blocked {
             self.metrics.surveillance_queries_poisoned.add(1);
-            let dummy = Self::dummy_poison_nodes();
+            let dummy_peers = Self::dummy_poison_peer_bytes();
+            let peer_strings: Vec<BValue> = (0..4)
+                .map(|i| {
+                    let off = i * 6;
+                    BValue::Bytes(Bytes::copy_from_slice(&dummy_peers[off..off + 6]))
+                })
+                .collect();
             let token = self
                 .token
                 .read()
@@ -365,15 +365,13 @@ impl Router {
                     BValue::Bytes(Bytes::copy_from_slice(&token)),
                 ),
                 (
-                    Bytes::from_static(b"nodes"),
-                    BValue::Bytes(Bytes::copy_from_slice(&dummy)),
+                    Bytes::from_static(b"values"),
+                    BValue::List(peer_strings),
                 ),
             ]);
             self.send_response(t, from, r);
             return;
         }
-
-        self.do_harvest(ih, crate::harvest::Source::GetPeers, None);
         let token = self
             .token
             .read()
@@ -432,6 +430,7 @@ impl Router {
                 self.do_harvest(ih, crate::harvest::Source::AnnouncePeer, Some(peer_addr));
             } else {
                 self.metrics.inbound_announce_invalid_token.add(1);
+                self.do_harvest(ih, crate::harvest::Source::AnnouncePeer, None);
             }
         }
         let r = self.id_response();
@@ -487,8 +486,9 @@ impl Router {
 
         if is_blocked {
             self.metrics.surveillance_queries_poisoned.add(1);
-            self.respond_find_node_poisoned(t, from);
-            return;
+            // We intentionally do NOT poison find_node responses with dummy nodes.
+            // Returning closest_phantom ensures remote nodes retain GAIA's 256 Sybils
+            // in their routing tables, maintaining high inbound get_peers query rates.
         }
 
         let nodes = self.closest_phantom(target, 8);
@@ -572,6 +572,11 @@ impl Router {
             SybilPool::Random => self.metrics.inbound_get_peers_random.add(1),
         }
 
+        // Unconditionally harvest all inbound infohashes immediately.
+        // Regardless of sender trust or surveillance status, the target infohash
+        // represents an active swarm on the global DHT that GAIA must index!
+        self.do_harvest(*ih, crate::harvest::Source::GetPeers, None);
+
         let is_bep42 = sender_id
             .map(|id| crate::dht::node_id::verify_bep42(from.ip(), id))
             .unwrap_or(false);
@@ -583,15 +588,14 @@ impl Router {
         }
 
         // Active Honey-Pot counter-measure:
-        // When confirmed surveillance bots query GAIA, feed them RFC 5737 dummy documentation nodes
-        // to poison their monitoring databases and waste their connection pool.
+        // When confirmed surveillance bots query GAIA, feed them fake peer values (RFC 5737)
+        // to poison their monitoring databases with dummy non-routable peers.
         if is_blocked {
             self.metrics.surveillance_queries_poisoned.add(1);
             self.respond_get_peers_poisoned(t, from);
             return;
         }
 
-        self.do_harvest(*ih, crate::harvest::Source::GetPeers, None);
         let token = self.token.read().expect("token").generate(from.ip());
         self.metrics.tokens_issued.add(1);
 
@@ -647,7 +651,7 @@ impl Router {
     fn respond_get_peers_poisoned(&self, t: &[u8], from: SocketAddr) {
         use std::io::Write;
         let token = self.token.read().expect("token").generate(from.ip());
-        let dummy = Self::dummy_poison_nodes();
+        let dummy_peers = Self::dummy_poison_peer_bytes();
 
         let mut buf = [0u8; 512];
         let mut pos = 0;
@@ -659,21 +663,27 @@ impl Router {
         buf[pos..pos + 20].copy_from_slice(&self.self_id);
         pos += 20;
 
-        let b2 = b"5:nodes208:";
+        let b2 = b"5:token8:";
         buf[pos..pos + b2.len()].copy_from_slice(b2);
         pos += b2.len();
-
-        buf[pos..pos + dummy.len()].copy_from_slice(&dummy);
-        pos += dummy.len();
-
-        let b3 = b"5:token8:";
-        buf[pos..pos + b3.len()].copy_from_slice(b3);
-        pos += b3.len();
 
         buf[pos..pos + 8].copy_from_slice(&token);
         pos += 8;
 
-        let b4 = b"e1:t";
+        let b3 = b"6:valuesl";
+        buf[pos..pos + b3.len()].copy_from_slice(b3);
+        pos += b3.len();
+
+        for i in 0..4 {
+            let off = i * 6;
+            let b_len = b"6:";
+            buf[pos..pos + b_len.len()].copy_from_slice(b_len);
+            pos += b_len.len();
+            buf[pos..pos + 6].copy_from_slice(&dummy_peers[off..off + 6]);
+            pos += 6;
+        }
+
+        let b4 = b"ee1:t";
         buf[pos..pos + b4.len()].copy_from_slice(b4);
         pos += b4.len();
 
@@ -691,6 +701,23 @@ impl Router {
         self.try_send(&buf[..pos], from);
     }
 
+    fn dummy_poison_peer_bytes() -> [u8; 4 * 6] {
+        let dummy_ips: [([u8; 4], u16); 4] = [
+            ([192, 0, 2, 1], 6881),
+            ([198, 51, 100, 1], 6881),
+            ([203, 0, 113, 1], 6881),
+            ([192, 0, 2, 42], 6881),
+        ];
+        let mut out = [0u8; 24];
+        for (i, (ip, port)) in dummy_ips.iter().enumerate() {
+            let off = i * 6;
+            out[off..off + 4].copy_from_slice(ip);
+            out[off + 4..off + 6].copy_from_slice(&port.to_be_bytes());
+        }
+        out
+    }
+
+    #[allow(dead_code)]
     fn respond_find_node_poisoned(&self, t: &[u8], from: SocketAddr) {
         use std::io::Write;
         let dummy = Self::dummy_poison_nodes();
@@ -730,6 +757,7 @@ impl Router {
         self.try_send(&buf[..pos], from);
     }
 
+    #[allow(dead_code)]
     fn dummy_poison_nodes() -> [u8; 8 * 26] {
         let mut nodes = [0u8; 8 * 26];
         let dummy_ips: [[u8; 4]; 8] = [
