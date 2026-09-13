@@ -590,7 +590,7 @@ impl Router {
         // to poison their monitoring databases with dummy non-routable peers.
         if is_blocked {
             self.metrics.surveillance_queries_poisoned.add(1);
-            self.respond_get_peers_poisoned(t, from);
+            self.respond_get_peers_poisoned(t, ih, from);
             return;
         }
 
@@ -654,12 +654,13 @@ impl Router {
         }
     }
 
-    fn respond_get_peers_poisoned(&self, t: &[u8], from: SocketAddr) {
+    fn respond_get_peers_poisoned(&self, t: &[u8], ih: &[u8; 20], from: SocketAddr) {
         use std::io::Write;
         let token = self.token.read().expect("token").generate(from.ip());
         let poison_peers = self.get_poison_peers(&from.ip());
+        let nodes = self.closest_phantom(ih, 8);
 
-        let mut buf = [0u8; 512];
+        let mut buf = [0u8; 768];
         let mut pos = 0;
 
         let b1 = b"d1:rd2:id20:";
@@ -669,6 +670,21 @@ impl Router {
         buf[pos..pos + 20].copy_from_slice(&self.self_id);
         pos += 20;
 
+        // Canonical BEP 5 bencode key order: 'id' < 'nodes' < 'token' < 'values'
+        // 1. Return 8 closest phantom Sybil nodes so the scraper keeps recursively querying GAIA
+        let b_nodes = b"5:nodes";
+        buf[pos..pos + b_nodes.len()].copy_from_slice(b_nodes);
+        pos += b_nodes.len();
+
+        let compact_len = nodes.len() * 26;
+        let mut cursor = std::io::Cursor::new(&mut buf[pos..]);
+        write!(cursor, "{}:", compact_len).unwrap();
+        pos += cursor.position() as usize;
+
+        let written = crate::dht::routing_table::encode_compact_into(&nodes, &mut buf[pos..pos + compact_len]);
+        pos += written;
+
+        // 2. Token
         let b2 = b"5:token8:";
         buf[pos..pos + b2.len()].copy_from_slice(b2);
         pos += b2.len();
@@ -676,6 +692,7 @@ impl Router {
         buf[pos..pos + 8].copy_from_slice(&token);
         pos += 8;
 
+        // 3. Values: 4 rival/fake peer endpoints to poison surveillance monitor
         let b3 = b"6:valuesl";
         buf[pos..pos + b3.len()].copy_from_slice(b3);
         pos += b3.len();
