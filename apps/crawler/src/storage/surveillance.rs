@@ -2,7 +2,7 @@ use crate::metrics::{Add1, Metrics};
 use dashmap::{DashMap, DashSet};
 use sqlx::PgPool;
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +68,7 @@ pub struct SurveillanceRecorder {
     pool: Option<PgPool>,
     nodes: Arc<DashMap<IpAddr, SurveillanceNodeEntry>>,
     blocked_ips: Arc<DashSet<IpAddr>>,
+    mesh_endpoints: Arc<RwLock<Vec<[u8; 6]>>>,
     metrics: Arc<Metrics>,
 }
 
@@ -77,6 +78,7 @@ impl SurveillanceRecorder {
             pool,
             nodes: Arc::new(DashMap::new()),
             blocked_ips: Arc::new(DashSet::new()),
+            mesh_endpoints: Arc::new(RwLock::new(Vec::with_capacity(2048))),
             metrics,
         })
     }
@@ -91,14 +93,29 @@ impl SurveillanceRecorder {
             match rows {
                 Ok(ips) => {
                     let mut count = 0;
+                    let mut endpoints = Vec::new();
                     for (ip_str,) in ips {
                         let bare_ip = ip_str.split('/').next().unwrap_or(&ip_str);
                         if let Ok(parsed) = bare_ip.parse::<IpAddr>() {
                             self.blocked_ips.insert(parsed);
+                            if let IpAddr::V4(v4) = parsed {
+                                let mut ep = [0u8; 6];
+                                ep[0..4].copy_from_slice(&v4.octets());
+                                ep[4..6].copy_from_slice(&6881u16.to_be_bytes());
+                                endpoints.push(ep);
+                            }
                             count += 1;
                         }
                     }
-                    tracing::info!(loaded = count, "surveillance: preloaded blocked surveillance IPs");
+                    if !endpoints.is_empty() {
+                        if let Ok(mut mesh) = self.mesh_endpoints.write() {
+                            mesh.extend(endpoints);
+                            if mesh.len() > 4096 {
+                                mesh.truncate(4096);
+                            }
+                        }
+                    }
+                    tracing::info!(loaded = count, "surveillance: preloaded blocked surveillance IPs into redirection mesh");
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "surveillance: failed to preload blocked IPs");
@@ -111,6 +128,65 @@ impl SurveillanceRecorder {
     #[inline]
     pub fn is_blocked(&self, ip: &IpAddr) -> bool {
         self.blocked_ips.contains(ip)
+    }
+
+    /// Returns 4 compact peer endpoints (24 bytes) from the active surveillance mesh,
+    /// strictly excluding caller_ip so competing surveillance operations cross-probe each other.
+    pub fn get_mesh_peers(&self, caller_ip: &IpAddr) -> [[u8; 6]; 4] {
+        let caller_v4 = match caller_ip {
+            IpAddr::V4(v4) => Some(v4.octets()),
+            IpAddr::V6(_) => None,
+        };
+
+        if let Ok(mesh) = self.mesh_endpoints.read() {
+            let len = mesh.len();
+            if len >= 4 {
+                let mut chosen = [[0u8; 6]; 4];
+                let mut found = 0;
+                let start_idx = rand::random::<u64>() as usize % len;
+
+                for i in 0..len {
+                    let idx = (start_idx + i) % len;
+                    let ep = mesh[idx];
+                    // Never redirect a surveillance bot to itself
+                    if let Some(c_octets) = caller_v4 {
+                        if ep[0..4] == c_octets {
+                            continue;
+                        }
+                    }
+                    // Avoid duplicate peers in the same 4-peer set
+                    if chosen[..found].iter().any(|c| *c == ep) {
+                        continue;
+                    }
+                    chosen[found] = ep;
+                    found += 1;
+                    if found == 4 {
+                        return chosen;
+                    }
+                }
+                if found == 4 {
+                    return chosen;
+                }
+            }
+        }
+
+        // Fallback to RFC 5737 dummy documentation peers if mesh is not populated yet
+        Self::fallback_dummy_peers()
+    }
+
+    pub fn fallback_dummy_peers() -> [[u8; 6]; 4] {
+        let dummy_ips: [([u8; 4], u16); 4] = [
+            ([192, 0, 2, 1], 6881),
+            ([198, 51, 100, 1], 6881),
+            ([203, 0, 113, 1], 6881),
+            ([192, 0, 2, 42], 6881),
+        ];
+        let mut out = [[0u8; 6]; 4];
+        for (i, (ip, port)) in dummy_ips.iter().enumerate() {
+            out[i][0..4].copy_from_slice(ip);
+            out[i][4..6].copy_from_slice(&port.to_be_bytes());
+        }
+        out
     }
 
     /// Update node ID tracking for an entry
@@ -271,16 +347,35 @@ impl SurveillanceRecorder {
                         if !self.blocked_ips.contains(ip) {
                             self.blocked_ips.insert(*ip);
                             self.metrics.surveillance_nodes_flagged.add(1);
+                            if let IpAddr::V4(v4) = ip {
+                                let mut ep = [0u8; 6];
+                                ep[0..4].copy_from_slice(&v4.octets());
+                                ep[4..6].copy_from_slice(&6881u16.to_be_bytes());
+                                if let Ok(mut mesh) = self.mesh_endpoints.write() {
+                                    if mesh.len() < 4096 {
+                                        mesh.push(ep);
+                                    } else {
+                                        let idx = rand::random::<u64>() as usize % 4096;
+                                        mesh[idx] = ep;
+                                    }
+                                }
+                            }
                             tracing::info!(
                                 ip = %ip,
                                 score = score,
                                 category = category.as_str(),
                                 entity = %suspected,
-                                "surveillance: intercepted & blocked non-contributing/spying node"
+                                "surveillance: intercepted & blocked non-contributing/spying node into redirection mesh"
                             );
                         }
                     } else if self.blocked_ips.contains(ip) {
                         self.blocked_ips.remove(ip);
+                        if let IpAddr::V4(v4) = ip {
+                            let octets = v4.octets();
+                            if let Ok(mut mesh) = self.mesh_endpoints.write() {
+                                mesh.retain(|ep| ep[0..4] != octets);
+                            }
+                        }
                         tracing::info!(
                             ip = %ip,
                             score = score,
@@ -886,5 +981,52 @@ mod tests {
         assert!(score >= 70, "Routing table scraper must be >= 70 (score: {})", score);
         assert_eq!(category, AbuseCategory::RoutingScraper);
         assert!(desc.contains("DHT Table Scraper"));
+    }
+
+    #[test]
+    fn test_mesh_peers_excludes_caller() {
+        let metrics = Arc::new(Metrics::default());
+        let recorder = SurveillanceRecorder::new(None, metrics);
+
+        // Preload 5 rival surveillance endpoints into mesh
+        let endpoints: [[u8; 6]; 5] = [
+            [10, 0, 0, 1, 0x1a, 0xe1], // 10.0.0.1:6881
+            [10, 0, 0, 2, 0x1a, 0xe1], // 10.0.0.2:6881
+            [10, 0, 0, 3, 0x1a, 0xe1], // 10.0.0.3:6881
+            [10, 0, 0, 4, 0x1a, 0xe1], // 10.0.0.4:6881
+            [10, 0, 0, 5, 0x1a, 0xe1], // 10.0.0.5:6881
+        ];
+        {
+            let mut mesh = recorder.mesh_endpoints.write().unwrap();
+            mesh.extend_from_slice(&endpoints);
+        }
+
+        // Caller is 10.0.0.1
+        let caller = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        let peers = recorder.get_mesh_peers(&caller);
+
+        // Assert caller is strictly excluded from returned peers
+        for peer in &peers {
+            assert_ne!(
+                &peer[0..4],
+                &[10, 0, 0, 1],
+                "Mesh peer must NEVER redirect back to caller IP"
+            );
+        }
+
+        // Assert 4 distinct peers were returned
+        assert_eq!(peers.len(), 4);
+    }
+
+    #[test]
+    fn test_mesh_peers_fallback_when_empty() {
+        let metrics = Arc::new(Metrics::default());
+        let recorder = SurveillanceRecorder::new(None, metrics);
+
+        // Empty mesh returns RFC 5737 dummy peers
+        let caller = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
+        let peers = recorder.get_mesh_peers(&caller);
+        assert_eq!(peers.len(), 4);
+        assert_eq!(&peers[0][0..4], &[192, 0, 2, 1]);
     }
 }

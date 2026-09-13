@@ -343,12 +343,10 @@ impl Router {
 
         if is_blocked {
             self.metrics.surveillance_queries_poisoned.add(1);
-            let dummy_peers = Self::dummy_poison_peer_bytes();
-            let peer_strings: Vec<BValue> = (0..4)
-                .map(|i| {
-                    let off = i * 6;
-                    BValue::Bytes(Bytes::copy_from_slice(&dummy_peers[off..off + 6]))
-                })
+            let poison_peers = self.get_poison_peers(&from.ip());
+            let peer_strings: Vec<BValue> = poison_peers
+                .iter()
+                .map(|p| BValue::Bytes(Bytes::copy_from_slice(p)))
                 .collect();
             let token = self
                 .token
@@ -648,10 +646,18 @@ impl Router {
         self.try_send(&buf[..pos], from);
     }
 
+    fn get_poison_peers(&self, caller_ip: &std::net::IpAddr) -> [[u8; 6]; 4] {
+        if let Some(surv) = &self.surveillance {
+            surv.get_mesh_peers(caller_ip)
+        } else {
+            crate::storage::surveillance::SurveillanceRecorder::fallback_dummy_peers()
+        }
+    }
+
     fn respond_get_peers_poisoned(&self, t: &[u8], from: SocketAddr) {
         use std::io::Write;
         let token = self.token.read().expect("token").generate(from.ip());
-        let dummy_peers = Self::dummy_poison_peer_bytes();
+        let poison_peers = self.get_poison_peers(&from.ip());
 
         let mut buf = [0u8; 512];
         let mut pos = 0;
@@ -674,12 +680,11 @@ impl Router {
         buf[pos..pos + b3.len()].copy_from_slice(b3);
         pos += b3.len();
 
-        for i in 0..4 {
-            let off = i * 6;
+        for peer in &poison_peers {
             let b_len = b"6:";
             buf[pos..pos + b_len.len()].copy_from_slice(b_len);
             pos += b_len.len();
-            buf[pos..pos + 6].copy_from_slice(&dummy_peers[off..off + 6]);
+            buf[pos..pos + 6].copy_from_slice(peer);
             pos += 6;
         }
 
@@ -699,22 +704,6 @@ impl Router {
         pos += b5.len();
 
         self.try_send(&buf[..pos], from);
-    }
-
-    fn dummy_poison_peer_bytes() -> [u8; 4 * 6] {
-        let dummy_ips: [([u8; 4], u16); 4] = [
-            ([192, 0, 2, 1], 6881),
-            ([198, 51, 100, 1], 6881),
-            ([203, 0, 113, 1], 6881),
-            ([192, 0, 2, 42], 6881),
-        ];
-        let mut out = [0u8; 24];
-        for (i, (ip, port)) in dummy_ips.iter().enumerate() {
-            let off = i * 6;
-            out[off..off + 4].copy_from_slice(ip);
-            out[off + 4..off + 6].copy_from_slice(&port.to_be_bytes());
-        }
-        out
     }
 
     #[allow(dead_code)]
