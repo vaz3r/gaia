@@ -1398,15 +1398,15 @@ async function enrichSurveillanceNodes() {
     await pool.query(`
       UPDATE dht_surveillance_nodes 
       SET abuse_category = CASE
-        WHEN distinct_node_ids > 1 THEN 'Sybil Node Rotator'
-        WHEN find_node_count >= 20 THEN 'DHT Table Scraper'
-        WHEN suspected_entity ILIKE '%Selectel%' 
-             OR suspected_entity ILIKE '%IKWYD%' 
-             OR suspected_entity ILIKE '%Monitor%' 
-             OR suspected_entity ILIKE '%Scraper%' 
-             OR (query_count >= 10 AND announce_peer_count = 0) THEN 'Passive Swarm Monitor'
-        WHEN bep42_violations > 0 AND bep42_compliant_count = 0 THEN 'Cryptographic Spoofing Node'
-        ELSE 'Unreciprocating Leecher'
+        WHEN announce_peer_count > 0 AND distinct_node_ids <= 1 THEN 'Legitimate Peer'
+        WHEN distinct_node_ids >= 3 THEN 'Sybil Node Rotator'
+        WHEN find_node_count >= 50 AND announce_peer_count = 0 THEN 'DHT Table Scraper'
+        WHEN get_peers_count >= 20 AND announce_peer_count = 0 THEN 'Passive Swarm Monitor'
+        WHEN (get_peers_count + find_node_count) < 10 AND distinct_node_ids < 3 THEN 'Legitimate Peer'
+        WHEN score < 50 THEN 'Legitimate Peer'
+        WHEN score >= 70 THEN 'Unreciprocating Leecher'
+        WHEN bep42_violations > 0 AND bep42_compliant_count = 0 AND score >= 50 THEN 'Cryptographic Spoofing Node'
+        ELSE 'Legitimate Peer'
       END
       WHERE ip IN (
         SELECT ip FROM dht_surveillance_nodes WHERE abuse_category = 'Unclassified' LIMIT 50

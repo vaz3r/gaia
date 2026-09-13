@@ -197,6 +197,13 @@ export default function SurveillanceRadar({ onInspectTorrent }) {
             Query Flooder
           </span>
         );
+      case 'Legitimate Peer':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
+            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+            Legit Peer / Seedbox
+          </span>
+        );
       default:
         return (
           <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-medium bg-[#1c1c1c] text-[#aaa] border border-[#2a2a2a]">
@@ -423,7 +430,8 @@ export default function SurveillanceRadar({ onInspectTorrent }) {
             { id: 'DHT Table Scraper', label: 'Table Scrapers' },
             { id: 'Unreciprocating Leecher', label: 'Leechers' },
             { id: 'Cryptographic Spoofing Node', label: 'Crypto Spoofing' },
-            { id: 'High-Rate Query Flooder', label: 'Query Flooders' }
+            { id: 'High-Rate Query Flooder', label: 'Query Flooders' },
+            { id: 'Legitimate Peer', label: 'Legit Peers / Seedboxes' }
           ].map((cat) => (
             <button
               key={cat.id}
