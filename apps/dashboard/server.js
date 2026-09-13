@@ -18,6 +18,8 @@ const pool = new Pool({
   max: 25,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 15000,
+  statement_timeout: 10000,
+  query_timeout: 10000,
 });
 
 const app = express();
@@ -1304,7 +1306,7 @@ async function enrichSurveillanceNodes() {
       }
     }
 
-    // Auto-categorize any unclassified nodes based on their behavioral telemetry
+    // Backfill any legacy unclassified nodes in small batches of 50
     await pool.query(`
       UPDATE dht_surveillance_nodes 
       SET abuse_category = CASE
@@ -1318,7 +1320,9 @@ async function enrichSurveillanceNodes() {
         WHEN bep42_violations > 0 AND bep42_compliant_count = 0 THEN 'Cryptographic Spoofing Node'
         ELSE 'Unreciprocating Leecher'
       END
-      WHERE abuse_category = 'Unclassified'
+      WHERE ip IN (
+        SELECT ip FROM dht_surveillance_nodes WHERE abuse_category = 'Unclassified' LIMIT 50
+      )
     `);
   } catch (err) {
     // Non-critical background enrichment

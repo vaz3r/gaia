@@ -42,6 +42,26 @@ pub struct SurveillanceNodeEntry {
     pub sample_hashes: Vec<[u8; 20]>,
     pub first_seen: chrono::DateTime<chrono::Utc>,
     pub last_seen: chrono::DateTime<chrono::Utc>,
+    pub is_dirty: bool,
+}
+
+impl Default for SurveillanceNodeEntry {
+    fn default() -> Self {
+        let now = chrono::Utc::now();
+        Self {
+            node_ids: Vec::with_capacity(2),
+            total_node_ids_seen: 0,
+            get_peers_count: 0,
+            find_node_count: 0,
+            announce_peer_count: 0,
+            bep42_violations: 0,
+            bep42_valid: 0,
+            sample_hashes: Vec::with_capacity(5),
+            first_seen: now,
+            last_seen: now,
+            is_dirty: true,
+        }
+    }
 }
 
 pub struct SurveillanceRecorder {
@@ -111,18 +131,7 @@ impl SurveillanceRecorder {
             self.metrics.surveillance_bep42_violations.add(1);
         }
 
-        let mut entry = self.nodes.entry(ip).or_insert_with(|| SurveillanceNodeEntry {
-            node_ids: Vec::with_capacity(2),
-            total_node_ids_seen: 0,
-            get_peers_count: 0,
-            find_node_count: 0,
-            announce_peer_count: 0,
-            bep42_violations: 0,
-            bep42_valid: 0,
-            sample_hashes: Vec::with_capacity(5),
-            first_seen: chrono::Utc::now(),
-            last_seen: chrono::Utc::now(),
-        });
+        let mut entry = self.nodes.entry(ip).or_default();
 
         entry.get_peers_count = entry.get_peers_count.saturating_add(1);
         Self::track_node_id(&mut entry, sender_id);
@@ -137,6 +146,7 @@ impl SurveillanceRecorder {
             entry.sample_hashes.push(ih);
         }
         entry.last_seen = chrono::Utc::now();
+        entry.is_dirty = true;
     }
 
     /// Record an inbound `find_node` query event (detecting DHT topology scrapers)
@@ -145,18 +155,7 @@ impl SurveillanceRecorder {
             self.metrics.surveillance_bep42_violations.add(1);
         }
 
-        let mut entry = self.nodes.entry(ip).or_insert_with(|| SurveillanceNodeEntry {
-            node_ids: Vec::with_capacity(2),
-            total_node_ids_seen: 0,
-            get_peers_count: 0,
-            find_node_count: 0,
-            announce_peer_count: 0,
-            bep42_violations: 0,
-            bep42_valid: 0,
-            sample_hashes: Vec::with_capacity(5),
-            first_seen: chrono::Utc::now(),
-            last_seen: chrono::Utc::now(),
-        });
+        let mut entry = self.nodes.entry(ip).or_default();
 
         entry.find_node_count = entry.find_node_count.saturating_add(1);
         Self::track_node_id(&mut entry, sender_id);
@@ -167,22 +166,12 @@ impl SurveillanceRecorder {
             entry.bep42_violations = entry.bep42_violations.saturating_add(1);
         }
         entry.last_seen = chrono::Utc::now();
+        entry.is_dirty = true;
     }
 
     /// Record an inbound `announce_peer` event (crucial: proves legitimate swarm participation)
     pub fn record_announce_peer(&self, ip: IpAddr, sender_id: Option<&[u8; 20]>, bep42_valid: bool, ih: [u8; 20]) {
-        let mut entry = self.nodes.entry(ip).or_insert_with(|| SurveillanceNodeEntry {
-            node_ids: Vec::with_capacity(2),
-            total_node_ids_seen: 0,
-            get_peers_count: 0,
-            find_node_count: 0,
-            announce_peer_count: 0,
-            bep42_violations: 0,
-            bep42_valid: 0,
-            sample_hashes: Vec::with_capacity(5),
-            first_seen: chrono::Utc::now(),
-            last_seen: chrono::Utc::now(),
-        });
+        let mut entry = self.nodes.entry(ip).or_default();
 
         entry.announce_peer_count = entry.announce_peer_count.saturating_add(1);
         Self::track_node_id(&mut entry, sender_id);
@@ -197,6 +186,7 @@ impl SurveillanceRecorder {
             entry.sample_hashes.push(ih);
         }
         entry.last_seen = chrono::Utc::now();
+        entry.is_dirty = true;
     }
 
     /// Legacy record method forwarding to record_get_peers
@@ -204,8 +194,8 @@ impl SurveillanceRecorder {
         self.record_get_peers(ip, None, bep42_valid, ih);
     }
 
-    /// Sweeps in-memory stats, scores suspicious entities, persists to PostgreSQL,
-    /// and purges benign single-query users from RAM.
+    /// Sweeps in-memory stats, scores suspicious entities, persists to PostgreSQL in small chunks,
+    /// and purges inactive/benign entries from RAM.
     pub async fn flush(&self) {
         if self.nodes.is_empty() {
             return;
@@ -213,9 +203,10 @@ impl SurveillanceRecorder {
 
         let mut candidates = Vec::new();
         let mut to_purge = Vec::new();
+        let now = chrono::Utc::now();
 
         // 1. Scan DashMap entries
-        for item in self.nodes.iter() {
+        for mut item in self.nodes.iter_mut() {
             let ip = *item.key();
             let entry = item.value().clone();
             let asn_hint = detect_asn_hint(&ip);
@@ -228,18 +219,27 @@ impl SurveillanceRecorder {
                 && asn_hint.is_none() 
                 && !self.blocked_ips.contains(&ip) 
             {
-                if (chrono::Utc::now() - entry.last_seen).num_seconds() > 300 {
+                if (now - entry.last_seen).num_seconds() > 300 {
                     to_purge.push(ip);
                 }
                 continue;
             }
 
-            // Suspicious or surveillance candidate
-            let (score, category, suspected) = calculate_universal_threat_score(&entry, asn_hint);
-            candidates.push((ip, entry, asn_hint, score, category, suspected));
+            // Inactive flushed nodes: prune from memory after 1 hour of inactivity
+            if !entry.is_dirty && (now - entry.last_seen).num_seconds() > 3600 {
+                to_purge.push(ip);
+                continue;
+            }
+
+            // Only flush dirty candidates!
+            if entry.is_dirty {
+                item.is_dirty = false;
+                let (score, category, suspected) = calculate_universal_threat_score(&entry, asn_hint);
+                candidates.push((ip, entry, asn_hint, score, category, suspected));
+            }
         }
 
-        // Purge old benign entries
+        // Purge old entries
         for ip in to_purge {
             self.nodes.remove(&ip);
         }
@@ -248,101 +248,103 @@ impl SurveillanceRecorder {
             return;
         }
 
-        // 2. Persist to Postgres if available
+        // 2. Persist to Postgres in small chunks of 50 to avoid long-lived transaction locks
         if let Some(pool) = &self.pool {
-            let mut tx = match pool.begin().await {
-                Ok(tx) => tx,
-                Err(e) => {
-                    tracing::warn!(error = %e, "surveillance: failed to begin tx");
-                    return;
-                }
-            };
+            for chunk in candidates.chunks(50) {
+                let mut tx = match pool.begin().await {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "surveillance: failed to begin tx for chunk");
+                        break;
+                    }
+                };
 
-            for (ip, entry, asn_hint, score, category, suspected) in &candidates {
-                let asn = asn_hint.map(|(a, _, _)| a.to_string());
-                let org = asn_hint.map(|(_, o, _)| o.to_string());
-                let is_blocked = *score >= 60;
-                let sample_hashes: Vec<Vec<u8>> = entry.sample_hashes.iter().map(|h| h.to_vec()).collect();
-                let total_queries = (entry.get_peers_count + entry.find_node_count) as i64;
-                let distinct_node_ids = entry.total_node_ids_seen.max(1) as i32;
+                for (ip, entry, asn_hint, score, category, suspected) in chunk {
+                    let asn = asn_hint.map(|(a, _, _)| a.to_string());
+                    let org = asn_hint.map(|(_, o, _)| o.to_string());
+                    let is_blocked = *score >= 60;
+                    let sample_hashes: Vec<Vec<u8>> = entry.sample_hashes.iter().map(|h| h.to_vec()).collect();
+                    let total_queries = (entry.get_peers_count + entry.find_node_count) as i64;
+                    let distinct_node_ids = entry.total_node_ids_seen.max(1) as i32;
 
-                if is_blocked && !self.blocked_ips.contains(ip) {
-                    self.blocked_ips.insert(*ip);
-                    self.metrics.surveillance_nodes_flagged.add(1);
-                    tracing::info!(
-                        ip = %ip,
-                        score = score,
-                        category = category.as_str(),
-                        entity = %suspected,
-                        "surveillance: intercepted & blocked non-contributing/spying node"
-                    );
-                }
+                    if is_blocked && !self.blocked_ips.contains(ip) {
+                        self.blocked_ips.insert(*ip);
+                        self.metrics.surveillance_nodes_flagged.add(1);
+                        tracing::info!(
+                            ip = %ip,
+                            score = score,
+                            category = category.as_str(),
+                            entity = %suspected,
+                            "surveillance: intercepted & blocked non-contributing/spying node"
+                        );
+                    }
 
-                let query_result = sqlx::query(
-                    r#"
-                    INSERT INTO dht_surveillance_nodes (
-                        ip, asn, org, score, query_count, distinct_hashes,
-                        bep42_violations, bep42_compliant_count, suspected_entity,
-                        sample_hashes, is_blocked, first_seen, last_seen,
-                        find_node_count, get_peers_count, announce_peer_count,
-                        distinct_node_ids, abuse_category
+                    let query_result = sqlx::query(
+                        r#"
+                        INSERT INTO dht_surveillance_nodes (
+                            ip, asn, org, score, query_count, distinct_hashes,
+                            bep42_violations, bep42_compliant_count, suspected_entity,
+                            sample_hashes, is_blocked, first_seen, last_seen,
+                            find_node_count, get_peers_count, announce_peer_count,
+                            distinct_node_ids, abuse_category
+                        )
+                        VALUES ($1::inet, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                        ON CONFLICT (ip) DO UPDATE SET
+                            asn = COALESCE(dht_surveillance_nodes.asn, EXCLUDED.asn),
+                            org = COALESCE(dht_surveillance_nodes.org, EXCLUDED.org),
+                            score = GREATEST(dht_surveillance_nodes.score, EXCLUDED.score),
+                            query_count = dht_surveillance_nodes.query_count + EXCLUDED.query_count,
+                            distinct_hashes = GREATEST(dht_surveillance_nodes.distinct_hashes, EXCLUDED.distinct_hashes),
+                            bep42_violations = dht_surveillance_nodes.bep42_violations + EXCLUDED.bep42_violations,
+                            bep42_compliant_count = dht_surveillance_nodes.bep42_compliant_count + EXCLUDED.bep42_compliant_count,
+                            find_node_count = dht_surveillance_nodes.find_node_count + EXCLUDED.find_node_count,
+                            get_peers_count = dht_surveillance_nodes.get_peers_count + EXCLUDED.get_peers_count,
+                            announce_peer_count = dht_surveillance_nodes.announce_peer_count + EXCLUDED.announce_peer_count,
+                            distinct_node_ids = GREATEST(dht_surveillance_nodes.distinct_node_ids, EXCLUDED.distinct_node_ids),
+                            abuse_category = EXCLUDED.abuse_category,
+                            suspected_entity = CASE 
+                                WHEN dht_surveillance_nodes.suspected_entity = 'Unknown Monitor' 
+                                     OR dht_surveillance_nodes.suspected_entity = 'Suspicious Query Node'
+                                     OR dht_surveillance_nodes.suspected_entity = 'Suspicious Non-Contributing Node'
+                                THEN EXCLUDED.suspected_entity 
+                                ELSE dht_surveillance_nodes.suspected_entity 
+                            END,
+                            sample_hashes = ARRAY(
+                                SELECT DISTINCT elem FROM UNNEST(dht_surveillance_nodes.sample_hashes || EXCLUDED.sample_hashes) AS elem LIMIT 10
+                            ),
+                            is_blocked = (GREATEST(dht_surveillance_nodes.score, EXCLUDED.score) >= 60),
+                            last_seen = EXCLUDED.last_seen
+                        "#,
                     )
-                    VALUES ($1::inet, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-                    ON CONFLICT (ip) DO UPDATE SET
-                        asn = COALESCE(dht_surveillance_nodes.asn, EXCLUDED.asn),
-                        org = COALESCE(dht_surveillance_nodes.org, EXCLUDED.org),
-                        score = GREATEST(dht_surveillance_nodes.score, EXCLUDED.score),
-                        query_count = dht_surveillance_nodes.query_count + EXCLUDED.query_count,
-                        distinct_hashes = GREATEST(dht_surveillance_nodes.distinct_hashes, EXCLUDED.distinct_hashes),
-                        bep42_violations = dht_surveillance_nodes.bep42_violations + EXCLUDED.bep42_violations,
-                        bep42_compliant_count = dht_surveillance_nodes.bep42_compliant_count + EXCLUDED.bep42_compliant_count,
-                        find_node_count = dht_surveillance_nodes.find_node_count + EXCLUDED.find_node_count,
-                        get_peers_count = dht_surveillance_nodes.get_peers_count + EXCLUDED.get_peers_count,
-                        announce_peer_count = dht_surveillance_nodes.announce_peer_count + EXCLUDED.announce_peer_count,
-                        distinct_node_ids = GREATEST(dht_surveillance_nodes.distinct_node_ids, EXCLUDED.distinct_node_ids),
-                        abuse_category = EXCLUDED.abuse_category,
-                        suspected_entity = CASE 
-                            WHEN dht_surveillance_nodes.suspected_entity = 'Unknown Monitor' 
-                                 OR dht_surveillance_nodes.suspected_entity = 'Suspicious Query Node'
-                                 OR dht_surveillance_nodes.suspected_entity = 'Suspicious Non-Contributing Node'
-                            THEN EXCLUDED.suspected_entity 
-                            ELSE dht_surveillance_nodes.suspected_entity 
-                        END,
-                        sample_hashes = ARRAY(
-                            SELECT DISTINCT elem FROM UNNEST(dht_surveillance_nodes.sample_hashes || EXCLUDED.sample_hashes) AS elem LIMIT 10
-                        ),
-                        is_blocked = (GREATEST(dht_surveillance_nodes.score, EXCLUDED.score) >= 60),
-                        last_seen = EXCLUDED.last_seen
-                    "#,
-                )
-                .bind(ip.to_string())
-                .bind(asn)
-                .bind(org)
-                .bind(score)
-                .bind(total_queries)
-                .bind(entry.sample_hashes.len() as i32)
-                .bind(entry.bep42_violations as i32)
-                .bind(entry.bep42_valid as i32)
-                .bind(suspected)
-                .bind(&sample_hashes)
-                .bind(is_blocked)
-                .bind(entry.first_seen)
-                .bind(entry.last_seen)
-                .bind(entry.find_node_count as i64)
-                .bind(entry.get_peers_count as i64)
-                .bind(entry.announce_peer_count as i64)
-                .bind(distinct_node_ids)
-                .bind(category.as_str())
-                .execute(&mut *tx)
-                .await;
+                    .bind(ip.to_string())
+                    .bind(asn)
+                    .bind(org)
+                    .bind(score)
+                    .bind(total_queries)
+                    .bind(entry.sample_hashes.len() as i32)
+                    .bind(entry.bep42_violations as i32)
+                    .bind(entry.bep42_valid as i32)
+                    .bind(suspected)
+                    .bind(&sample_hashes)
+                    .bind(is_blocked)
+                    .bind(entry.first_seen)
+                    .bind(entry.last_seen)
+                    .bind(entry.find_node_count as i64)
+                    .bind(entry.get_peers_count as i64)
+                    .bind(entry.announce_peer_count as i64)
+                    .bind(distinct_node_ids)
+                    .bind(category.as_str())
+                    .execute(&mut *tx)
+                    .await;
 
-                if let Err(e) = query_result {
-                    tracing::warn!(error = %e, ip = %ip, "surveillance: failed to upsert node");
+                    if let Err(e) = query_result {
+                        tracing::warn!(error = %e, ip = %ip, "surveillance: failed to upsert node");
+                    }
                 }
-            }
 
-            if let Err(e) = tx.commit().await {
-                tracing::warn!(error = %e, "surveillance: commit failed");
+                if let Err(e) = tx.commit().await {
+                    tracing::warn!(error = %e, "surveillance: commit failed for chunk");
+                }
             }
         }
     }
@@ -630,6 +632,7 @@ mod tests {
             sample_hashes: vec![[10u8; 20]],
             first_seen: chrono::Utc::now(),
             last_seen: chrono::Utc::now(),
+            is_dirty: true,
         };
         // No ASN hint needed: pure behavioral detection!
         let (score, category, desc) = calculate_universal_threat_score(&entry, None);
@@ -651,6 +654,7 @@ mod tests {
             sample_hashes: vec![[1u8; 20], [2u8; 20], [3u8; 20], [4u8; 20], [5u8; 20]],
             first_seen: chrono::Utc::now(),
             last_seen: chrono::Utc::now(),
+            is_dirty: true,
         };
         let (score, category, desc) = calculate_universal_threat_score(&entry, None);
         assert!(score >= 80);
@@ -671,6 +675,7 @@ mod tests {
             sample_hashes: vec![],
             first_seen: chrono::Utc::now(),
             last_seen: chrono::Utc::now(),
+            is_dirty: true,
         };
         let (score, category, desc) = calculate_universal_threat_score(&entry, None);
         assert!(score >= 60);
@@ -691,6 +696,7 @@ mod tests {
             sample_hashes: vec![[1u8; 20]],
             first_seen: chrono::Utc::now(),
             last_seen: chrono::Utc::now(),
+            is_dirty: true,
         };
         let (score, category, _) = calculate_universal_threat_score(&entry, None);
         assert_eq!(score, 0);
