@@ -1303,6 +1303,23 @@ async function enrichSurveillanceNodes() {
         );
       }
     }
+
+    // Auto-categorize any unclassified nodes based on their behavioral telemetry
+    await pool.query(`
+      UPDATE dht_surveillance_nodes 
+      SET abuse_category = CASE
+        WHEN distinct_node_ids > 1 THEN 'Sybil Node Rotator'
+        WHEN find_node_count >= 20 THEN 'DHT Table Scraper'
+        WHEN suspected_entity ILIKE '%Selectel%' 
+             OR suspected_entity ILIKE '%IKWYD%' 
+             OR suspected_entity ILIKE '%Monitor%' 
+             OR suspected_entity ILIKE '%Scraper%' 
+             OR (query_count >= 10 AND announce_peer_count = 0) THEN 'Passive Swarm Monitor'
+        WHEN bep42_violations > 0 AND bep42_compliant_count = 0 THEN 'Cryptographic Spoofing Node'
+        ELSE 'Unreciprocating Leecher'
+      END
+      WHERE abuse_category = 'Unclassified'
+    `);
   } catch (err) {
     // Non-critical background enrichment
   }
@@ -2220,6 +2237,7 @@ app.get(/^(?!\/api)/, (req, res) => res.sendFile(path.join(dist, 'index.html')))
     await refreshAlertsSummary();
     await refreshCategoryCounts();
     await computeAnalysis();
+    await enrichSurveillanceNodes();
   } catch (e) {
     console.error("Warmup error:", e.message);
   }
