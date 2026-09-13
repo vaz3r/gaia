@@ -54,6 +54,7 @@ class ScoringWorker:
         self.running = True
         self.scoring_run_id = uuid.uuid4()
         self.last_retrain_time = time.time()
+        self.last_prune_time = 0.0
 
         logger.info(f"Loading TrustClassifier model from {MODEL_PATH}...")
         self.classifier = TrustClassifier.load(MODEL_PATH)
@@ -326,6 +327,26 @@ class ScoringWorker:
                 # Retry in 6 hours instead of waiting full interval
                 self.last_retrain_time = now - self.retrain_interval_sec + 21600
 
+    def maybe_prune_history(self, conn):
+        """
+        Prunes routine historical scores older than 72 hours once daily,
+        preserving any manually overridden audit records.
+        """
+        now = time.time()
+        if now - self.last_prune_time >= 86400.0:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        DELETE FROM torrent_score_history
+                        WHERE scored_at < NOW() - INTERVAL '72 hours'
+                          AND score_status != 'OVERRIDDEN';
+                    """)
+                conn.commit()
+                self.last_prune_time = now
+                logger.info("Daily audit log retention maintenance completed: pruned score history older than 72 hours.")
+            except Exception as e:
+                logger.warning(f"Failed to prune old score history: {e}")
+
     def start(self):
         logger.info(
             f"Starting ScoringWorker daemon (run_id={self.scoring_run_id}, "
@@ -337,6 +358,7 @@ class ScoringWorker:
                 conn = get_db_connection()
                 conn.autocommit = False
                 scored = self.run_scoring_cycle(conn)
+                self.maybe_prune_history(conn)
                 conn.close()
 
                 # Check periodic retraining

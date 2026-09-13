@@ -150,7 +150,12 @@ const ROUTING_SECURITY_CACHE_MS = 30000; // 30 seconds
 let categoryCountsCache = {};
 async function refreshCategoryCounts() {
   try {
-    const res = await query('SELECT category, count FROM category_stats_summary');
+    const res = await query(`
+      SELECT category, count(*)::bigint as count
+      FROM torrents
+      WHERE category IS NOT NULL
+      GROUP BY category
+    `);
     const map = {};
     for (const r of res.rows) {
       map[r.category] = parseInt(r.count, 10);
@@ -311,11 +316,7 @@ app.get('/api/torrents', async (req, res) => {
       if (hasCategory) {
         totalCount = categoryCountsCache[category] || 0;
         if (!totalCount) {
-          try {
-            const catRes = await query('SELECT count FROM category_stats_summary WHERE category = $1', [category]);
-            totalCount = parseInt(catRes.rows[0]?.count || 0, 10);
-            if (totalCount) categoryCountsCache[category] = totalCount;
-          } catch {}
+          refreshCategoryCounts().catch(() => {});
         }
       } else if (statsCache.data?.total_torrents) {
         totalCount = statsCache.data.total_torrents;
@@ -951,13 +952,187 @@ app.get('/api/stats', async (req, res) => {
   res.json(data || {});
 });
 
+// Global octet-to-geography mapping for swarm peers
+const OCTET_GEO_MAP = {
+  '95': { country: 'Germany', code: 'DE', asn: 'AS24940 Hetzner Online GmbH', flag: '🇩🇪' },
+  '188': { country: 'Netherlands', code: 'NL', asn: 'AS49981 WorldStream B.V.', flag: '🇳🇱' },
+  '46': { country: 'Poland', code: 'PL', asn: 'AS13122 Orange Polska', flag: '🇵🇱' },
+  '5': { country: 'United States', code: 'US', asn: 'AS8075 Microsoft Corp / Azure', flag: '🇺🇸' },
+  '31': { country: 'France', code: 'FR', asn: 'AS12322 Free SAS / Iliad', flag: '🇫🇷' },
+  '178': { country: 'United Kingdom', code: 'GB', asn: 'AS5607 Sky Broadband', flag: '🇬🇧' },
+  '176': { country: 'Sweden', code: 'SE', asn: 'AS3301 Telia Company AB', flag: '🇸🇪' },
+  '37': { country: 'Spain', code: 'ES', asn: 'AS3352 Telefónica de España', flag: '🇪🇸' },
+  '185': { country: 'Canada', code: 'CA', asn: 'AS16276 OVH SAS Datacenter', flag: '🇨🇦' },
+  '94': { country: 'Italy', code: 'IT', asn: 'AS30722 Vodafone Italia', flag: '🇮🇹' }
+};
+
+// In-Memory Telemetry Cache: Replaces 5 phantom PostgreSQL summary tables.
+// Computes aggregated analytics asynchronously in the background every 10 minutes,
+// serving requests directly from memory with sub-millisecond response times.
+let analysisTelemetryCache = {
+  ts: 0,
+  summary: null,
+  categories: [],
+  survivability: [],
+  trends_7d: [],
+  peer_geography: [],
+};
+const TELEMETRY_CACHE_MS = 600000; // 10 minutes
+let isRefreshingTelemetry = false;
+
+async function refreshAnalysisTelemetry() {
+  if (isRefreshingTelemetry) return analysisTelemetryCache;
+  isRefreshingTelemetry = true;
+  try {
+    const [summaryRes, catSurvRes, trends7dRes, peerGeoRes] = await Promise.all([
+      // 1. Global Swarm & Classification Summary
+      query(`
+        SELECT 
+          count(*) as total_torrents,
+          count(category) as classified_torrents,
+          count(*) - count(category) as unclassified_torrents,
+          count(*) filter (where needs_review = true) as review_needed_torrents,
+          round(avg(total_seen), 1) as avg_sightings,
+          max(total_seen) as max_sightings,
+          count(*) filter (where total_seen >= 10) as high_activity_swarms,
+          count(*) filter (where first_seen >= now() - interval '48 hours') as fresh_swarms_48h,
+          count(*) filter (where last_seen >= now() - interval '24 hours') as active_swarms_24h,
+          round(sum(total_size / (1024*1024*1024)::numeric) / 1024, 2) as total_size_tb
+        FROM torrents
+      `),
+
+      // 2. Category Distribution & Swarm Survivability (single consolidated aggregation)
+      query(`
+        SELECT 
+          category,
+          count(*)::bigint as count,
+          round(count(*)::numeric * 100.0 / nullif(sum(count(*)) over (), 0), 2) as pct,
+          round(avg(category_confidence)::numeric, 3) as avg_confidence,
+          round(avg(total_size / (1024*1024*1024)::numeric), 2) as avg_size_gb,
+          round(sum(total_size / (1024*1024*1024)::numeric) / 1024, 2) as total_size_tb,
+          round(avg(swarm_peers::numeric), 1) as avg_peers,
+          round(avg(health_score::numeric), 1) as avg_health,
+          count(*) filter (where needs_review = true) as review_needed,
+          count(*) filter (where swarm_peers > 0) as active_seed_torrents,
+          round(count(*) filter (where swarm_peers > 0) * 100.0 / nullif(count(*), 0), 1) as survivability_pct
+        FROM torrents
+        WHERE category IS NOT NULL
+        GROUP BY category
+        ORDER BY count DESC
+      `),
+
+      // 3. Temporal Ingestion Trends (Past 7 days)
+      query(`
+        SELECT date_trunc('day', verified_at) as day, category, count(*) as count
+        FROM torrents
+        WHERE verified_at >= now() - interval '7 days' AND category IS NOT NULL
+        GROUP BY day, category
+        ORDER BY day ASC
+      `),
+
+      // 4. Swarm Peer Geography (Top CIDR clusters from stable_peers)
+      query(`
+        SELECT split_part(host(ip), '.', 1) as prefix, count(*) as peer_count
+        FROM stable_peers
+        GROUP BY prefix
+        ORDER BY peer_count DESC
+        LIMIT 10
+      `)
+    ]);
+
+    const summary = summaryRes.rows[0] || {};
+    const categories = catSurvRes.rows.map(r => ({
+      category: r.category,
+      count: parseInt(r.count, 10),
+      pct: parseFloat(r.pct),
+      avg_confidence: parseFloat(r.avg_confidence || 0),
+      avg_size_gb: parseFloat(r.avg_size_gb || 0),
+      total_size_tb: parseFloat(r.total_size_tb || 0),
+      avg_peers: parseFloat(r.avg_peers || 0),
+      avg_health: parseFloat(r.avg_health || 0),
+      review_needed: parseInt(r.review_needed || 0, 10)
+    }));
+
+    const survivability = catSurvRes.rows.map(r => ({
+      category: r.category,
+      total_torrents: parseInt(r.count, 10),
+      active_seed_torrents: parseInt(r.active_seed_torrents || 0, 10),
+      survivability_pct: parseFloat(r.survivability_pct || 0),
+      avg_swarm_peers: parseFloat(r.avg_peers || 0)
+    }));
+
+    const trends_7d = trends7dRes.rows.map(r => ({
+      day: r.day,
+      category: r.category,
+      count: parseInt(r.count, 10)
+    }));
+
+    const peerGeography = peerGeoRes.rows.map(r => {
+      const info = OCTET_GEO_MAP[r.prefix] || {
+        country: 'Global Peer Mesh',
+        code: 'XX',
+        asn: `ASN Cluster net-${r.prefix}.0.0.0/8`,
+        flag: '🌐'
+      };
+      return {
+        prefix: r.prefix,
+        peer_count: parseInt(r.peer_count, 10),
+        country: info.country,
+        country_code: info.code,
+        asn: info.asn,
+        flag: info.flag
+      };
+    });
+
+    // Populate categoryCountsCache in memory
+    for (const c of categories) {
+      categoryCountsCache[c.category] = c.count;
+    }
+
+    analysisTelemetryCache = {
+      ts: Date.now(),
+      summary: {
+        total_torrents: parseInt(summary.total_torrents || 0, 10),
+        classified_torrents: parseInt(summary.classified_torrents || 0, 10),
+        unclassified_torrents: parseInt(summary.unclassified_torrents || 0, 10),
+        review_needed_torrents: parseInt(summary.review_needed_torrents || 0, 10),
+        total_size_tb: parseFloat(summary.total_size_tb || 0),
+        avg_sightings: parseFloat(summary.avg_sightings || 0),
+        max_sightings: parseInt(summary.max_sightings || 0, 10),
+        high_activity_swarms: parseInt(summary.high_activity_swarms || 0, 10),
+        fresh_swarms_48h: parseInt(summary.fresh_swarms_48h || 0, 10),
+        active_swarms_24h: parseInt(summary.active_swarms_24h || 0, 10),
+      },
+      categories,
+      survivability,
+      trends_7d,
+      peer_geography: peerGeography
+    };
+    return analysisTelemetryCache;
+  } catch (err) {
+    console.error('Failed to refresh analysis telemetry:', err.message);
+    return analysisTelemetryCache;
+  } finally {
+    isRefreshingTelemetry = false;
+  }
+}
+
 async function computeAnalysis(selectedCategory = null) {
   try {
     const now = Date.now();
     const catFilterSql = selectedCategory ? `AND category = $1` : '';
     const catParams = selectedCategory ? [selectedCategory] : [];
 
-    const [trendingRes, velocityRes, topSwarmsRes, summaryRes, categoryStatsRes, survivabilityRes, trends7dRes, peerGeoRes] = await Promise.all([
+    // Trigger telemetry refresh if stale or never computed
+    if (!analysisTelemetryCache.summary || (now - analysisTelemetryCache.ts) >= TELEMETRY_CACHE_MS) {
+      if (!analysisTelemetryCache.summary) {
+        await refreshAnalysisTelemetry();
+      } else {
+        refreshAnalysisTelemetry().catch(console.error);
+      }
+    }
+
+    const [trendingRes, velocityRes, topSwarmsRes] = await Promise.all([
       // 1. Trending Swarms: high popularity score balancing swarm activity & velocity
       query(`
         SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
@@ -1002,138 +1177,15 @@ async function computeAnalysis(selectedCategory = null) {
         WHERE 1=1 ${catFilterSql}
         ORDER BY total_seen DESC
         LIMIT 25
-      `, catParams),
-
-      // 4. Global Swarm & Classification Summary (instant lookup from global_swarm_summary)
-      query(`
-        SELECT 
-          total_torrents,
-          classified_torrents,
-          unclassified_torrents,
-          review_needed_torrents,
-          avg_sightings,
-          max_sightings,
-          high_activity_swarms,
-          fresh_swarms_48h,
-          active_swarms_24h,
-          total_size_tb
-        FROM global_swarm_summary
-        WHERE id = 1
-      `),
-
-      // 5. Category Distribution Matrix & Metrics (instant lookup from category_stats_summary)
-      query(`
-        SELECT 
-          category,
-          count,
-          pct,
-          avg_confidence,
-          avg_size_gb,
-          total_size_tb,
-          avg_peers,
-          avg_health,
-          review_needed
-        FROM category_stats_summary
-        ORDER BY count DESC
-      `),
-
-      // 6. Category Swarm Half-Life & Survivability (instant lookup from category_survivability_summary)
-      query(`
-        SELECT 
-          category,
-          total_torrents,
-          active_seed_torrents,
-          survivability_pct,
-          avg_swarm_peers
-        FROM category_survivability_summary
-        ORDER BY survivability_pct DESC
-      `),
-
-      // 7. Temporal Ingestion Trends (Past 7 days - instant lookup from category_trends_7d_summary)
-      query(`
-        SELECT day, category, count
-        FROM category_trends_7d_summary
-        ORDER BY day ASC
-      `),
-
-      // 8. Swarm Peer Geography (instant lookup from peer_geography_summary)
-      query(`
-        SELECT prefix, peer_count
-        FROM peer_geography_summary
-        ORDER BY peer_count DESC
-        LIMIT 10
-      `)
+      `, catParams)
     ]);
 
-    // Format top peer geography with ISO 3166-1 country / network cluster labels
-    const OCTET_GEO_MAP = {
-      '95': { country: 'Germany', code: 'DE', asn: 'AS24940 Hetzner Online GmbH', flag: '🇩🇪' },
-      '188': { country: 'Netherlands', code: 'NL', asn: 'AS49981 WorldStream B.V.', flag: '🇳🇱' },
-      '46': { country: 'Poland', code: 'PL', asn: 'AS13122 Orange Polska', flag: '🇵🇱' },
-      '5': { country: 'United States', code: 'US', asn: 'AS8075 Microsoft Corp / Azure', flag: '🇺🇸' },
-      '31': { country: 'France', code: 'FR', asn: 'AS12322 Free SAS / Iliad', flag: '🇫🇷' },
-      '178': { country: 'United Kingdom', code: 'GB', asn: 'AS5607 Sky Broadband', flag: '🇬🇧' },
-      '176': { country: 'Sweden', code: 'SE', asn: 'AS3301 Telia Company AB', flag: '🇸🇪' },
-      '37': { country: 'Spain', code: 'ES', asn: 'AS3352 Telefónica de España', flag: '🇪🇸' },
-      '185': { country: 'Canada', code: 'CA', asn: 'AS16276 OVH SAS Datacenter', flag: '🇨🇦' },
-      '94': { country: 'Italy', code: 'IT', asn: 'AS30722 Vodafone Italia', flag: '🇮🇹' }
-    };
-
-    const peerGeography = peerGeoRes.rows.map(r => {
-      const info = OCTET_GEO_MAP[r.prefix] || {
-        country: 'Global Peer Mesh',
-        code: 'XX',
-        asn: `ASN Cluster net-${r.prefix}.0.0.0/8`,
-        flag: '🌐'
-      };
-      return {
-        prefix: r.prefix,
-        peer_count: parseInt(r.peer_count, 10),
-        country: info.country,
-        country_code: info.code,
-        asn: info.asn,
-        flag: info.flag
-      };
-    });
-
-    const summary = summaryRes.rows[0] || {};
     const data = {
-      summary: {
-        total_torrents: parseInt(summary.total_torrents || 0, 10),
-        classified_torrents: parseInt(summary.classified_torrents || 0, 10),
-        unclassified_torrents: parseInt(summary.unclassified_torrents || 0, 10),
-        review_needed_torrents: parseInt(summary.review_needed_torrents || 0, 10),
-        total_size_tb: parseFloat(summary.total_size_tb || 0),
-        avg_sightings: parseFloat(summary.avg_sightings || 0),
-        max_sightings: parseInt(summary.max_sightings || 0, 10),
-        high_activity_swarms: parseInt(summary.high_activity_swarms || 0, 10),
-        fresh_swarms_48h: parseInt(summary.fresh_swarms_48h || 0, 10),
-        active_swarms_24h: parseInt(summary.active_swarms_24h || 0, 10),
-      },
-      categories: categoryStatsRes.rows.map(r => ({
-        category: r.category,
-        count: parseInt(r.count, 10),
-        pct: parseFloat(r.pct),
-        avg_confidence: parseFloat(r.avg_confidence || 0),
-        avg_size_gb: parseFloat(r.avg_size_gb || 0),
-        total_size_tb: parseFloat(r.total_size_tb || 0),
-        avg_peers: parseFloat(r.avg_peers || 0),
-        avg_health: parseFloat(r.avg_health || 0),
-        review_needed: parseInt(r.review_needed || 0, 10)
-      })),
-      survivability: survivabilityRes.rows.map(r => ({
-        category: r.category,
-        total_torrents: parseInt(r.total_torrents, 10),
-        active_seed_torrents: parseInt(r.active_seed_torrents, 10),
-        survivability_pct: parseFloat(r.survivability_pct),
-        avg_swarm_peers: parseFloat(r.avg_swarm_peers)
-      })),
-      trends_7d: trends7dRes.rows.map(r => ({
-        day: r.day,
-        category: r.category,
-        count: parseInt(r.count, 10)
-      })),
-      peer_geography: peerGeography,
+      summary: analysisTelemetryCache.summary || {},
+      categories: analysisTelemetryCache.categories || [],
+      survivability: analysisTelemetryCache.survivability || [],
+      trends_7d: analysisTelemetryCache.trends_7d || [],
+      peer_geography: analysisTelemetryCache.peer_geography || [],
       selected_category: selectedCategory || 'All',
       trending: trendingRes.rows,
       fastest_growing: velocityRes.rows,
@@ -2239,7 +2291,7 @@ app.get(/^(?!\/api)/, (req, res) => res.sendFile(path.join(dist, 'index.html')))
     await refreshStats();
     await refreshScoringStats();
     await refreshAlertsSummary();
-    await refreshCategoryCounts();
+    await refreshAnalysisTelemetry();
     await computeAnalysis();
     await enrichSurveillanceNodes();
   } catch (e) {
@@ -2257,12 +2309,12 @@ setInterval(async () => {
   }
   await refreshMetrics();
 }, 5000);
-setInterval(refreshAlertsSummary, 10000);   // Incident alerts summary refreshed every 10s
-setInterval(refreshStats, 35000);          // Aggregates refreshed every 35s
-setInterval(refreshScoringStats, 45000);   // Scoring statistics refreshed every 45s
-setInterval(computeAnalysis, 120000);      // Swarm analysis refreshed every 120s
-setInterval(refreshCategoryCounts, 300000); // Category explorer counts refreshed every 5m
-setInterval(enrichSurveillanceNodes, 30000); // Background ASN resolution & threat enrichment
+setInterval(refreshAlertsSummary, 10000);        // Incident alerts summary refreshed every 10s
+setInterval(refreshStats, 35000);               // Aggregates refreshed every 35s
+setInterval(refreshScoringStats, 45000);        // Scoring statistics refreshed every 45s
+setInterval(computeAnalysis, 120000);           // Swarm analysis candidate lists refreshed every 120s
+setInterval(refreshAnalysisTelemetry, 600000);  // Swarm telemetry & category matrices refreshed every 10m
+setInterval(enrichSurveillanceNodes, 30000);    // Background ASN resolution & threat enrichment
 
 app.listen(PORT, HOST, () => {
   console.log(`dashboard listening on ${HOST}:${PORT}`);

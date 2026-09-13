@@ -12,6 +12,7 @@ POSTGRES_DB = os.environ.get("POSTGRES_DB", "craw")
 PG_PASSWORD = os.environ.get("PG_PASSWORD", "83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b")
 
 _connection_pool: Optional[pool.ThreadedConnectionPool] = None
+_CLASSIFIER_CAT_CACHE: Dict[str, Any] = {"ts": 0.0, "data": {}}
 
 def get_pool() -> pool.ThreadedConnectionPool:
     global _connection_pool
@@ -663,13 +664,19 @@ def get_queue_metrics() -> Dict[str, Any]:
                 # Smooth rate per minute using the 5m rolling window when between 2,000-item worker batches
                 rate_1m = rate_1m_raw if rate_1m_raw > 0 else int(round(rate_5m / 5.0))
 
-                # Category breakdown (instant lookup from pre-aggregated category_stats_summary table)
-                try:
-                    cur.execute("SELECT category, count FROM category_stats_summary ORDER BY count DESC;")
-                    cat_rows = cur.fetchall()
-                    category_counts = {r[0]: int(r[1]) for r in cat_rows}
-                except Exception:
-                    category_counts = {}
+                # Category breakdown (cached in memory for 10 minutes)
+                global _CLASSIFIER_CAT_CACHE
+                now_ts = time.time()
+                if now_ts - _CLASSIFIER_CAT_CACHE["ts"] < 600.0 and _CLASSIFIER_CAT_CACHE["data"]:
+                    category_counts = _CLASSIFIER_CAT_CACHE["data"]
+                else:
+                    try:
+                        cur.execute("SELECT category, count(*)::bigint FROM torrents WHERE category IS NOT NULL GROUP BY category ORDER BY count DESC;")
+                        cat_rows = cur.fetchall()
+                        category_counts = {r[0]: int(r[1]) for r in cat_rows}
+                        _CLASSIFIER_CAT_CACHE = {"ts": now_ts, "data": category_counts}
+                    except Exception:
+                        category_counts = _CLASSIFIER_CAT_CACHE.get("data", {})
             else:
                 unclassified = total
                 review_queue = 0
