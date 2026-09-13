@@ -806,7 +806,6 @@ export default function App() {
                     : (classifierReviewCount != null && classifierReviewCount > 0 ? `${classifierReviewCount.toLocaleString()}` : null),
                 },
                 { id: 'content_intelligence', label: 'Content Intelligence' },
-                { id: 'surveillance', label: 'Surveillance Radar' },
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -836,7 +835,7 @@ export default function App() {
                   type="button"
                   onClick={() => setMoreMenuOpen((prev) => !prev)}
                   className={`px-2.5 py-1 text-xs rounded-md transition-colors flex items-center gap-1 ${
-                    ['routing', 'diagnostics'].includes(activeTab)
+                    ['routing', 'diagnostics', 'surveillance'].includes(activeTab)
                       ? 'bg-[#1a1a1a] text-white font-medium border border-[#333]'
                       : 'text-[#888] hover:text-[#ededed] hover:bg-[#111]'
                   }`}
@@ -846,8 +845,9 @@ export default function App() {
                 </button>
 
                 {moreMenuOpen && (
-                  <div className="absolute left-0 mt-1.5 w-36 rounded-lg bg-[#0d0d0d] border border-[#222] shadow-xl py-1 z-50 text-xs animate-in fade-in zoom-in-95 duration-100">
+                  <div className="absolute left-0 mt-1.5 w-40 rounded-lg bg-[#0d0d0d] border border-[#222] shadow-xl py-1 z-50 text-xs animate-in fade-in zoom-in-95 duration-100">
                     {[
+                      { id: 'surveillance', label: 'Surveillance Radar' },
                       { id: 'routing', label: 'DHT Routing' },
                       { id: 'diagnostics', label: 'Diagnostics' },
                     ].map((item) => (
@@ -2809,7 +2809,7 @@ export default function App() {
         {/* TAB: SURVEILLANCE RADAR                                       */}
         {/* ============================================================ */}
         {activeTab === 'surveillance' && (
-          <SurveillanceRadar />
+          <SurveillanceRadar onInspectTorrent={handleInspectTorrent} />
         )}
 
         {/* Global Torrent Details Drawer / Inspector Modal */}

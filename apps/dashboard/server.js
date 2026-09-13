@@ -378,6 +378,42 @@ app.get('/api/torrents/:infohash', async (req, res) => {
   }
 });
 
+// POST /api/torrents/batch-lookup - Look up multiple torrents by infohashes
+app.post('/api/torrents/batch-lookup', async (req, res) => {
+  const { hashes } = req.body || {};
+  if (!Array.isArray(hashes) || hashes.length === 0) {
+    return res.json({ torrents: {} });
+  }
+
+  const cleanHashes = hashes
+    .map((h) => String(h).toLowerCase().trim())
+    .filter((h) => /^[0-9a-f]{40}$/.test(h))
+    .slice(0, 50);
+
+  if (cleanHashes.length === 0) {
+    return res.json({ torrents: {} });
+  }
+
+  try {
+    const r = await query(
+      `SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.total_size,
+              t.file_count, t.category, t.category_confidence,
+              t.health_score, t.popularity_score, t.verified_at, t.piece_length
+       FROM torrents t
+       WHERE t.infohash = ANY(ARRAY(SELECT decode(u, 'hex') FROM UNNEST($1::text[]) AS u))`,
+      [cleanHashes]
+    );
+
+    const map = {};
+    for (const row of r.rows) {
+      map[row.infohash] = row;
+    }
+    res.json({ torrents: map });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/torrents/:infohash/refresh-health
 app.post('/api/torrents/:infohash/refresh-health', async (req, res) => {
   const ih = String(req.params.infohash || '').toLowerCase();

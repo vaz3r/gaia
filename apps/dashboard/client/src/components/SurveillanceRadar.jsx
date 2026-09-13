@@ -16,10 +16,28 @@ import {
   ChevronLeft,
   ChevronRight,
   Filter,
-  Radio
+  Radio,
+  Copy,
+  Check,
+  Film,
+  Music,
+  FolderArchive,
+  BookOpen,
+  FileCode,
+  Sparkles,
+  Link2,
+  Database
 } from 'lucide-react';
 
-export default function SurveillanceRadar() {
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+}
+
+export default function SurveillanceRadar({ onInspectTorrent }) {
   const [nodes, setNodes] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -29,8 +47,13 @@ export default function SurveillanceRadar() {
   const [blockedOnly, setBlockedOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 1 });
-  const [inspectingHashes, setInspectingHashes] = useState(null);
   const [togglingIp, setTogglingIp] = useState(null);
+
+  // Target Torrent Hashes Inspection
+  const [inspectingNode, setInspectingNode] = useState(null);
+  const [targetTorrents, setTargetTorrents] = useState({});
+  const [loadingTorrents, setLoadingTorrents] = useState(false);
+  const [copiedKey, setCopiedKey] = useState(null);
 
   const fetchNodes = async () => {
     setLoading(true);
@@ -98,53 +121,85 @@ export default function SurveillanceRadar() {
     }
   };
 
+  const handleOpenHashes = async (node) => {
+    setInspectingNode(node);
+    const hashes = node.sample_hashes || [];
+    if (hashes.length > 0) {
+      setLoadingTorrents(true);
+      try {
+        const res = await fetch('/api/torrents/batch-lookup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hashes })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setTargetTorrents(data.torrents || {});
+        }
+      } catch (err) {
+        console.error('Failed to resolve target torrent info:', err);
+      } finally {
+        setLoadingTorrents(false);
+      }
+    } else {
+      setTargetTorrents({});
+    }
+  };
+
+  const copyText = (text, key) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
+
   const getCategoryBadge = (cat) => {
     switch (cat) {
       case 'Sybil Node Rotator':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-purple-500/15 text-purple-400 border border-purple-500/30">
-            <Layers className="w-3 h-3" />
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-purple-500/10 text-purple-400 border border-purple-500/25">
+            <Layers className="w-3 h-3 text-purple-400" />
             Sybil Rotator
           </span>
         );
       case 'Passive Swarm Monitor':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/15 text-rose-400 border border-rose-500/30">
-            <Eye className="w-3 h-3" />
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/25">
+            <Eye className="w-3 h-3 text-rose-400" />
             Passive Monitor
           </span>
         );
       case 'DHT Table Scraper':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30">
-            <Radio className="w-3 h-3" />
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/25">
+            <Radio className="w-3 h-3 text-amber-400" />
             Table Scraper
           </span>
         );
       case 'Unreciprocating Leecher':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-orange-500/15 text-orange-400 border border-orange-500/30">
-            <AlertTriangle className="w-3 h-3" />
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-orange-500/10 text-orange-400 border border-orange-500/25">
+            <AlertTriangle className="w-3 h-3 text-orange-400" />
             Leecher
           </span>
         );
       case 'Cryptographic Spoofing Node':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-red-500/15 text-red-400 border border-red-500/30">
-            <Ban className="w-3 h-3" />
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-red-500/10 text-red-400 border border-red-500/25">
+            <Ban className="w-3 h-3 text-red-400" />
             Crypto Spoof
           </span>
         );
       case 'High-Rate Query Flooder':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-500/15 text-blue-400 border border-blue-500/30">
-            <Activity className="w-3 h-3" />
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/25">
+            <Activity className="w-3 h-3 text-blue-400" />
             Query Flooder
           </span>
         );
       default:
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-[#222] text-[#aaa]">
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-medium bg-[#1c1c1c] text-[#aaa] border border-[#2a2a2a]">
             <ShieldAlert className="w-3 h-3" />
             {cat || 'Suspicious'}
           </span>
@@ -152,43 +207,69 @@ export default function SurveillanceRadar() {
     }
   };
 
+  const getTorrentCategoryIcon = (cat) => {
+    switch ((cat || '').toLowerCase()) {
+      case 'video':
+      case 'movies':
+      case 'tv':
+        return <Film className="w-3.5 h-3.5 text-blue-400" />;
+      case 'audio':
+      case 'music':
+        return <Music className="w-3.5 h-3.5 text-purple-400" />;
+      case 'applications':
+      case 'software':
+        return <FileCode className="w-3.5 h-3.5 text-emerald-400" />;
+      case 'books':
+      case 'documents':
+        return <BookOpen className="w-3.5 h-3.5 text-amber-400" />;
+      default:
+        return <FolderArchive className="w-3.5 h-3.5 text-neutral-400" />;
+    }
+  };
+
   return (
     <div className="space-y-6">
-      {/* Header section */}
+      {/* Header section with live radar activity pulse */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#222] pb-5">
         <div>
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400">
-              <ShieldAlert className="w-5 h-5" />
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 shadow-inner shadow-rose-500/20">
+              <ShieldAlert className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
-                Universal DHT Abuse & Surveillance Radar
-                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
-                  ACTIVE INTERCEPTION
+              <div className="flex items-center gap-2.5">
+                <h2 className="text-xl font-bold text-white tracking-tight">
+                  Universal DHT Abuse & Surveillance Radar
+                </h2>
+                <span className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  Active Interception
                 </span>
-              </h2>
-              <p className="text-xs text-[#888] mt-0.5">
-                Behavioral detection intercepting all non-contributing DHT abusers: Sybil rotators, passive swarm monitors, routing scrapers, and unreciprocating leeches.
+              </div>
+              <p className="text-xs text-[#888] mt-1">
+                Autonomous defense identifying and neutralizing all non-contributing DHT abusers: Sybil rotators, passive swarm monitors, table scrapers, and unreciprocating leeches.
               </p>
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
           <button
             onClick={fetchNodes}
             disabled={loading}
-            className="px-3 py-1.5 text-xs font-medium text-[#aaa] hover:text-white bg-[#141414] hover:bg-[#1f1f1f] border border-[#2a2a2a] rounded-lg transition-colors flex items-center gap-1.5"
+            className="px-3.5 py-1.5 text-xs font-medium text-[#ccc] hover:text-white bg-[#141414] hover:bg-[#1f1f1f] border border-[#2a2a2a] rounded-lg transition-all flex items-center gap-1.5 shadow-sm"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-rose-400' : ''}`} />
             Refresh
           </button>
           <a
             href="/api/surveillance/blocklist.txt"
             download="ipfilter.dat"
-            className="px-3.5 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 rounded-lg transition-colors flex items-center gap-2 shadow-lg shadow-rose-950/40"
-            title="Download blocklist for qBittorrent, Transmission, or Deluge"
+            className="px-3.5 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 rounded-lg transition-all flex items-center gap-2 shadow-lg shadow-rose-950/40 hover:shadow-rose-900/50"
+            title="Download community blocklist for qBittorrent, Transmission, or Deluge"
           >
             <DownloadCloud className="w-4 h-4" />
             Export ipfilter.dat
@@ -198,20 +279,20 @@ export default function SurveillanceRadar() {
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
-        <div className="p-4 rounded-xl bg-[#0e0e0e] border border-[#222]">
+        <div className="p-4 rounded-xl bg-gradient-to-b from-[#131313] to-[#0c0c0c] border border-[#242424] hover:border-[#333] transition-colors">
           <div className="flex items-center justify-between text-[#888] text-xs font-medium mb-1.5">
-            <span>Blocked Abusers & Spies</span>
+            <span>Blocked Threats & Spies</span>
             <Ban className="w-4 h-4 text-rose-400" />
           </div>
           <div className="text-2xl font-bold font-mono text-white">
             {parseInt(stats?.blocked_nodes || '0', 10).toLocaleString()}
           </div>
           <div className="text-[11px] text-[#666] mt-1">
-            of {parseInt(stats?.total_surveillance_nodes || '0', 10).toLocaleString()} detected entities
+            of {parseInt(stats?.total_surveillance_nodes || '0', 10).toLocaleString()} tracked entities
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-[#0e0e0e] border border-[#222]">
+        <div className="p-4 rounded-xl bg-gradient-to-b from-[#131313] to-[#0c0c0c] border border-[#242424] hover:border-[#333] transition-colors">
           <div className="flex items-center justify-between text-[#888] text-xs font-medium mb-1.5">
             <span>Sybil Attacks Neutralized</span>
             <Layers className="w-4 h-4 text-purple-400" />
@@ -224,7 +305,7 @@ export default function SurveillanceRadar() {
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-[#0e0e0e] border border-[#222]">
+        <div className="p-4 rounded-xl bg-gradient-to-b from-[#131313] to-[#0c0c0c] border border-[#242424] hover:border-[#333] transition-colors">
           <div className="flex items-center justify-between text-[#888] text-xs font-medium mb-1.5">
             <span>Passive Swarm Monitors</span>
             <Eye className="w-4 h-4 text-orange-400" />
@@ -237,9 +318,9 @@ export default function SurveillanceRadar() {
           </div>
         </div>
 
-        <div className="p-4 rounded-xl bg-[#0e0e0e] border border-[#222]">
+        <div className="p-4 rounded-xl bg-gradient-to-b from-[#131313] to-[#0c0c0c] border border-[#242424] hover:border-[#333] transition-colors">
           <div className="flex items-center justify-between text-[#888] text-xs font-medium mb-1.5">
-            <span>Routing Scrapers & Flooders</span>
+            <span>DHT Table Scrapers</span>
             <Radio className="w-4 h-4 text-blue-400" />
           </div>
           <div className="text-2xl font-bold font-mono text-blue-400">
@@ -251,8 +332,8 @@ export default function SurveillanceRadar() {
         </div>
       </div>
 
-      {/* Info / Countermeasure Banner */}
-      <div className="p-4 rounded-xl bg-gradient-to-r from-rose-950/20 via-[#121212] to-[#121212] border border-rose-500/20">
+      {/* Counter-Measure Explainer Banner */}
+      <div className="p-4 rounded-xl bg-gradient-to-r from-rose-950/25 via-[#111] to-[#111] border border-rose-500/20">
         <div className="flex items-start gap-3">
           <Shield className="w-5 h-5 text-rose-400 mt-0.5 shrink-0" />
           <div className="space-y-1 text-xs text-[#aaa]">
@@ -260,87 +341,105 @@ export default function SurveillanceRadar() {
               Autonomous Honey-Pot Counter-Measures & Protocol Defense
             </p>
             <p>
-              When an identified surveillance entity or non-contributing leech queries GAIA for torrent peers or routing table nodes, GAIA automatically feeds them 
-              <span className="text-rose-300 font-mono"> RFC 5737 dummy documentation nodes (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24)</span>. 
-              This poisons external tracking databases, traps scrapers in dead-end routing loops, and protects legitimate BitTorrent users from IP harvesting.
-            </p>
-            <p className="text-[11px] text-[#777] pt-0.5">
-              💡 Community Protection: Export <span className="text-white font-medium">ipfilter.dat</span> into your torrent client to prevent known monitors and malicious crawlers from ever discovering your downloads.
+              When a detected surveillance bot or unreciprocating leecher queries GAIA for torrent peers or node routing tables, GAIA automatically responds with{' '}
+              <span className="text-rose-300 font-mono font-medium">RFC 5737 dummy documentation addresses (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24)</span>.
+              This pollutes external tracking logs, derails scrapers into phantom routing loops, and insulates real BitTorrent seeders from swarm surveillance.
             </p>
           </div>
         </div>
       </div>
 
-      {/* Filter and Search Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 bg-[#0d0d0d] p-3 rounded-xl border border-[#222]">
-        <form onSubmit={handleSearchSubmit} className="flex items-center gap-2 flex-1 min-w-[240px]">
-          <div className="relative flex-1">
-            <Search className="w-3.5 h-3.5 text-[#666] absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by IP, Category, Organization, or Entity name..."
-              className="w-full bg-[#161616] border border-[#282828] text-white text-xs pl-8 pr-3 py-1.5 rounded-lg focus:outline-none focus:border-rose-500/50"
-            />
-          </div>
-          <button
-            type="submit"
-            className="px-3 py-1.5 text-xs font-medium text-white bg-[#222] hover:bg-[#2c2c2c] rounded-lg transition-colors"
-          >
-            Search
-          </button>
-        </form>
-
-        <div className="flex flex-wrap items-center gap-3 text-xs">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[#888]">Category:</span>
-            <select
-              value={category}
-              onChange={(e) => {
-                setCategory(e.target.value);
-                setPage(1);
-              }}
-              className="bg-[#161616] border border-[#282828] text-white rounded-lg px-2 py-1 text-xs focus:outline-none"
+      {/* Search & Filter Bar */}
+      <div className="space-y-3 bg-[#0d0d0d] p-3.5 rounded-xl border border-[#222]">
+        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+          <form onSubmit={handleSearchSubmit} className="flex items-center gap-2 flex-1">
+            <div className="relative flex-1">
+              <Search className="w-3.5 h-3.5 text-[#666] absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by IP address, Category, ASN, Organization..."
+                className="w-full bg-[#161616] border border-[#282828] text-white text-xs pl-8 pr-3 py-2 rounded-lg focus:outline-none focus:border-rose-500/60 transition-colors"
+              />
+            </div>
+            <button
+              type="submit"
+              className="px-3.5 py-2 text-xs font-medium text-white bg-[#222] hover:bg-[#2b2b2b] rounded-lg transition-colors shrink-0"
             >
-              <option value="all">All Abuse Types</option>
-              <option value="Sybil Node Rotator">Sybil Node Rotator</option>
-              <option value="Passive Swarm Monitor">Passive Swarm Monitor</option>
-              <option value="DHT Table Scraper">DHT Table Scraper</option>
-              <option value="Unreciprocating Leecher">Unreciprocating Leecher</option>
-              <option value="Cryptographic Spoofing Node">Cryptographic Spoofing</option>
-              <option value="High-Rate Query Flooder">Query Flooder</option>
-            </select>
-          </div>
+              Search
+            </button>
+          </form>
 
-          <div className="flex items-center gap-1.5">
-            <span className="text-[#888]">Min Score:</span>
-            <select
-              value={minScore}
-              onChange={(e) => {
-                setMinScore(parseInt(e.target.value, 10));
+          {/* Quick Threat Level Filters */}
+          <div className="flex items-center gap-1.5 self-start md:self-auto bg-[#141414] p-1 rounded-lg border border-[#242424]">
+            {[
+              { label: 'All Scores', value: 0 },
+              { label: 'Threats (≥60)', value: 60 },
+              { label: 'Critical (≥80)', value: 80 }
+            ].map((lvl) => (
+              <button
+                key={lvl.value}
+                onClick={() => {
+                  setMinScore(lvl.value);
+                  setPage(1);
+                }}
+                className={`px-2.5 py-1 text-xs rounded-md font-medium transition-colors ${
+                  minScore === lvl.value
+                    ? 'bg-[#222] text-white shadow-sm'
+                    : 'text-[#888] hover:text-[#ddd]'
+                }`}
+              >
+                {lvl.label}
+              </button>
+            ))}
+            <div className="h-3.5 w-[1px] bg-[#2a2a2a] mx-1" />
+            <button
+              onClick={() => {
+                setBlockedOnly((prev) => !prev);
                 setPage(1);
               }}
-              className="bg-[#161616] border border-[#282828] text-white rounded-lg px-2 py-1 text-xs focus:outline-none"
+              className={`px-2.5 py-1 text-xs rounded-md font-medium transition-colors flex items-center gap-1 ${
+                blockedOnly
+                  ? 'bg-rose-950/40 text-rose-300 border border-rose-500/40'
+                  : 'text-[#888] hover:text-[#ddd]'
+              }`}
             >
-              <option value="0">All Scores (0+)</option>
-              <option value="50">Suspicious (50+)</option>
-              <option value="75">Confirmed Abusers (75+)</option>
-            </select>
+              <Ban className="w-3 h-3" />
+              Blocked Only
+            </button>
           </div>
+        </div>
 
-          <label className="flex items-center gap-1.5 text-[#aaa] cursor-pointer hover:text-white select-none">
-            <input
-              type="checkbox"
-              checked={blockedOnly}
-              onChange={(e) => {
-                setBlockedOnly(e.target.checked);
+        {/* Category Pill Buttons */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs pt-1 border-t border-[#1a1a1a]">
+          <span className="text-[#666] text-[11px] font-medium mr-1 uppercase tracking-wider shrink-0">
+            Category:
+          </span>
+          {[
+            { id: 'all', label: 'All Types' },
+            { id: 'Sybil Node Rotator', label: 'Sybil Rotators' },
+            { id: 'Passive Swarm Monitor', label: 'Passive Monitors' },
+            { id: 'DHT Table Scraper', label: 'Table Scrapers' },
+            { id: 'Unreciprocating Leecher', label: 'Leechers' },
+            { id: 'Cryptographic Spoofing Node', label: 'Crypto Spoofing' },
+            { id: 'High-Rate Query Flooder', label: 'Query Flooders' }
+          ].map((cat) => (
+            <button
+              key={cat.id}
+              onClick={() => {
+                setCategory(cat.id);
                 setPage(1);
               }}
-              className="rounded border-[#333] bg-[#161616] text-rose-500 focus:ring-0 focus:ring-offset-0"
-            />
-            Blocked Only
-          </label>
+              className={`px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap transition-colors ${
+                category === cat.id
+                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 font-semibold'
+                  : 'bg-[#151515] text-[#888] hover:text-white border border-[#222]'
+              }`}
+            >
+              {cat.label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -350,30 +449,30 @@ export default function SurveillanceRadar() {
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="bg-[#121212] border-b border-[#222] text-[#888] font-medium">
-                <th className="py-3 px-4">Abuse Category</th>
-                <th className="py-3 px-4">IP Address</th>
+                <th className="py-3 px-4">Abuse Signature</th>
+                <th className="py-3 px-4">Node Address</th>
                 <th className="py-3 px-4">Suspected Entity / ASN</th>
                 <th className="py-3 px-4 text-center">Threat Score</th>
                 <th className="py-3 px-4 text-center">BEP 42 Crypto</th>
                 <th className="py-3 px-4 text-center">Sybil Node IDs</th>
-                <th className="py-3 px-4 text-right">Traffic Volume</th>
+                <th className="py-3 px-4 text-right">Traffic Volume & Targets</th>
                 <th className="py-3 px-4 text-center">Status</th>
                 <th className="py-3 px-4 text-right">Action</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#1b1b1b]">
+            <tbody className="divide-y divide-[#181818]">
               {loading && nodes.length === 0 ? (
                 <tr>
-                  <td colSpan="9" className="py-12 text-center text-[#666]">
-                    <div className="flex items-center justify-center gap-2">
-                      <RefreshCw className="w-4 h-4 animate-spin" />
+                  <td colSpan="9" className="py-14 text-center text-[#666]">
+                    <div className="flex items-center justify-center gap-2.5 text-xs">
+                      <RefreshCw className="w-4 h-4 animate-spin text-rose-400" />
                       Scanning DHT abuse & surveillance telemetry...
                     </div>
                   </td>
                 </tr>
               ) : nodes.length === 0 ? (
                 <tr>
-                  <td colSpan="9" className="py-12 text-center text-[#666]">
+                  <td colSpan="9" className="py-14 text-center text-[#666]">
                     No entities match the active filters.
                   </td>
                 </tr>
@@ -381,43 +480,53 @@ export default function SurveillanceRadar() {
                 nodes.map((node) => {
                   const scorePct = Math.min(100, Math.max(0, node.score || 0));
                   const nodeIdsCount = parseInt(node.distinct_node_ids || '1', 10);
-                  const getPeers = parseInt(node.get_peers_count || node.query_count || '0', 10);
+                  const getPeers = parseInt(node.get_peers_count || '0', 10);
                   const announces = parseInt(node.announce_peer_count || '0', 10);
                   const findNodes = parseInt(node.find_node_count || '0', 10);
+                  const totalQueries = parseInt(node.query_count || '0', 10);
+                  const sampleHashes = node.sample_hashes || [];
 
                   return (
-                    <tr key={node.ip} className="hover:bg-[#141414] transition-colors">
-                      <td className="py-3 px-4">
+                    <tr key={node.ip} className="hover:bg-[#131313] transition-colors group">
+                      <td className="py-3.5 px-4">
                         {getCategoryBadge(node.abuse_category)}
                       </td>
-                      <td className="py-3 px-4">
-                        <div className="font-mono text-white font-medium">{node.ip}</div>
-                        <div className="text-[10px] text-[#666]">
-                          Last: {new Date(node.last_seen).toLocaleTimeString()}
+                      <td className="py-3.5 px-4">
+                        <div className="font-mono text-white font-semibold text-xs tracking-tight">
+                          {node.ip}
+                        </div>
+                        <div className="text-[10px] text-[#666] font-mono mt-0.5">
+                          Last seen: {new Date(node.last_seen).toLocaleTimeString()}
                         </div>
                       </td>
-                      <td className="py-3 px-4">
-                        <div className="text-[#ccc] font-medium truncate max-w-[220px]" title={node.suspected_entity}>
+                      <td className="py-3.5 px-4">
+                        <div className="text-[#eee] font-medium truncate max-w-[220px]" title={node.suspected_entity}>
                           {node.suspected_entity}
                         </div>
-                        <div className="text-[11px] font-mono text-[#777]">
+                        <div className="text-[11px] font-mono text-[#777] truncate max-w-[220px]">
                           {node.asn || 'AS Pending'} {node.org ? `• ${node.org}` : ''}
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-center">
+                      <td className="py-3.5 px-4 text-center">
                         <div className="inline-flex flex-col items-center gap-1">
-                          <span className={`font-mono font-bold text-xs ${scorePct >= 80 ? 'text-rose-400' : scorePct >= 50 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                          <span
+                            className={`font-mono font-bold text-xs ${
+                              scorePct >= 80 ? 'text-rose-400' : scorePct >= 50 ? 'text-amber-400' : 'text-emerald-400'
+                            }`}
+                          >
                             {scorePct}%
                           </span>
-                          <div className="w-16 h-1.5 bg-[#222] rounded-full overflow-hidden">
+                          <div className="w-14 h-1.5 bg-[#222] rounded-full overflow-hidden">
                             <div
-                              className={`h-full rounded-full ${scorePct >= 80 ? 'bg-rose-500' : scorePct >= 50 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                              className={`h-full rounded-full ${
+                                scorePct >= 80 ? 'bg-rose-500' : scorePct >= 50 ? 'bg-amber-500' : 'bg-emerald-500'
+                              }`}
                               style={{ width: `${scorePct}%` }}
                             />
                           </div>
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-center">
+                      <td className="py-3.5 px-4 text-center">
                         {node.bep42_violations > 0 ? (
                           <span className="inline-flex items-center gap-1 text-[11px] text-rose-400 font-mono">
                             <Ban className="w-3 h-3 text-rose-500" />
@@ -430,50 +539,51 @@ export default function SurveillanceRadar() {
                           </span>
                         )}
                       </td>
-                      <td className="py-3 px-4 text-center">
+                      <td className="py-3.5 px-4 text-center">
                         {nodeIdsCount > 1 ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30">
                             <Layers className="w-3 h-3" />
                             {nodeIdsCount} IDs (Sybil)
                           </span>
                         ) : (
-                          <span className="font-mono text-[11px] text-[#888]">1 ID</span>
+                          <span className="font-mono text-[11px] text-[#777]">1 ID</span>
                         )}
                       </td>
-                      <td className="py-3 px-4 text-right font-mono text-[#ccc]">
-                        <div>{parseInt(node.query_count || '0', 10).toLocaleString()} queries</div>
+                      <td className="py-3.5 px-4 text-right font-mono text-[#ccc]">
+                        <div className="font-medium">{totalQueries.toLocaleString()} queries</div>
                         <div className="text-[10px] text-[#666]">
                           {getPeers} GP • {announces} Ann • {findNodes} FN
                         </div>
-                        {node.sample_hashes && node.sample_hashes.length > 0 && (
+                        {sampleHashes.length > 0 && (
                           <button
-                            onClick={() => setInspectingHashes({ ip: node.ip, hashes: node.sample_hashes })}
-                            className="text-[10px] text-rose-400 hover:text-rose-300 underline mt-0.5 inline-flex items-center gap-0.5"
+                            onClick={() => handleOpenHashes(node)}
+                            className="mt-1 px-2 py-0.5 rounded text-[10px] font-medium bg-[#1e1e1e] hover:bg-[#282828] text-rose-300 border border-rose-500/30 hover:border-rose-500/50 transition-colors inline-flex items-center gap-1 shadow-sm"
+                            title="Inspect torrents probed by this entity"
                           >
-                            <Eye className="w-2.5 h-2.5" />
-                            {node.sample_hashes.length} target hashes
+                            <Eye className="w-3 h-3 text-rose-400" />
+                            {sampleHashes.length} Target {sampleHashes.length === 1 ? 'Hash' : 'Hashes'}
                           </button>
                         )}
                       </td>
-                      <td className="py-3 px-4 text-center">
+                      <td className="py-3.5 px-4 text-center">
                         {node.is_blocked ? (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-500/15 text-rose-300 border border-rose-500/30 tracking-wide">
                             POISONED
                           </span>
                         ) : (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-[#222] text-[#888]">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-[#1c1c1c] text-[#888] border border-[#2a2a2a]">
                             MONITORED
                           </span>
                         )}
                       </td>
-                      <td className="py-3 px-4 text-right">
+                      <td className="py-3.5 px-4 text-right">
                         <button
                           onClick={() => toggleBlock(node.ip)}
                           disabled={togglingIp === node.ip}
-                          className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
+                          className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
                             node.is_blocked
-                              ? 'bg-[#1e1e1e] hover:bg-[#282828] text-[#ccc]'
-                              : 'bg-rose-600/80 hover:bg-rose-500 text-white'
+                              ? 'bg-[#1a1a1a] hover:bg-[#252525] text-[#ccc] border border-[#333]'
+                              : 'bg-rose-600 hover:bg-rose-500 text-white shadow-sm'
                           }`}
                         >
                           {togglingIp === node.ip ? (
@@ -493,31 +603,31 @@ export default function SurveillanceRadar() {
           </table>
         </div>
 
-        {/* Pagination bar */}
+        {/* Pagination Bar */}
         {pagination.totalPages > 1 && (
           <div className="flex items-center justify-between px-4 py-3 border-t border-[#222] bg-[#111] text-xs text-[#888]">
             <div>
-              Showing <span className="text-white">{(pagination.page - 1) * pagination.limit + 1}</span> to{' '}
-              <span className="text-white">
+              Showing <span className="text-white font-mono">{(pagination.page - 1) * pagination.limit + 1}</span> to{' '}
+              <span className="text-white font-mono">
                 {Math.min(pagination.page * pagination.limit, pagination.total)}
               </span>{' '}
-              of <span className="text-white">{pagination.total.toLocaleString()}</span> entities
+              of <span className="text-white font-mono">{pagination.total.toLocaleString()}</span> entities
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               <button
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page <= 1}
-                className="p-1 rounded bg-[#1c1c1c] text-[#aaa] hover:text-white disabled:opacity-40"
+                className="p-1 rounded-md bg-[#1c1c1c] text-[#aaa] hover:text-white disabled:opacity-30 transition-colors"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <span className="px-2 font-mono text-white">
+              <span className="px-2 font-mono text-white text-xs">
                 {pagination.page} / {pagination.totalPages}
               </span>
               <button
                 onClick={() => setPage((p) => Math.min(pagination.totalPages, p + 1))}
                 disabled={page >= pagination.totalPages}
-                className="p-1 rounded bg-[#1c1c1c] text-[#aaa] hover:text-white disabled:opacity-40"
+                className="p-1 rounded-md bg-[#1c1c1c] text-[#aaa] hover:text-white disabled:opacity-30 transition-colors"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>
@@ -526,53 +636,157 @@ export default function SurveillanceRadar() {
         )}
       </div>
 
-      {/* Target Infohashes Modal */}
-      {inspectingHashes && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-          <div className="bg-[#121212] border border-[#282828] rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-[#222]">
+      {/* Target Torrent Infohashes Modal with Real Metadata & Drawer Inspection */}
+      {inspectingNode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div
+            className="bg-[#111] border border-[#282828] rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-[#222] bg-[#141414]">
               <div>
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
                   <ShieldAlert className="w-4 h-4 text-rose-400" />
-                  Targeted Torrent Infohashes
+                  Targeted Torrent Infohashes & Probed Swarms
                 </h3>
                 <p className="text-xs text-[#888] font-mono mt-0.5">
-                  Node IP: {inspectingHashes.ip}
+                  Probing Entity: <span className="text-white">{inspectingNode.ip}</span> ({inspectingNode.suspected_entity || 'Abuse Node'})
                 </p>
               </div>
               <button
-                onClick={() => setInspectingHashes(null)}
-                className="text-[#888] hover:text-white p-1 rounded-lg hover:bg-[#222]"
+                onClick={() => setInspectingNode(null)}
+                className="text-[#888] hover:text-white p-1.5 rounded-lg hover:bg-[#222] transition-colors"
               >
                 ✕
               </button>
             </div>
-            <div className="p-5 space-y-2 max-h-[360px] overflow-y-auto font-mono text-xs">
-              <p className="text-[11px] text-[#777] mb-3">
-                Torrents probed by this entity. Poison responses containing dummy peer IPs were returned.
-              </p>
-              {inspectingHashes.hashes.map((hash, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center justify-between p-2.5 rounded-lg bg-[#181818] border border-[#222] text-[#ddd] select-all"
-                >
-                  <span className="truncate">{hash}</span>
-                  <a
-                    href={`/api/torrent/${hash}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[#888] hover:text-white shrink-0 ml-2"
-                    title="Inspect in GAIA database"
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-3 overflow-y-auto flex-1">
+              <div className="flex items-center justify-between text-xs text-[#888] pb-2 border-b border-[#1f1f1f]">
+                <span>
+                  Showing {inspectingNode.sample_hashes?.length || 0} sample torrent swarms queried by this node:
+                </span>
+                {loadingTorrents && (
+                  <span className="inline-flex items-center gap-1.5 text-rose-400 font-mono text-[11px]">
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                    Resolving catalog metadata...
+                  </span>
+                )}
+              </div>
+
+              {(inspectingNode.sample_hashes || []).map((hash) => {
+                const torrent = targetTorrents[hash];
+                const isCopiedHash = copiedKey === `hash-${hash}`;
+                const isCopiedMagnet = copiedKey === `magnet-${hash}`;
+                const magnetLink = `magnet:?xt=urn:btih:${hash}${torrent?.name ? `&dn=${encodeURIComponent(torrent.name)}` : ''}`;
+
+                return (
+                  <div
+                    key={hash}
+                    className="p-3.5 rounded-xl bg-[#161616] border border-[#262626] hover:border-[#333] transition-colors space-y-2.5"
                   >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
-                </div>
-              ))}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1 flex-1 min-w-0">
+                        {torrent ? (
+                          <div className="flex items-center gap-2">
+                            {getTorrentCategoryIcon(torrent.category)}
+                            <h4
+                              onClick={() => {
+                                if (onInspectTorrent) {
+                                  onInspectTorrent({ ...torrent, hash });
+                                }
+                              }}
+                              className="text-sm font-semibold text-white hover:text-rose-300 cursor-pointer truncate"
+                              title={torrent.name}
+                            >
+                              {torrent.name}
+                            </h4>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <Database className="w-3.5 h-3.5 text-[#666]" />
+                            <h4 className="text-xs font-mono text-[#aaa] truncate">
+                              Target Swarm: {hash}
+                            </h4>
+                          </div>
+                        )}
+
+                        {/* Metadata Pills */}
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-[#888]">
+                          {torrent ? (
+                            <>
+                              <span className="px-1.5 py-0.5 rounded bg-[#202020] text-[#ccc]">
+                                {torrent.category || 'Other'}
+                              </span>
+                              <span className="px-1.5 py-0.5 rounded bg-[#202020] text-emerald-400 font-medium">
+                                {formatBytes(torrent.total_size)}
+                              </span>
+                              <span className="text-[#666]">
+                                {torrent.file_count || 1} {torrent.file_count === 1 ? 'file' : 'files'}
+                              </span>
+                              {torrent.health_score != null && (
+                                <span className="text-[#666]">
+                                  Health: {torrent.health_score}/100
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded bg-[#222] text-[#888]">
+                              Unindexed Swarm (Probed in DHT)
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {torrent && onInspectTorrent && (
+                          <button
+                            onClick={() => {
+                              onInspectTorrent({ ...torrent, hash });
+                            }}
+                            className="px-2.5 py-1 text-xs font-medium text-white bg-rose-600 hover:bg-rose-500 rounded-lg transition-colors flex items-center gap-1 shadow-sm"
+                            title="Inspect in GAIA Details Drawer"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            Inspect
+                          </button>
+                        )}
+                        <button
+                          onClick={() => copyText(magnetLink, `magnet-${hash}`)}
+                          className="p-1.5 rounded-lg bg-[#222] hover:bg-[#2c2c2c] text-[#aaa] hover:text-white transition-colors"
+                          title="Copy Magnet Link"
+                        >
+                          {isCopiedMagnet ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Link2 className="w-3.5 h-3.5" />}
+                        </button>
+                        <button
+                          onClick={() => copyText(hash, `hash-${hash}`)}
+                          className="p-1.5 rounded-lg bg-[#222] hover:bg-[#2c2c2c] text-[#aaa] hover:text-white transition-colors"
+                          title="Copy Infohash"
+                        >
+                          {isCopiedHash ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Monospace Hash Footer */}
+                    <div className="flex items-center justify-between text-[11px] font-mono text-[#666] bg-[#111] px-2.5 py-1 rounded-md border border-[#1e1e1e]">
+                      <span className="truncate select-all text-[#888]">{hash}</span>
+                      <span className="text-[10px] text-[#555] shrink-0 ml-2">Poisoned with RFC 5737 dummy peers</span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            <div className="px-5 py-3 bg-[#161616] border-t border-[#222] flex justify-end">
+
+            {/* Modal Footer */}
+            <div className="px-6 py-3.5 bg-[#141414] border-t border-[#222] flex items-center justify-between text-xs text-[#888]">
+              <span>Dummy peer IPs were returned to protect user anonymity.</span>
               <button
-                onClick={() => setInspectingHashes(null)}
-                className="px-4 py-1.5 text-xs font-semibold text-white bg-[#222] hover:bg-[#2c2c2c] rounded-lg"
+                onClick={() => setInspectingNode(null)}
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-[#222] hover:bg-[#2a2a2a] rounded-lg transition-colors"
               >
                 Close
               </button>
