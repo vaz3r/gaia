@@ -155,7 +155,8 @@ impl Router {
                         }
                         self.metrics.inbound_find_node.add(1);
                         if let (Some(t), Some(target)) = (header.t, Self::extract_target(buf)) {
-                            self.respond_find_node_fast(t, &target, from);
+                            let sender_id = Self::extract_sender_id(buf);
+                            self.respond_find_node_fast(t, &target, sender_id.as_ref(), from);
                         }
                         return;
                     }
@@ -282,6 +283,35 @@ impl Router {
             SybilPool::Random => self.metrics.inbound_find_node_random.add(1),
         }
 
+        let sender_id = extract_id20(a, b"id");
+        let is_bep42 = sender_id
+            .as_ref()
+            .map(|id| crate::dht::node_id::verify_bep42(from.ip(), id))
+            .unwrap_or(false);
+
+        let mut is_blocked = false;
+        if let Some(surv) = &self.surveillance {
+            surv.record_find_node(from.ip(), sender_id.as_ref(), is_bep42, target);
+            is_blocked = surv.is_blocked(&from.ip());
+        }
+
+        if is_blocked {
+            self.metrics.surveillance_queries_poisoned.add(1);
+            let dummy = Self::dummy_poison_nodes();
+            let r = BValue::dict(vec![
+                (
+                    Bytes::from_static(b"id"),
+                    BValue::Bytes(Bytes::copy_from_slice(&self.self_id)),
+                ),
+                (
+                    Bytes::from_static(b"nodes"),
+                    BValue::Bytes(Bytes::copy_from_slice(&dummy)),
+                ),
+            ]);
+            self.send_response(t, from, r);
+            return;
+        }
+
         let nodes = self.closest_phantom(&target, 8);
         let r = BValue::dict(vec![
             (
@@ -307,10 +337,40 @@ impl Router {
         }
         let sender_id = extract_id20(a, b"id");
         let is_bep42 = sender_id
-            .map(|id| crate::dht::node_id::verify_bep42(from.ip(), &id))
+            .as_ref()
+            .map(|id| crate::dht::node_id::verify_bep42(from.ip(), id))
             .unwrap_or(false);
+
+        let mut is_blocked = false;
         if let Some(surv) = &self.surveillance {
-            surv.record(from.ip(), is_bep42, ih);
+            surv.record_get_peers(from.ip(), sender_id.as_ref(), is_bep42, ih);
+            is_blocked = surv.is_blocked(&from.ip());
+        }
+
+        if is_blocked {
+            self.metrics.surveillance_queries_poisoned.add(1);
+            let dummy = Self::dummy_poison_nodes();
+            let token = self
+                .token
+                .read()
+                .expect("token generator poisoned")
+                .generate(from.ip());
+            let r = BValue::dict(vec![
+                (
+                    Bytes::from_static(b"id"),
+                    BValue::Bytes(Bytes::copy_from_slice(&self.self_id)),
+                ),
+                (
+                    Bytes::from_static(b"token"),
+                    BValue::Bytes(Bytes::copy_from_slice(&token)),
+                ),
+                (
+                    Bytes::from_static(b"nodes"),
+                    BValue::Bytes(Bytes::copy_from_slice(&dummy)),
+                ),
+            ]);
+            self.send_response(t, from, r);
+            return;
         }
 
         self.do_harvest(ih, crate::harvest::Source::GetPeers, None);
@@ -339,6 +399,12 @@ impl Router {
     }
 
     fn respond_announce_peer(&self, t: &Bytes, a: &BValue, from: SocketAddr) {
+        let sender_id = extract_id20(a, b"id");
+        let is_bep42 = sender_id
+            .as_ref()
+            .map(|id| crate::dht::node_id::verify_bep42(from.ip(), id))
+            .unwrap_or(false);
+
         let valid = a
             .get_bytes(b"token")
             .map(|tok| self.token.read().expect("token").verify(from.ip(), tok))
@@ -347,6 +413,9 @@ impl Router {
             match self.classify_pool(&ih) {
                 SybilPool::Bep42 => self.metrics.inbound_announce_bep42.add(1),
                 SybilPool::Random => self.metrics.inbound_announce_random.add(1),
+            }
+            if let Some(surv) = &self.surveillance {
+                surv.record_announce_peer(from.ip(), sender_id.as_ref(), is_bep42, ih);
             }
             if valid {
                 self.metrics.inbound_announce_valid.add(1);
@@ -393,11 +462,33 @@ impl Router {
         None
     }
 
-    fn respond_find_node_fast(&self, t: &[u8], target: &[u8; 20], from: SocketAddr) {
+    fn respond_find_node_fast(
+        &self,
+        t: &[u8],
+        target: &[u8; 20],
+        sender_id: Option<&[u8; 20]>,
+        from: SocketAddr,
+    ) {
         use std::io::Write;
         match self.classify_pool(target) {
             SybilPool::Bep42 => self.metrics.inbound_find_node_bep42.add(1),
             SybilPool::Random => self.metrics.inbound_find_node_random.add(1),
+        }
+
+        let is_bep42 = sender_id
+            .map(|id| crate::dht::node_id::verify_bep42(from.ip(), id))
+            .unwrap_or(false);
+
+        let mut is_blocked = false;
+        if let Some(surv) = &self.surveillance {
+            surv.record_find_node(from.ip(), sender_id, is_bep42, *target);
+            is_blocked = surv.is_blocked(&from.ip());
+        }
+
+        if is_blocked {
+            self.metrics.surveillance_queries_poisoned.add(1);
+            self.respond_find_node_poisoned(t, from);
+            return;
         }
 
         let nodes = self.closest_phantom(target, 8);
@@ -487,7 +578,7 @@ impl Router {
 
         let mut is_blocked = false;
         if let Some(surv) = &self.surveillance {
-            surv.record(from.ip(), is_bep42, *ih);
+            surv.record_get_peers(from.ip(), sender_id, is_bep42, *ih);
             is_blocked = surv.is_blocked(&from.ip());
         }
 
@@ -581,6 +672,45 @@ impl Router {
 
         buf[pos..pos + 8].copy_from_slice(&token);
         pos += 8;
+
+        let b4 = b"e1:t";
+        buf[pos..pos + b4.len()].copy_from_slice(b4);
+        pos += b4.len();
+
+        let mut cursor = std::io::Cursor::new(&mut buf[pos..]);
+        write!(cursor, "{}:", t.len()).unwrap();
+        pos += cursor.position() as usize;
+
+        buf[pos..pos + t.len()].copy_from_slice(t);
+        pos += t.len();
+
+        let b5 = b"1:y1:re";
+        buf[pos..pos + b5.len()].copy_from_slice(b5);
+        pos += b5.len();
+
+        self.try_send(&buf[..pos], from);
+    }
+
+    fn respond_find_node_poisoned(&self, t: &[u8], from: SocketAddr) {
+        use std::io::Write;
+        let dummy = Self::dummy_poison_nodes();
+
+        let mut buf = [0u8; 512];
+        let mut pos = 0;
+
+        let b1 = b"d1:rd2:id20:";
+        buf[pos..pos + b1.len()].copy_from_slice(b1);
+        pos += b1.len();
+
+        buf[pos..pos + 20].copy_from_slice(&self.self_id);
+        pos += 20;
+
+        let b2 = b"5:nodes208:";
+        buf[pos..pos + b2.len()].copy_from_slice(b2);
+        pos += b2.len();
+
+        buf[pos..pos + dummy.len()].copy_from_slice(&dummy);
+        pos += dummy.len();
 
         let b4 = b"e1:t";
         buf[pos..pos + b4.len()].copy_from_slice(b4);

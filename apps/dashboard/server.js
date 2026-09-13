@@ -1248,7 +1248,7 @@ async function resolveAsn(ip) {
       }
     } catch {}
 
-    let suspected = 'Datacenter / Cloud Probe';
+    let suspected = org ? `Datacenter Probe (${org})` : 'Datacenter / Cloud Probe';
     const lowerOrg = (org || '').toLowerCase();
     if (lowerOrg.includes('selectel')) {
       suspected = 'IKWYD Spying Node (Selectel)';
@@ -1260,8 +1260,18 @@ async function resolveAsn(ip) {
       suspected = 'Copyright Monitor (MarkMonitor/Rightscorp)';
     } else if (lowerOrg.includes('hetzner')) {
       suspected = 'Cloud DHT Crawler (Hetzner)';
+    } else if (lowerOrg.includes('ovh')) {
+      suspected = 'Cloud DHT Crawler (OVH)';
     } else if (lowerOrg.includes('digitalocean')) {
       suspected = 'Cloud Monitor (DigitalOcean)';
+    } else if (lowerOrg.includes('scaleway')) {
+      suspected = 'Cloud Crawler (Scaleway)';
+    } else if (lowerOrg.includes('linode') || lowerOrg.includes('akamai')) {
+      suspected = 'Cloud Monitor (Linode/Akamai)';
+    } else if (lowerOrg.includes('choopa') || lowerOrg.includes('vultr')) {
+      suspected = 'Cloud DHT Probe (Vultr)';
+    } else if (lowerOrg.includes('leaseweb')) {
+      suspected = 'Cloud Scraper (Leaseweb)';
     } else if (lowerOrg.includes('amazon') || lowerOrg.includes('aws')) {
       suspected = 'Cloud Crawler (Amazon AWS)';
     } else if (lowerOrg.includes('cogent')) {
@@ -1285,9 +1295,9 @@ async function enrichSurveillanceNodes() {
         await pool.query(
           `UPDATE dht_surveillance_nodes 
            SET asn = $1, org = $2, 
-               suspected_entity = CASE WHEN suspected_entity = 'Unknown Monitor' OR suspected_entity = 'Suspicious Query Node' THEN $3 ELSE suspected_entity END,
-               score = LEAST(100, score + 35),
-               is_blocked = (LEAST(100, score + 35) >= 60)
+               suspected_entity = CASE WHEN suspected_entity = 'Unknown Monitor' OR suspected_entity = 'Suspicious Query Node' OR suspected_entity = 'Suspicious Non-Contributing Node' THEN $3 ELSE suspected_entity END,
+               score = LEAST(100, score + 25),
+               is_blocked = (LEAST(100, score + 25) >= 60)
            WHERE ip = $4::inet`,
           [info.asn, info.org, info.suspected, row.ip]
         );
@@ -1298,7 +1308,7 @@ async function enrichSurveillanceNodes() {
   }
 }
 
-// GET /api/surveillance/nodes - List detected surveillance bots with threat scores
+// GET /api/surveillance/nodes - List detected surveillance/abuse nodes with universal metrics
 app.get('/api/surveillance/nodes', async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
@@ -1306,6 +1316,7 @@ app.get('/api/surveillance/nodes', async (req, res) => {
     const offset = (page - 1) * limit;
     const minScore = parseInt(req.query.min_score || '0', 10);
     const blockedOnly = req.query.blocked_only === 'true';
+    const category = (req.query.category || '').trim();
     const search = req.query.search ? req.query.search.trim() : '';
 
     const conditions = ['score >= $1'];
@@ -1316,8 +1327,14 @@ app.get('/api/surveillance/nodes', async (req, res) => {
       conditions.push('is_blocked = TRUE');
     }
 
+    if (category && category.toLowerCase() !== 'all') {
+      conditions.push(`abuse_category = $${pIdx}`);
+      params.push(category);
+      pIdx++;
+    }
+
     if (search) {
-      conditions.push(`(host(ip) ILIKE $${pIdx} OR asn ILIKE $${pIdx} OR org ILIKE $${pIdx} OR suspected_entity ILIKE $${pIdx})`);
+      conditions.push(`(host(ip) ILIKE $${pIdx} OR asn ILIKE $${pIdx} OR org ILIKE $${pIdx} OR suspected_entity ILIKE $${pIdx} OR abuse_category ILIKE $${pIdx})`);
       params.push(`%${search}%`);
       pIdx++;
     }
@@ -1330,6 +1347,8 @@ app.get('/api/surveillance/nodes', async (req, res) => {
     const listQuery = `
       SELECT host(ip) AS ip, asn, org, score, query_count, distinct_hashes,
              bep42_violations, bep42_compliant_count, suspected_entity,
+             find_node_count, get_peers_count, announce_peer_count,
+             distinct_node_ids, COALESCE(abuse_category, 'Unclassified') AS abuse_category,
              is_blocked, first_seen, last_seen,
              array_to_json(ARRAY(
                SELECT encode(elem, 'hex') 
@@ -1345,13 +1364,15 @@ app.get('/api/surveillance/nodes', async (req, res) => {
 
     const listRes = await pool.query(listQuery, params);
 
-    // Aggregate statistics
+    // Aggregate statistics across universal abuse categories
     const statsRes = await pool.query(`
       SELECT 
         COUNT(*) AS total_surveillance_nodes,
         COUNT(*) FILTER (WHERE is_blocked = TRUE) AS blocked_nodes,
-        COUNT(*) FILTER (WHERE suspected_entity ILIKE '%Selectel%' OR suspected_entity ILIKE '%IKWYD%') AS ikwyd_nodes,
-        COUNT(*) FILTER (WHERE suspected_entity ILIKE '%DataCamp%') AS datacamp_nodes,
+        COUNT(*) FILTER (WHERE abuse_category = 'Sybil Node Rotator' OR distinct_node_ids > 1) AS sybil_nodes,
+        COUNT(*) FILTER (WHERE abuse_category = 'Passive Swarm Monitor' OR (get_peers_count >= 10 AND announce_peer_count = 0)) AS passive_monitors,
+        COUNT(*) FILTER (WHERE abuse_category = 'DHT Table Scraper' OR find_node_count >= 20) AS dht_scrapers,
+        COUNT(*) FILTER (WHERE abuse_category = 'Unreciprocating Leecher' OR (query_count >= 10 AND announce_peer_count = 0)) AS unreciprocating_leechers,
         COALESCE(SUM(query_count), 0) AS total_intercepted_queries,
         COALESCE(SUM(bep42_violations), 0) AS total_bep42_violations
       FROM dht_surveillance_nodes
@@ -1397,7 +1418,7 @@ app.post('/api/surveillance/nodes/:ip/toggle', async (req, res) => {
 app.get('/api/surveillance/blocklist.txt', async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT host(ip) AS ip, suspected_entity, score 
+      `SELECT host(ip) AS ip, suspected_entity, abuse_category, score 
        FROM dht_surveillance_nodes 
        WHERE is_blocked = TRUE 
        ORDER BY score DESC, last_seen DESC`
@@ -1405,13 +1426,14 @@ app.get('/api/surveillance/blocklist.txt', async (req, res) => {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="ipfilter.dat"');
 
-    let out = '# GAIA DHT Anti-Surveillance Blocklist (ipfilter.dat)\n';
+    let out = '# GAIA DHT Anti-Surveillance & Anti-Abuse Blocklist (ipfilter.dat)\n';
     out += `# Generated: ${new Date().toISOString()}\n`;
-    out += `# Protecting users against IKWYD, copyright monitors, and Sybil spiders\n`;
+    out += `# Protecting users against IKWYD, copyright trolls, Sybil crawlers, and unreciprocating DHT leeches\n`;
     out += `# Format: Start IP - End IP , Level , Description\n\n`;
 
     for (const row of r.rows) {
-      out += `${row.ip} - ${row.ip} , 000 , [GAIA] ${row.suspected_entity} (Threat Score: ${row.score})\n`;
+      const cat = row.abuse_category ? `[${row.abuse_category}] ` : '';
+      out += `${row.ip} - ${row.ip} , 000 , [GAIA] ${cat}${row.suspected_entity} (Threat Score: ${row.score})\n`;
     }
     res.send(out);
   } catch (err) {

@@ -15,7 +15,8 @@ import {
   Layers,
   ChevronLeft,
   ChevronRight,
-  Filter
+  Filter,
+  Radio
 } from 'lucide-react';
 
 export default function SurveillanceRadar() {
@@ -24,6 +25,7 @@ export default function SurveillanceRadar() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [minScore, setMinScore] = useState(0);
+  const [category, setCategory] = useState('all');
   const [blockedOnly, setBlockedOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 1 });
@@ -40,6 +42,9 @@ export default function SurveillanceRadar() {
         blocked_only: blockedOnly ? 'true' : 'false',
         search: search.trim()
       });
+      if (category && category !== 'all') {
+        params.append('category', category);
+      }
       const res = await fetch(`/api/surveillance/nodes?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
@@ -58,7 +63,7 @@ export default function SurveillanceRadar() {
 
   useEffect(() => {
     fetchNodes();
-  }, [page, minScore, blockedOnly]);
+  }, [page, minScore, category, blockedOnly]);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
@@ -93,36 +98,58 @@ export default function SurveillanceRadar() {
     }
   };
 
-  const getEntityBadge = (entity, score) => {
-    const e = (entity || '').toLowerCase();
-    if (e.includes('selectel') || e.includes('ikwyd') || e.includes('rightscorp') || e.includes('markmonitor')) {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/15 text-rose-400 border border-rose-500/30">
-          <ShieldAlert className="w-3 h-3" />
-          {entity}
-        </span>
-      );
+  const getCategoryBadge = (cat) => {
+    switch (cat) {
+      case 'Sybil Node Rotator':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-purple-500/15 text-purple-400 border border-purple-500/30">
+            <Layers className="w-3 h-3" />
+            Sybil Rotator
+          </span>
+        );
+      case 'Passive Swarm Monitor':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/15 text-rose-400 border border-rose-500/30">
+            <Eye className="w-3 h-3" />
+            Passive Monitor
+          </span>
+        );
+      case 'DHT Table Scraper':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+            <Radio className="w-3 h-3" />
+            Table Scraper
+          </span>
+        );
+      case 'Unreciprocating Leecher':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-orange-500/15 text-orange-400 border border-orange-500/30">
+            <AlertTriangle className="w-3 h-3" />
+            Leecher
+          </span>
+        );
+      case 'Cryptographic Spoofing Node':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-red-500/15 text-red-400 border border-red-500/30">
+            <Ban className="w-3 h-3" />
+            Crypto Spoof
+          </span>
+        );
+      case 'High-Rate Query Flooder':
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-500/15 text-blue-400 border border-blue-500/30">
+            <Activity className="w-3 h-3" />
+            Query Flooder
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-[#222] text-[#aaa]">
+            <ShieldAlert className="w-3 h-3" />
+            {cat || 'Suspicious'}
+          </span>
+        );
     }
-    if (e.includes('datacamp') || e.includes('m247') || e.includes('crawler') || e.includes('probe')) {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/30">
-          <AlertTriangle className="w-3 h-3" />
-          {entity}
-        </span>
-      );
-    }
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-purple-500/15 text-purple-400 border border-purple-500/30">
-        <Zap className="w-3 h-3" />
-        {entity || 'Suspicious Query Node'}
-      </span>
-    );
-  };
-
-  const getScoreColor = (score) => {
-    if (score >= 80) return 'text-rose-400 bg-rose-500';
-    if (score >= 50) return 'text-amber-400 bg-amber-500';
-    return 'text-emerald-400 bg-emerald-500';
   };
 
   return (
@@ -136,13 +163,13 @@ export default function SurveillanceRadar() {
             </div>
             <div>
               <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
-                DHT Surveillance Radar & Anti-Abuse Shield
+                Universal DHT Abuse & Surveillance Radar
                 <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
-                  ACTIVE POISONING
+                  ACTIVE INTERCEPTION
                 </span>
               </h2>
               <p className="text-xs text-[#888] mt-0.5">
-                Real-time threat intelligence intercepting IKWYD (<span className="text-[#bbb]">iknowwhatyoudownload.com</span>), copyright monitoring firms, and Sybil scrapers.
+                Behavioral detection intercepting all non-contributing DHT abusers: Sybil rotators, passive swarm monitors, routing scrapers, and unreciprocating leeches.
               </p>
             </div>
           </div>
@@ -173,7 +200,7 @@ export default function SurveillanceRadar() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
         <div className="p-4 rounded-xl bg-[#0e0e0e] border border-[#222]">
           <div className="flex items-center justify-between text-[#888] text-xs font-medium mb-1.5">
-            <span>Blocked Spy Bots</span>
+            <span>Blocked Abusers & Spies</span>
             <Ban className="w-4 h-4 text-rose-400" />
           </div>
           <div className="text-2xl font-bold font-mono text-white">
@@ -186,40 +213,40 @@ export default function SurveillanceRadar() {
 
         <div className="p-4 rounded-xl bg-[#0e0e0e] border border-[#222]">
           <div className="flex items-center justify-between text-[#888] text-xs font-medium mb-1.5">
-            <span>IKWYD / Selectel Nodes</span>
-            <ShieldAlert className="w-4 h-4 text-orange-400" />
-          </div>
-          <div className="text-2xl font-bold font-mono text-orange-400">
-            {parseInt(stats?.ikwyd_nodes || '0', 10).toLocaleString()}
-          </div>
-          <div className="text-[11px] text-[#666] mt-1">
-            Selectel AS49505 passive sniffers
-          </div>
-        </div>
-
-        <div className="p-4 rounded-xl bg-[#0e0e0e] border border-[#222]">
-          <div className="flex items-center justify-between text-[#888] text-xs font-medium mb-1.5">
-            <span>BEP 42 Sybil Violations</span>
-            <Zap className="w-4 h-4 text-purple-400" />
+            <span>Sybil Attacks Neutralized</span>
+            <Layers className="w-4 h-4 text-purple-400" />
           </div>
           <div className="text-2xl font-bold font-mono text-purple-400">
-            {parseInt(stats?.total_bep42_violations || '0', 10).toLocaleString()}
+            {parseInt(stats?.sybil_nodes || '0', 10).toLocaleString()}
           </div>
           <div className="text-[11px] text-[#666] mt-1">
-            cryptographically spoofed Node IDs
+            rotating multiple Node IDs per IP
           </div>
         </div>
 
         <div className="p-4 rounded-xl bg-[#0e0e0e] border border-[#222]">
           <div className="flex items-center justify-between text-[#888] text-xs font-medium mb-1.5">
-            <span>Intercepted Queries</span>
-            <Activity className="w-4 h-4 text-blue-400" />
+            <span>Passive Swarm Monitors</span>
+            <Eye className="w-4 h-4 text-orange-400" />
           </div>
-          <div className="text-2xl font-bold font-mono text-blue-400">
-            {parseInt(stats?.total_intercepted_queries || '0', 10).toLocaleString()}
+          <div className="text-2xl font-bold font-mono text-orange-400">
+            {parseInt(stats?.passive_monitors || '0', 10).toLocaleString()}
           </div>
           <div className="text-[11px] text-[#666] mt-1">
-            get_peers snooping requests
+            zero-announce sniffing nodes
+          </div>
+        </div>
+
+        <div className="p-4 rounded-xl bg-[#0e0e0e] border border-[#222]">
+          <div className="flex items-center justify-between text-[#888] text-xs font-medium mb-1.5">
+            <span>Routing Scrapers & Flooders</span>
+            <Radio className="w-4 h-4 text-blue-400" />
+          </div>
+          <div className="text-2xl font-bold font-mono text-blue-400">
+            {parseInt(stats?.dht_scrapers || '0', 10).toLocaleString()}
+          </div>
+          <div className="text-[11px] text-[#666] mt-1">
+            excessive find_node harvesters
           </div>
         </div>
       </div>
@@ -230,15 +257,15 @@ export default function SurveillanceRadar() {
           <Shield className="w-5 h-5 text-rose-400 mt-0.5 shrink-0" />
           <div className="space-y-1 text-xs text-[#aaa]">
             <p className="font-semibold text-white">
-              Autonomous Honey-Pot Counter-Measures Active
+              Autonomous Honey-Pot Counter-Measures & Protocol Defense
             </p>
             <p>
-              When an identified surveillance entity queries GAIA for torrent peers, GAIA automatically feeds them 
-              <span className="text-rose-300 font-mono"> RFC 5737 dummy documentation nodes (192.0.2.0/24, 198.51.100.0/24)</span>. 
-              This pollutes IKWYD's public database and copyright troll logs with unrouteable IPs, preventing accurate attribution of home downloaders.
+              When an identified surveillance entity or non-contributing leech queries GAIA for torrent peers or routing table nodes, GAIA automatically feeds them 
+              <span className="text-rose-300 font-mono"> RFC 5737 dummy documentation nodes (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24)</span>. 
+              This poisons external tracking databases, traps scrapers in dead-end routing loops, and protects legitimate BitTorrent users from IP harvesting.
             </p>
             <p className="text-[11px] text-[#777] pt-0.5">
-              💡 Tip: Click <span className="text-white font-medium">Export ipfilter.dat</span> and drop it into qBittorrent (<span className="font-mono text-[#999]">Tools &gt; Options &gt; Connection &gt; IP Filtering</span>) to prevent surveillance scrapers from discovering your client.
+              💡 Community Protection: Export <span className="text-white font-medium">ipfilter.dat</span> into your torrent client to prevent known monitors and malicious crawlers from ever discovering your downloads.
             </p>
           </div>
         </div>
@@ -253,7 +280,7 @@ export default function SurveillanceRadar() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by IP, ASN, Organization, or Entity name..."
+              placeholder="Search by IP, Category, Organization, or Entity name..."
               className="w-full bg-[#161616] border border-[#282828] text-white text-xs pl-8 pr-3 py-1.5 rounded-lg focus:outline-none focus:border-rose-500/50"
             />
           </div>
@@ -265,7 +292,27 @@ export default function SurveillanceRadar() {
           </button>
         </form>
 
-        <div className="flex items-center gap-3 text-xs">
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[#888]">Category:</span>
+            <select
+              value={category}
+              onChange={(e) => {
+                setCategory(e.target.value);
+                setPage(1);
+              }}
+              className="bg-[#161616] border border-[#282828] text-white rounded-lg px-2 py-1 text-xs focus:outline-none"
+            >
+              <option value="all">All Abuse Types</option>
+              <option value="Sybil Node Rotator">Sybil Node Rotator</option>
+              <option value="Passive Swarm Monitor">Passive Swarm Monitor</option>
+              <option value="DHT Table Scraper">DHT Table Scraper</option>
+              <option value="Unreciprocating Leecher">Unreciprocating Leecher</option>
+              <option value="Cryptographic Spoofing Node">Cryptographic Spoofing</option>
+              <option value="High-Rate Query Flooder">Query Flooder</option>
+            </select>
+          </div>
+
           <div className="flex items-center gap-1.5">
             <span className="text-[#888]">Min Score:</span>
             <select
@@ -278,7 +325,7 @@ export default function SurveillanceRadar() {
             >
               <option value="0">All Scores (0+)</option>
               <option value="50">Suspicious (50+)</option>
-              <option value="75">Confirmed Spies (75+)</option>
+              <option value="75">Confirmed Abusers (75+)</option>
             </select>
           </div>
 
@@ -303,49 +350,59 @@ export default function SurveillanceRadar() {
           <table className="w-full text-left text-xs border-collapse">
             <thead>
               <tr className="bg-[#121212] border-b border-[#222] text-[#888] font-medium">
-                <th className="py-3 px-4">Suspected Entity</th>
+                <th className="py-3 px-4">Abuse Category</th>
                 <th className="py-3 px-4">IP Address</th>
-                <th className="py-3 px-4">ASN / Hosting Organization</th>
+                <th className="py-3 px-4">Suspected Entity / ASN</th>
                 <th className="py-3 px-4 text-center">Threat Score</th>
                 <th className="py-3 px-4 text-center">BEP 42 Crypto</th>
-                <th className="py-3 px-4 text-right">Queries</th>
-                <th className="py-3 px-4 text-center">Honey-Pot Status</th>
+                <th className="py-3 px-4 text-center">Sybil Node IDs</th>
+                <th className="py-3 px-4 text-right">Traffic Volume</th>
+                <th className="py-3 px-4 text-center">Status</th>
                 <th className="py-3 px-4 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1b1b1b]">
               {loading && nodes.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="py-12 text-center text-[#666]">
+                  <td colSpan="9" className="py-12 text-center text-[#666]">
                     <div className="flex items-center justify-center gap-2">
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      Scanning DHT surveillance telemetry...
+                      Scanning DHT abuse & surveillance telemetry...
                     </div>
                   </td>
                 </tr>
               ) : nodes.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="py-12 text-center text-[#666]">
-                    No surveillance entities match the active filters.
+                  <td colSpan="9" className="py-12 text-center text-[#666]">
+                    No entities match the active filters.
                   </td>
                 </tr>
               ) : (
                 nodes.map((node) => {
                   const scorePct = Math.min(100, Math.max(0, node.score || 0));
+                  const nodeIdsCount = parseInt(node.distinct_node_ids || '1', 10);
+                  const getPeers = parseInt(node.get_peers_count || node.query_count || '0', 10);
+                  const announces = parseInt(node.announce_peer_count || '0', 10);
+                  const findNodes = parseInt(node.find_node_count || '0', 10);
+
                   return (
                     <tr key={node.ip} className="hover:bg-[#141414] transition-colors">
                       <td className="py-3 px-4">
-                        {getEntityBadge(node.suspected_entity, node.score)}
+                        {getCategoryBadge(node.abuse_category)}
                       </td>
                       <td className="py-3 px-4">
                         <div className="font-mono text-white font-medium">{node.ip}</div>
                         <div className="text-[10px] text-[#666]">
-                          Last seen: {new Date(node.last_seen).toLocaleTimeString()}
+                          Last: {new Date(node.last_seen).toLocaleTimeString()}
                         </div>
                       </td>
                       <td className="py-3 px-4">
-                        <div className="text-[#ccc] font-medium">{node.org || 'Resolving AS Org...'}</div>
-                        <div className="text-[11px] font-mono text-[#777]">{node.asn || 'AS Pending'}</div>
+                        <div className="text-[#ccc] font-medium truncate max-w-[220px]" title={node.suspected_entity}>
+                          {node.suspected_entity}
+                        </div>
+                        <div className="text-[11px] font-mono text-[#777]">
+                          {node.asn || 'AS Pending'} {node.org ? `• ${node.org}` : ''}
+                        </div>
                       </td>
                       <td className="py-3 px-4 text-center">
                         <div className="inline-flex flex-col items-center gap-1">
@@ -373,8 +430,21 @@ export default function SurveillanceRadar() {
                           </span>
                         )}
                       </td>
+                      <td className="py-3 px-4 text-center">
+                        {nodeIdsCount > 1 ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                            <Layers className="w-3 h-3" />
+                            {nodeIdsCount} IDs (Sybil)
+                          </span>
+                        ) : (
+                          <span className="font-mono text-[11px] text-[#888]">1 ID</span>
+                        )}
+                      </td>
                       <td className="py-3 px-4 text-right font-mono text-[#ccc]">
-                        <div>{parseInt(node.query_count || '0', 10).toLocaleString()}</div>
+                        <div>{parseInt(node.query_count || '0', 10).toLocaleString()} queries</div>
+                        <div className="text-[10px] text-[#666]">
+                          {getPeers} GP • {announces} Ann • {findNodes} FN
+                        </div>
                         {node.sample_hashes && node.sample_hashes.length > 0 && (
                           <button
                             onClick={() => setInspectingHashes({ ip: node.ip, hashes: node.sample_hashes })}
@@ -431,7 +501,7 @@ export default function SurveillanceRadar() {
               <span className="text-white">
                 {Math.min(pagination.page * pagination.limit, pagination.total)}
               </span>{' '}
-              of <span className="text-white">{pagination.total.toLocaleString()}</span> surveillance entities
+              of <span className="text-white">{pagination.total.toLocaleString()}</span> entities
             </div>
             <div className="flex items-center gap-1">
               <button
@@ -456,50 +526,56 @@ export default function SurveillanceRadar() {
         )}
       </div>
 
-      {/* Sample Hashes Modal */}
+      {/* Target Infohashes Modal */}
       {inspectingHashes && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-[#121212] border border-[#2a2a2a] rounded-xl max-w-lg w-full p-5 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-[#222] pb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div className="bg-[#121212] border border-[#282828] rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[#222]">
               <div>
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
                   <ShieldAlert className="w-4 h-4 text-rose-400" />
-                  Snooped Infohashes by {inspectingHashes.ip}
+                  Targeted Torrent Infohashes
                 </h3>
-                <p className="text-[11px] text-[#777] mt-0.5">
-                  Content hashes queried by this surveillance entity
+                <p className="text-xs text-[#888] font-mono mt-0.5">
+                  Node IP: {inspectingHashes.ip}
                 </p>
               </div>
               <button
                 onClick={() => setInspectingHashes(null)}
-                className="text-[#888] hover:text-white text-xs px-2 py-1 bg-[#1c1c1c] rounded"
+                className="text-[#888] hover:text-white p-1 rounded-lg hover:bg-[#222]"
               >
-                Close
+                ✕
               </button>
             </div>
-
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {inspectingHashes.hashes.map((h, i) => (
+            <div className="p-5 space-y-2 max-h-[360px] overflow-y-auto font-mono text-xs">
+              <p className="text-[11px] text-[#777] mb-3">
+                Torrents probed by this entity. Poison responses containing dummy peer IPs were returned.
+              </p>
+              {inspectingHashes.hashes.map((hash, idx) => (
                 <div
-                  key={i}
-                  className="p-2.5 rounded-lg bg-[#181818] border border-[#262626] font-mono text-xs text-[#ddd] flex items-center justify-between"
+                  key={idx}
+                  className="flex items-center justify-between p-2.5 rounded-lg bg-[#181818] border border-[#222] text-[#ddd] select-all"
                 >
-                  <span className="truncate">{h}</span>
+                  <span className="truncate">{hash}</span>
                   <a
-                    href={`/api/torrents/${h}`}
+                    href={`/api/torrent/${hash}`}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-rose-400 hover:text-rose-300 text-[11px] shrink-0 ml-2 flex items-center gap-1"
+                    className="text-[#888] hover:text-white shrink-0 ml-2"
+                    title="Inspect in GAIA database"
                   >
-                    Inspect
-                    <ExternalLink className="w-3 h-3" />
+                    <ExternalLink className="w-3.5 h-3.5" />
                   </a>
                 </div>
               ))}
             </div>
-
-            <div className="text-[11px] text-[#666] border-t border-[#222] pt-3">
-              GAIA replaces results for these hashes with RFC 5737 dummy peers when this entity queries.
+            <div className="px-5 py-3 bg-[#161616] border-t border-[#222] flex justify-end">
+              <button
+                onClick={() => setInspectingHashes(null)}
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-[#222] hover:bg-[#2c2c2c] rounded-lg"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

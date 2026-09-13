@@ -5,9 +5,38 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AbuseCategory {
+    SybilRotator,
+    PassiveMonitor,
+    RoutingScraper,
+    UnreciprocatingLeecher,
+    CryptoSpoofer,
+    QueryFlooder,
+    LegitimatePeer,
+}
+
+impl AbuseCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::SybilRotator => "Sybil Node Rotator",
+            Self::PassiveMonitor => "Passive Swarm Monitor",
+            Self::RoutingScraper => "DHT Table Scraper",
+            Self::UnreciprocatingLeecher => "Unreciprocating Leecher",
+            Self::CryptoSpoofer => "Cryptographic Spoofing Node",
+            Self::QueryFlooder => "High-Rate Query Flooder",
+            Self::LegitimatePeer => "Legitimate Peer",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SurveillanceNodeEntry {
-    pub query_count: u32,
+    pub node_ids: Vec<[u8; 20]>,
+    pub total_node_ids_seen: u32,
+    pub get_peers_count: u64,
+    pub find_node_count: u64,
+    pub announce_peer_count: u64,
     pub bep42_violations: u32,
     pub bep42_valid: u32,
     pub sample_hashes: Vec<[u8; 20]>,
@@ -43,7 +72,8 @@ impl SurveillanceRecorder {
                 Ok(ips) => {
                     let mut count = 0;
                     for (ip_str,) in ips {
-                        if let Ok(parsed) = ip_str.parse::<IpAddr>() {
+                        let bare_ip = ip_str.split('/').next().unwrap_or(&ip_str);
+                        if let Ok(parsed) = bare_ip.parse::<IpAddr>() {
                             self.blocked_ips.insert(parsed);
                             count += 1;
                         }
@@ -57,20 +87,36 @@ impl SurveillanceRecorder {
         }
     }
 
-    /// Fast lock-free check if an IP is a known surveillance bot
+    /// Fast lock-free check if an IP is a known surveillance/abusive bot
     #[inline]
     pub fn is_blocked(&self, ip: &IpAddr) -> bool {
         self.blocked_ips.contains(ip)
     }
 
-    /// Record an inbound query event in real time. DashMap shard lookup takes < 100ns.
-    pub fn record(&self, ip: IpAddr, bep42_valid: bool, ih: [u8; 20]) {
+    /// Update node ID tracking for an entry
+    fn track_node_id(entry: &mut SurveillanceNodeEntry, sender_id: Option<&[u8; 20]>) {
+        if let Some(id) = sender_id {
+            if !entry.node_ids.contains(id) {
+                entry.total_node_ids_seen = entry.total_node_ids_seen.saturating_add(1);
+                if entry.node_ids.len() < 10 {
+                    entry.node_ids.push(*id);
+                }
+            }
+        }
+    }
+
+    /// Record an inbound `get_peers` query event
+    pub fn record_get_peers(&self, ip: IpAddr, sender_id: Option<&[u8; 20]>, bep42_valid: bool, ih: [u8; 20]) {
         if !bep42_valid {
             self.metrics.surveillance_bep42_violations.add(1);
         }
 
         let mut entry = self.nodes.entry(ip).or_insert_with(|| SurveillanceNodeEntry {
-            query_count: 0,
+            node_ids: Vec::with_capacity(2),
+            total_node_ids_seen: 0,
+            get_peers_count: 0,
+            find_node_count: 0,
+            announce_peer_count: 0,
             bep42_violations: 0,
             bep42_valid: 0,
             sample_hashes: Vec::with_capacity(5),
@@ -78,17 +124,84 @@ impl SurveillanceRecorder {
             last_seen: chrono::Utc::now(),
         });
 
-        entry.query_count = entry.query_count.saturating_add(1);
+        entry.get_peers_count = entry.get_peers_count.saturating_add(1);
+        Self::track_node_id(&mut entry, sender_id);
+
         if bep42_valid {
             entry.bep42_valid = entry.bep42_valid.saturating_add(1);
         } else {
             entry.bep42_violations = entry.bep42_violations.saturating_add(1);
         }
 
-        if entry.sample_hashes.len() < 5 && !entry.sample_hashes.contains(&ih) {
+        if entry.sample_hashes.len() < 10 && !entry.sample_hashes.contains(&ih) {
             entry.sample_hashes.push(ih);
         }
         entry.last_seen = chrono::Utc::now();
+    }
+
+    /// Record an inbound `find_node` query event (detecting DHT topology scrapers)
+    pub fn record_find_node(&self, ip: IpAddr, sender_id: Option<&[u8; 20]>, bep42_valid: bool, _target: [u8; 20]) {
+        if !bep42_valid {
+            self.metrics.surveillance_bep42_violations.add(1);
+        }
+
+        let mut entry = self.nodes.entry(ip).or_insert_with(|| SurveillanceNodeEntry {
+            node_ids: Vec::with_capacity(2),
+            total_node_ids_seen: 0,
+            get_peers_count: 0,
+            find_node_count: 0,
+            announce_peer_count: 0,
+            bep42_violations: 0,
+            bep42_valid: 0,
+            sample_hashes: Vec::with_capacity(5),
+            first_seen: chrono::Utc::now(),
+            last_seen: chrono::Utc::now(),
+        });
+
+        entry.find_node_count = entry.find_node_count.saturating_add(1);
+        Self::track_node_id(&mut entry, sender_id);
+
+        if bep42_valid {
+            entry.bep42_valid = entry.bep42_valid.saturating_add(1);
+        } else {
+            entry.bep42_violations = entry.bep42_violations.saturating_add(1);
+        }
+        entry.last_seen = chrono::Utc::now();
+    }
+
+    /// Record an inbound `announce_peer` event (crucial: proves legitimate swarm participation)
+    pub fn record_announce_peer(&self, ip: IpAddr, sender_id: Option<&[u8; 20]>, bep42_valid: bool, ih: [u8; 20]) {
+        let mut entry = self.nodes.entry(ip).or_insert_with(|| SurveillanceNodeEntry {
+            node_ids: Vec::with_capacity(2),
+            total_node_ids_seen: 0,
+            get_peers_count: 0,
+            find_node_count: 0,
+            announce_peer_count: 0,
+            bep42_violations: 0,
+            bep42_valid: 0,
+            sample_hashes: Vec::with_capacity(5),
+            first_seen: chrono::Utc::now(),
+            last_seen: chrono::Utc::now(),
+        });
+
+        entry.announce_peer_count = entry.announce_peer_count.saturating_add(1);
+        Self::track_node_id(&mut entry, sender_id);
+
+        if bep42_valid {
+            entry.bep42_valid = entry.bep42_valid.saturating_add(1);
+        } else {
+            entry.bep42_violations = entry.bep42_violations.saturating_add(1);
+        }
+
+        if entry.sample_hashes.len() < 10 && !entry.sample_hashes.contains(&ih) {
+            entry.sample_hashes.push(ih);
+        }
+        entry.last_seen = chrono::Utc::now();
+    }
+
+    /// Legacy record method forwarding to record_get_peers
+    pub fn record(&self, ip: IpAddr, bep42_valid: bool, ih: [u8; 20]) {
+        self.record_get_peers(ip, None, bep42_valid, ih);
     }
 
     /// Sweeps in-memory stats, scores suspicious entities, persists to PostgreSQL,
@@ -106,9 +219,15 @@ impl SurveillanceRecorder {
             let ip = *item.key();
             let entry = item.value().clone();
             let asn_hint = detect_asn_hint(&ip);
+            let total_queries = entry.get_peers_count + entry.find_node_count;
 
-            // Benign single-query home users (valid BEP42, low query rate, non-datacenter)
-            if entry.bep42_violations == 0 && entry.query_count < 10 && asn_hint.is_none() && !self.blocked_ips.contains(&ip) {
+            // Benign single-query home users (valid BEP42, single node ID, low queries, non-datacenter)
+            if entry.bep42_violations == 0 
+                && entry.total_node_ids_seen <= 1 
+                && total_queries < 10 
+                && asn_hint.is_none() 
+                && !self.blocked_ips.contains(&ip) 
+            {
                 if (chrono::Utc::now() - entry.last_seen).num_seconds() > 300 {
                     to_purge.push(ip);
                 }
@@ -116,8 +235,8 @@ impl SurveillanceRecorder {
             }
 
             // Suspicious or surveillance candidate
-            let (score, suspected) = calculate_threat_score(&entry, asn_hint);
-            candidates.push((ip, entry, asn_hint, score, suspected));
+            let (score, category, suspected) = calculate_universal_threat_score(&entry, asn_hint);
+            candidates.push((ip, entry, asn_hint, score, category, suspected));
         }
 
         // Purge old benign entries
@@ -139,16 +258,24 @@ impl SurveillanceRecorder {
                 }
             };
 
-            for (ip, entry, asn_hint, score, suspected) in &candidates {
+            for (ip, entry, asn_hint, score, category, suspected) in &candidates {
                 let asn = asn_hint.map(|(a, _, _)| a.to_string());
                 let org = asn_hint.map(|(_, o, _)| o.to_string());
                 let is_blocked = *score >= 60;
                 let sample_hashes: Vec<Vec<u8>> = entry.sample_hashes.iter().map(|h| h.to_vec()).collect();
+                let total_queries = (entry.get_peers_count + entry.find_node_count) as i64;
+                let distinct_node_ids = entry.total_node_ids_seen.max(1) as i32;
 
                 if is_blocked && !self.blocked_ips.contains(ip) {
                     self.blocked_ips.insert(*ip);
                     self.metrics.surveillance_nodes_flagged.add(1);
-                    tracing::info!(ip = %ip, score = score, entity = suspected, "surveillance: flagged & blocked spy bot");
+                    tracing::info!(
+                        ip = %ip,
+                        score = score,
+                        category = category.as_str(),
+                        entity = %suspected,
+                        "surveillance: intercepted & blocked non-contributing/spying node"
+                    );
                 }
 
                 let query_result = sqlx::query(
@@ -156,9 +283,11 @@ impl SurveillanceRecorder {
                     INSERT INTO dht_surveillance_nodes (
                         ip, asn, org, score, query_count, distinct_hashes,
                         bep42_violations, bep42_compliant_count, suspected_entity,
-                        sample_hashes, is_blocked, first_seen, last_seen
+                        sample_hashes, is_blocked, first_seen, last_seen,
+                        find_node_count, get_peers_count, announce_peer_count,
+                        distinct_node_ids, abuse_category
                     )
-                    VALUES ($1::inet, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    VALUES ($1::inet, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                     ON CONFLICT (ip) DO UPDATE SET
                         asn = COALESCE(dht_surveillance_nodes.asn, EXCLUDED.asn),
                         org = COALESCE(dht_surveillance_nodes.org, EXCLUDED.org),
@@ -167,9 +296,15 @@ impl SurveillanceRecorder {
                         distinct_hashes = GREATEST(dht_surveillance_nodes.distinct_hashes, EXCLUDED.distinct_hashes),
                         bep42_violations = dht_surveillance_nodes.bep42_violations + EXCLUDED.bep42_violations,
                         bep42_compliant_count = dht_surveillance_nodes.bep42_compliant_count + EXCLUDED.bep42_compliant_count,
+                        find_node_count = dht_surveillance_nodes.find_node_count + EXCLUDED.find_node_count,
+                        get_peers_count = dht_surveillance_nodes.get_peers_count + EXCLUDED.get_peers_count,
+                        announce_peer_count = dht_surveillance_nodes.announce_peer_count + EXCLUDED.announce_peer_count,
+                        distinct_node_ids = GREATEST(dht_surveillance_nodes.distinct_node_ids, EXCLUDED.distinct_node_ids),
+                        abuse_category = EXCLUDED.abuse_category,
                         suspected_entity = CASE 
                             WHEN dht_surveillance_nodes.suspected_entity = 'Unknown Monitor' 
                                  OR dht_surveillance_nodes.suspected_entity = 'Suspicious Query Node'
+                                 OR dht_surveillance_nodes.suspected_entity = 'Suspicious Non-Contributing Node'
                             THEN EXCLUDED.suspected_entity 
                             ELSE dht_surveillance_nodes.suspected_entity 
                         END,
@@ -184,7 +319,7 @@ impl SurveillanceRecorder {
                 .bind(asn)
                 .bind(org)
                 .bind(score)
-                .bind(entry.query_count as i64)
+                .bind(total_queries)
                 .bind(entry.sample_hashes.len() as i32)
                 .bind(entry.bep42_violations as i32)
                 .bind(entry.bep42_valid as i32)
@@ -193,6 +328,11 @@ impl SurveillanceRecorder {
                 .bind(is_blocked)
                 .bind(entry.first_seen)
                 .bind(entry.last_seen)
+                .bind(entry.find_node_count as i64)
+                .bind(entry.get_peers_count as i64)
+                .bind(entry.announce_peer_count as i64)
+                .bind(distinct_node_ids)
+                .bind(category.as_str())
                 .execute(&mut *tx)
                 .await;
 
@@ -323,49 +463,134 @@ pub fn detect_asn_hint(ip: &IpAddr) -> Option<(&'static str, &'static str, &'sta
     None
 }
 
-/// Computes surveillance threat score (0-100) and suspected entity label
+/// Universal threat and abuse scoring algorithm:
+/// Evaluates Sybil node rotation, zero-contribution asymmetry, routing table scraping,
+/// BEP 42 cryptographic compliance, multi-hash dispersion, and legitimacy discounts.
+pub fn calculate_universal_threat_score(
+    entry: &SurveillanceNodeEntry,
+    asn_hint: Option<(&'static str, &'static str, &'static str)>,
+) -> (i32, AbuseCategory, String) {
+    let mut score: i32 = 0;
+    let total_queries = entry.get_peers_count + entry.find_node_count;
+
+    // 1. Sybil Attack: Multiple Node IDs from single IP (+45 pts)
+    if entry.total_node_ids_seen > 1 {
+        score += 45;
+    }
+
+    // 2. BEP 42 Cryptographic Verification (+30 to +40 pts)
+    if entry.bep42_violations > 0 {
+        if entry.bep42_valid == 0 {
+            score += 40;
+        } else {
+            score += 25;
+        }
+    }
+
+    // 3. Traffic Asymmetry: Harvesting get_peers without announcing (+15 to +30 pts)
+    if entry.get_peers_count >= 10 && entry.announce_peer_count == 0 {
+        score += 30;
+    } else if entry.get_peers_count >= 5 && entry.announce_peer_count == 0 {
+        score += 15;
+    }
+
+    // 4. Routing Table Scraping: High find_node volume (+15 to +30 pts)
+    if entry.find_node_count >= 30 && entry.announce_peer_count == 0 {
+        score += 30;
+    } else if entry.find_node_count >= 15 && entry.announce_peer_count == 0 {
+        score += 15;
+    }
+
+    // 5. Multi-Hash Dispersion (+10 to +20 pts)
+    if entry.sample_hashes.len() >= 5 {
+        score += 20;
+    } else if entry.sample_hashes.len() >= 3 {
+        score += 10;
+    }
+
+    // 6. Hosting / Datacenter Infrastructure (+25 pts)
+    if asn_hint.is_some() {
+        score += 25;
+    }
+
+    // 7. Extreme Query Volume (+15 to +25 pts)
+    if total_queries >= 100 {
+        score += 25;
+    } else if total_queries >= 40 {
+        score += 15;
+    }
+
+    // 8. Legitimacy Credits (Negative Threat Points for real peers)
+    if entry.announce_peer_count > 0 {
+        let announce_discount = (entry.announce_peer_count as i32 * 15).min(45);
+        score = score.saturating_sub(announce_discount);
+    }
+    if entry.bep42_valid > 0 && entry.bep42_violations == 0 && entry.total_node_ids_seen <= 1 {
+        score = score.saturating_sub(25);
+    }
+
+    let final_score = score.clamp(0, 100);
+
+    // Dynamic categorization
+    let (category, suspected) = if entry.total_node_ids_seen > 1 {
+        (
+            AbuseCategory::SybilRotator,
+            format!("Sybil Node Rotator ({} distinct Node IDs)", entry.total_node_ids_seen),
+        )
+    } else if entry.find_node_count >= 20 && entry.get_peers_count < 5 {
+        (
+            AbuseCategory::RoutingScraper,
+            format!("DHT Table Scraper ({} find_node probes)", entry.find_node_count),
+        )
+    } else if entry.get_peers_count >= 10 && entry.announce_peer_count == 0 {
+        if let Some((_, org, hint_name)) = asn_hint {
+            (
+                AbuseCategory::PassiveMonitor,
+                format!("{} ({})", hint_name, org),
+            )
+        } else {
+            (
+                AbuseCategory::PassiveMonitor,
+                format!("Passive Swarm Monitor ({} queries / 0 announces)", entry.get_peers_count),
+            )
+        }
+    } else if entry.bep42_violations > 0 && entry.bep42_valid == 0 {
+        (
+            AbuseCategory::CryptoSpoofer,
+            "Cryptographic Spoofing Node (BEP 42 Failed)".to_string(),
+        )
+    } else if total_queries >= 80 {
+        (
+            AbuseCategory::QueryFlooder,
+            format!("High-Rate Query Flooder ({} total queries)", total_queries),
+        )
+    } else if entry.get_peers_count > 0 && entry.announce_peer_count == 0 && final_score >= 60 {
+        (
+            AbuseCategory::UnreciprocatingLeecher,
+            "Unreciprocating DHT Leecher (0 Swarm Contribution)".to_string(),
+        )
+    } else if final_score < 50 {
+        (
+            AbuseCategory::LegitimatePeer,
+            "Legitimate Swarm Participant".to_string(),
+        )
+    } else {
+        (
+            AbuseCategory::UnreciprocatingLeecher,
+            "Suspicious Non-Contributing Node".to_string(),
+        )
+    };
+
+    (final_score, category, suspected)
+}
+
+/// Backwards compatibility helper for legacy threat score tests
 pub fn calculate_threat_score(
     entry: &SurveillanceNodeEntry,
     asn_hint: Option<(&'static str, &'static str, &'static str)>,
 ) -> (i32, String) {
-    let mut score = 0;
-
-    // 1. BEP 42 Violation check (+35 pts, or +45 if 100% violations)
-    if entry.bep42_violations > 0 {
-        if entry.bep42_valid == 0 {
-            score += 45;
-        } else {
-            score += 35;
-        }
-    }
-
-    // 2. Datacenter ASN check (+35 pts)
-    let suspected = if let Some((_, _, s)) = asn_hint {
-        score += 35;
-        s.to_string()
-    } else if entry.bep42_violations > 0 {
-        "Sybil Crawler / Spoofed Node ID".to_string()
-    } else if entry.query_count >= 20 {
-        "High-Volume DHT Scraper".to_string()
-    } else {
-        "Suspicious Query Node".to_string()
-    };
-
-    // 3. High query rate (+15 to +25 pts)
-    if entry.query_count >= 50 {
-        score += 25;
-    } else if entry.query_count >= 15 {
-        score += 15;
-    }
-
-    // 4. Multi-hash tracking (+10 to +15 pts)
-    if entry.sample_hashes.len() >= 4 {
-        score += 15;
-    } else if entry.sample_hashes.len() >= 2 {
-        score += 10;
-    }
-
-    (score.min(100), suspected)
+    let (score, _, suspected) = calculate_universal_threat_score(entry, asn_hint);
+    (score, suspected)
 }
 
 #[cfg(test)]
@@ -393,18 +618,82 @@ mod tests {
     }
 
     #[test]
-    fn test_threat_scoring() {
+    fn test_sybil_node_id_rotation_detection() {
         let entry = SurveillanceNodeEntry {
-            query_count: 55,
-            bep42_violations: 55,
+            node_ids: vec![[1u8; 20], [2u8; 20], [3u8; 20]],
+            total_node_ids_seen: 3,
+            get_peers_count: 10,
+            find_node_count: 0,
+            announce_peer_count: 0,
+            bep42_violations: 10,
             bep42_valid: 0,
-            sample_hashes: vec![[1u8; 20], [2u8; 20], [3u8; 20], [4u8; 20]],
+            sample_hashes: vec![[10u8; 20]],
             first_seen: chrono::Utc::now(),
             last_seen: chrono::Utc::now(),
         };
-        let hint = Some(("AS49505", "Selectel", "IKWYD Spying Node (Selectel)"));
-        let (score, entity) = calculate_threat_score(&entry, hint);
-        assert_eq!(score, 100);
-        assert!(entity.contains("Selectel"));
+        // No ASN hint needed: pure behavioral detection!
+        let (score, category, desc) = calculate_universal_threat_score(&entry, None);
+        assert!(score >= 80);
+        assert_eq!(category, AbuseCategory::SybilRotator);
+        assert!(desc.contains("Sybil"));
+    }
+
+    #[test]
+    fn test_passive_swarm_monitor_detection() {
+        let entry = SurveillanceNodeEntry {
+            node_ids: vec![[1u8; 20]],
+            total_node_ids_seen: 1,
+            get_peers_count: 25,
+            find_node_count: 0,
+            announce_peer_count: 0,
+            bep42_violations: 25,
+            bep42_valid: 0,
+            sample_hashes: vec![[1u8; 20], [2u8; 20], [3u8; 20], [4u8; 20], [5u8; 20]],
+            first_seen: chrono::Utc::now(),
+            last_seen: chrono::Utc::now(),
+        };
+        let (score, category, desc) = calculate_universal_threat_score(&entry, None);
+        assert!(score >= 80);
+        assert_eq!(category, AbuseCategory::PassiveMonitor);
+        assert!(desc.contains("Passive Swarm Monitor"));
+    }
+
+    #[test]
+    fn test_dht_routing_scraper_detection() {
+        let entry = SurveillanceNodeEntry {
+            node_ids: vec![[1u8; 20]],
+            total_node_ids_seen: 1,
+            get_peers_count: 1,
+            find_node_count: 45,
+            announce_peer_count: 0,
+            bep42_violations: 40,
+            bep42_valid: 6,
+            sample_hashes: vec![],
+            first_seen: chrono::Utc::now(),
+            last_seen: chrono::Utc::now(),
+        };
+        let (score, category, desc) = calculate_universal_threat_score(&entry, None);
+        assert!(score >= 60);
+        assert_eq!(category, AbuseCategory::RoutingScraper);
+        assert!(desc.contains("DHT Table Scraper"));
+    }
+
+    #[test]
+    fn test_legitimate_peer_not_blocked() {
+        let entry = SurveillanceNodeEntry {
+            node_ids: vec![[1u8; 20]],
+            total_node_ids_seen: 1,
+            get_peers_count: 4,
+            find_node_count: 2,
+            announce_peer_count: 2, // Legitimate announce!
+            bep42_violations: 0,
+            bep42_valid: 6,         // BEP 42 compliant!
+            sample_hashes: vec![[1u8; 20]],
+            first_seen: chrono::Utc::now(),
+            last_seen: chrono::Utc::now(),
+        };
+        let (score, category, _) = calculate_universal_threat_score(&entry, None);
+        assert_eq!(score, 0);
+        assert_eq!(category, AbuseCategory::LegitimatePeer);
     }
 }
