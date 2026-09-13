@@ -34,10 +34,10 @@ DANGEROUS_STANDALONE_EXTENSIONS = {
     ".scr", ".pif", ".hta", ".vbs", ".wsf", ".cmd"
 }
 
-# Full executable and script extension suite (excluding .com which collides with website domains like www.site.com)
+# Full executable and script extension suite (including Android APK malware, excluding .com which collides with website domains)
 EXECUTABLE_EXTENSIONS = {
     ".exe", ".scr", ".bat", ".cmd", ".vbs", ".vbe", ".js", ".jse",
-    ".wsf", ".wsh", ".ps1", ".pif", ".hta", ".cpl", ".jar", ".msi", ".reg"
+    ".wsf", ".wsh", ".ps1", ".pif", ".hta", ".cpl", ".jar", ".msi", ".reg", ".apk"
 }
 
 # Known major software/game titles heavily spoofed by sub-15MB infostealer droppers

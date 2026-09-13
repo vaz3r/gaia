@@ -1,13 +1,13 @@
 {
   "model_version": "trust_classifier_v1.0.0",
-  "trained_at": "2026-09-12T18:51:00.783648+00:00",
+  "trained_at": "2026-09-12T23:50:08.937885+00:00",
   "test_metrics": {
-    "accuracy": 0.994,
-    "brier_score": 0.0045,
-    "expected_calibration_error": 0.0054,
+    "accuracy": 0.9958,
+    "brier_score": 0.0036,
+    "expected_calibration_error": 0.0014,
     "meets_ece_gate": "True",
-    "suppress_precision": 1.0,
-    "false_suppression_rate": 0.0
+    "suppress_precision": 0.9979,
+    "false_suppression_rate": 0.00075
   },
   "gold_benchmark_results": {
     "malicious_recall": 0.0,
@@ -16,31 +16,38 @@
   "calibration_bins": [
     {
       "range": "[0.0, 0.1)",
-      "count": 991,
-      "mean_predicted_prob": 0.0058,
-      "empirical_accuracy": 0.0,
-      "diff": 0.0058
+      "count": 1418,
+      "mean_predicted_prob": 0.0028,
+      "empirical_accuracy": 0.0021,
+      "diff": 0.0007
     },
     {
       "range": "[0.1, 0.2)",
-      "count": 56,
-      "mean_predicted_prob": 0.1381,
-      "empirical_accuracy": 0.8929,
-      "diff": 0.7547
+      "count": 93,
+      "mean_predicted_prob": 0.1795,
+      "empirical_accuracy": 0.1505,
+      "diff": 0.0289
     },
     {
-      "range": "[0.4, 0.5)",
-      "count": 1,
-      "mean_predicted_prob": 0.4122,
+      "range": "[0.3, 0.4)",
+      "count": 6,
+      "mean_predicted_prob": 0.3333,
+      "empirical_accuracy": 0.5,
+      "diff": 0.1667
+    },
+    {
+      "range": "[0.7, 0.8)",
+      "count": 3,
+      "mean_predicted_prob": 0.75,
       "empirical_accuracy": 1.0,
-      "diff": 0.5878
+      "diff": 0.25
     },
     {
       "range": "[0.9, 1.0)",
-      "count": 59,
-      "mean_predicted_prob": 0.9882,
-      "empirical_accuracy": 0.9831,
-      "diff": 0.0052
+      "count": 67,
+      "mean_predicted_prob": 0.9506,
+      "empirical_accuracy": 0.9851,
+      "diff": 0.0345
     }
   ]
 }

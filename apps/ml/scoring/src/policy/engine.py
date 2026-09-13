@@ -20,7 +20,7 @@ from src.common.types import (
 from src.labels.silver_rules import evaluate_silver_invariants
 
 # Load default policy weights
-POLICY_VERSION = "v1.0.0"
+POLICY_VERSION = "v3.0.0"
 
 SPAM_KEYWORDS = {
     "crack", "keygen", "serial", "patch", "activation", "unlock",
@@ -210,6 +210,7 @@ def evaluate_policy(
         ReasonCode.EXECUTABLE_IN_MEDIA_SWARM,
         ReasonCode.RTLO_CHAR_SPOOFING,
         ReasonCode.STANDALONE_SCRIPT_EXPLOIT,
+        ReasonCode.PASSWORD_TRAP_SUSPECTED,
     }
     has_critical = any(r in critical_invariants for r in triggered_reasons)
 
@@ -224,9 +225,7 @@ def evaluate_policy(
         baseline = int(round(model_safe_probability * 100))
         deductions = 0
 
-        if ReasonCode.PASSWORD_TRAP_SUSPECTED in triggered_reasons:
-            deductions += 40
-        elif ReasonCode.LOCAL_PASSWORD_NOTE in triggered_reasons:
+        if ReasonCode.LOCAL_PASSWORD_NOTE in triggered_reasons:
             deductions += 15
 
         if ReasonCode.HOMOGLYPH_PATH_SPOOFING in triggered_reasons:

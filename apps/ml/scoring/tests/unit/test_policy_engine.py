@@ -70,8 +70,9 @@ def test_password_trap_deduction():
         category="Applications",
     )
 
-    assert res_ext.integrity_score <= 40 # 95 - 40 (pw trap) - 20 (spam kw) = 35
-    assert res_ext.policy_action in (PolicyAction.DOWNRANK, PolicyAction.REVIEW)
+    assert res_ext.integrity_score == 0
+    assert res_ext.policy_action == PolicyAction.SUPPRESS
+    assert res_ext.risk_tier == RiskTier.BLOCKED
 
     # Harmless local archive note
     res_loc = evaluate_policy(

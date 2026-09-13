@@ -27,12 +27,12 @@ REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def load_training_data(limit_per_split: int = 10000):
+def load_training_data(limit_per_split: int = 8000, fake_limit: int = 2500):
     """
     Extracts time-disjoint dataset partitioned by verified_at:
     - Train (70%): Oldest dates up to 2026-09-03
     - Calibration (15%): 2026-09-03 to 2026-09-06
-    - Test (15%): 2026-09-06 to 2026-09-09
+    - Test (15%): 2026-09-06 to 2026-09-10
     """
     splits = {
         "train": ("2026-08-19", "2026-09-03"),
@@ -44,70 +44,73 @@ def load_training_data(limit_per_split: int = 10000):
     with get_db_cursor() as cur:
         for split_name, (start_dt, end_dt) in splits.items():
             print(f"Loading {split_name} split ({start_dt} to {end_dt})...")
-            # Sample clean torrents (strictly excluding media executables)
-            cur.execute("""
-                SELECT infohash, name, piece_length, total_size, file_count, files, category, verified_at
-                FROM torrents
-                WHERE verified_at >= %s AND verified_at < %s
-                  AND total_size > 1024
-                  AND NOT (
-                    category IN ('Movies', 'Television', 'Anime', 'Documentaries', 'Music', 'Audiobooks', 'Books & Learning', 'Adult')
-                    AND name ~* '\\.(exe|scr|bat|cmd|vbs|js|jse|wsf|wsh|ps1|com|pif|hta|cpl|jar|msi|reg)$'
-                  )
-                  AND NOT (name ~ '[\\u202E\\u202D\\u202C]')
-                ORDER BY verified_at ASC
-                LIMIT %s;
-            """, (start_dt, end_dt, limit_per_split))
-            clean_rows = cur.fetchall()
 
-            # Sample known fake/malicious torrents (empty payloads, deceptive exts, media executables, RTLO)
-            cur.execute("""
-                SELECT infohash, name, piece_length, total_size, file_count, files, category, verified_at
-                FROM torrents
-                WHERE (
-                    total_size <= 1024 
-                    OR name ~* '\\.(mp4|avi|mkv)\\.exe$'
-                    OR (
-                        category IN ('Movies', 'Television', 'Anime', 'Documentaries', 'Music', 'Audiobooks', 'Books & Learning', 'Adult')
-                        AND name ~* '\\.(exe|scr|bat|cmd|vbs|js|jse|wsf|wsh|ps1|com|pif|hta|cpl|jar|msi|reg)$'
-                    )
-                    OR name ~ '[\\u202E\\u202D\\u202C]'
-                    OR name ~* '\\.scr$'
-                )
-                AND verified_at >= %s AND verified_at < %s
-                LIMIT 1000;
-            """, (start_dt, end_dt))
-            fake_rows = cur.fetchall()
+            clean_limit = limit_per_split if split_name == "train" else min(limit_per_split, 4000)
+            f_limit = fake_limit if split_name == "train" else min(fake_limit, 1500)
 
             X_list = []
             y_list = []
 
-            # 1 = Safe/Authentic, 0 = Fake/Malicious
-            for r in clean_rows:
-                feats = extract_integrity_features(
-                    name=r["name"],
-                    total_size=r["total_size"],
-                    file_count=r["file_count"],
-                    piece_length=r["piece_length"],
-                    files=r["files"],
-                    category=r["category"],
-                )
-                X_list.append(list(feats.values()))
-                y_list.append(1)
+            # Sample clean torrents
+            cur.execute("""
+                SELECT infohash, name, piece_length, total_size, file_count, files, category, verified_at
+                FROM torrents
+                WHERE (policy_action = 'ALLOW' OR risk_tier = 'SAFE')
+                  AND verified_at >= %s AND verified_at < %s
+                  AND total_size > 1024
+                ORDER BY verified_at ASC
+                LIMIT %s;
+            """, (start_dt, end_dt, clean_limit))
+            
+            clean_count = 0
+            while True:
+                chunk = cur.fetchmany(500)
+                if not chunk:
+                    break
+                for r in chunk:
+                    feats = extract_integrity_features(
+                        name=r["name"],
+                        total_size=r["total_size"],
+                        file_count=r["file_count"],
+                        piece_length=r["piece_length"],
+                        files=r["files"],
+                        category=r["category"],
+                    )
+                    X_list.append(list(feats.values()))
+                    y_list.append(1)
+                    clean_count += 1
+                del chunk
 
-            for r in fake_rows:
-                feats = extract_integrity_features(
-                    name=r["name"],
-                    total_size=r["total_size"],
-                    file_count=r["file_count"],
-                    piece_length=r["piece_length"],
-                    files=r["files"],
-                    category=r["category"],
-                )
-                X_list.append(list(feats.values()))
-                y_list.append(0)
+            # Sample known fake/malicious torrents
+            cur.execute("""
+                SELECT infohash, name, piece_length, total_size, file_count, files, category, verified_at
+                FROM torrents
+                WHERE (policy_action = 'SUPPRESS' OR risk_tier = 'BLOCKED')
+                  AND verified_at >= %s AND verified_at < %s
+                ORDER BY verified_at ASC
+                LIMIT %s;
+            """, (start_dt, end_dt, f_limit))
 
-            print(f"  {split_name}: {len(clean_rows)} clean + {len(fake_rows)} fake = {len(X_list)} total")
+            fake_count = 0
+            while True:
+                chunk = cur.fetchmany(500)
+                if not chunk:
+                    break
+                for r in chunk:
+                    feats = extract_integrity_features(
+                        name=r["name"],
+                        total_size=r["total_size"],
+                        file_count=r["file_count"],
+                        piece_length=r["piece_length"],
+                        files=r["files"],
+                        category=r["category"],
+                    )
+                    X_list.append(list(feats.values()))
+                    y_list.append(0)
+                    fake_count += 1
+                del chunk
+
+            print(f"  {split_name}: {clean_count} clean + {fake_count} fake = {len(X_list)} total")
             data[split_name] = (np.array(X_list, dtype=np.float32), np.array(y_list, dtype=np.int32))
 
     return data

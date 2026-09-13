@@ -15,6 +15,7 @@ from src.labels.silver_rules import (
     is_benign_media_dummy_file,
     _get_path_str,
 )
+from src.features.semantic import extract_semantic_features
 
 SPAM_KEYWORDS = {
     "crack", "keygen", "serial", "patch", "activation", "unlock",
@@ -183,7 +184,7 @@ def extract_integrity_features(
         if MAJOR_SOFTWARE_TITLES.search(name_clean):
             software_implausible_size = 1.0
 
-    return {
+    feats = {
         "log_total_size": log_size,
         "log_file_count": log_files,
         "log_num_pieces": log_pieces,
@@ -213,3 +214,13 @@ def extract_integrity_features(
         "software_implausible_size": software_implausible_size,
         "executable_file_count": executable_files_count,
     }
+
+    # 6. High-dimensional Semantic Threat Features
+    semantic_feats = extract_semantic_features(
+        name=name_clean,
+        files=files,
+        category=category,
+    )
+    feats.update(semantic_feats)
+
+    return feats

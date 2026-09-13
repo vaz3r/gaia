@@ -49,6 +49,13 @@ class TrustClassifier:
             "has_dangerous_script",
             "software_implausible_size",
             "executable_file_count",
+            "has_deceptive_player_token",
+            "has_address_publisher_token",
+            "has_phishing_trap_token",
+            "has_trojan_viewer_token",
+            "has_script_dropper_token",
+            "has_trojan_apk_token",
+            "payload_basename_entropy",
         ]
         self.is_trained = False
 

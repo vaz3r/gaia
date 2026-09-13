@@ -297,3 +297,60 @@ def test_rarbg_dummy_anti_scraper_exe_allowed():
     assert res.risk_tier == RiskTier.SAFE
     assert res.integrity_score >= 80
 
+
+def test_phishing_password_trap_blocked():
+    """External phishing URL/LNK forwarders must trigger immediate critical invariant SUPPRESS."""
+    files = [
+        {"path": "password_link.url", "length": 50},
+        {"path": "setup.zip", "length": 50000000},
+    ]
+    reasons, details = evaluate_silver_invariants(
+        name="Photoshop Crack",
+        total_size=50000050,
+        category="Applications",
+        files=files,
+    )
+    assert ReasonCode.PASSWORD_TRAP_SUSPECTED in reasons
+
+    res = evaluate_policy(
+        infohash=b" " * 20,
+        model_safe_probability=0.99,
+        name="Photoshop Crack",
+        total_size=50000050,
+        file_count=2,
+        files=files,
+        category="Applications",
+    )
+    assert res.policy_action == PolicyAction.SUPPRESS
+    assert res.risk_tier == RiskTier.BLOCKED
+    assert res.integrity_score == 0
+
+
+def test_apk_in_media_blocked():
+    """Android APK files bundled in media swarms must trigger critical invariant SUPPRESS."""
+    files = [
+        {"path": "1024社区-安卓发布器.apk", "length": 1762036},
+        {"path": "video.mp4", "length": 500000000},
+    ]
+    reasons, details = evaluate_silver_invariants(
+        name="Some Adult Video",
+        total_size=501762036,
+        category="Adult",
+        files=files,
+    )
+    assert ReasonCode.EXECUTABLE_IN_MEDIA_SWARM in reasons
+
+    res = evaluate_policy(
+        infohash=b" " * 20,
+        model_safe_probability=0.95,
+        name="Some Adult Video",
+        total_size=501762036,
+        file_count=2,
+        files=files,
+        category="Adult",
+    )
+    assert res.policy_action == PolicyAction.SUPPRESS
+    assert res.risk_tier == RiskTier.BLOCKED
+    assert res.integrity_score == 0
+
+
