@@ -8,4 +8,6 @@ pub mod pending_infohashes;
 pub mod peer_outcomes;
 pub mod pg;
 pub mod sightings;
+pub mod surveillance;
 pub mod torrents;
+

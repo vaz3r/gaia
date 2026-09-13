@@ -76,10 +76,36 @@ pub fn random_node_id() -> [u8; 20] {
     rand::random::<[u8; 20]>()
 }
 
+/// Validates whether a given 20-byte Node ID satisfies the cryptographic BEP 42 constraint
+/// for the specified IP address. Real BitTorrent clients derive their Node IDs cryptographically,
+/// whereas Sybil spiders and surveillance crawlers generate arbitrary Node IDs to surround target infohashes.
+pub fn verify_bep42(ip: IpAddr, id: &[u8; 20]) -> bool {
+    let rand = id[19];
+    let crc = bep42_crc(ip, rand);
+    id[0] == (crc >> 24) as u8
+        && id[1] == (crc >> 16) as u8
+        && (id[2] & 0xf8) == (((crc >> 8) as u8) & 0xf8)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
+
+    #[test]
+    fn verify_bep42_valid() {
+        let ip = IpAddr::V4(Ipv4Addr::new(124, 31, 75, 21));
+        let id = bep42_node_id_rng(ip);
+        assert!(verify_bep42(ip, &id));
+    }
+
+    #[test]
+    fn verify_bep42_invalid() {
+        let ip1 = IpAddr::V4(Ipv4Addr::new(124, 31, 75, 21));
+        let ip2 = IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4));
+        let id = bep42_node_id_rng(ip1);
+        assert!(!verify_bep42(ip2, &id));
+    }
 
     #[test]
     fn bep42_test_vector_1() {

@@ -48,6 +48,7 @@ pub struct Router {
     metrics: Arc<Metrics>,
     find_node_response_percent: u8,
     inbound_limiter: Arc<crate::net::rate_limit::RateLimiter>,
+    surveillance: Option<Arc<crate::storage::surveillance::SurveillanceRecorder>>,
 }
 
 impl Router {
@@ -65,6 +66,7 @@ impl Router {
         metrics: Arc<Metrics>,
         find_node_response_percent: u8,
         inbound_limiter: Arc<crate::net::rate_limit::RateLimiter>,
+        surveillance: Option<Arc<crate::storage::surveillance::SurveillanceRecorder>>,
     ) -> Arc<Self> {
         Arc::new(Router {
             self_id,
@@ -80,6 +82,7 @@ impl Router {
             metrics,
             find_node_response_percent,
             inbound_limiter,
+            surveillance,
         })
     }
 
@@ -135,7 +138,8 @@ impl Router {
                     if q == GET_PEERS {
                         self.metrics.inbound_get_peers.add(1);
                         if let (Some(t), Some(ih)) = (header.t, Self::extract_info_hash(buf)) {
-                            self.respond_get_peers_fast(t, &ih, from);
+                            let sender_id = Self::extract_sender_id(buf);
+                            self.respond_get_peers_fast(t, &ih, sender_id.as_ref(), from);
                         }
                         return;
                     }
@@ -301,6 +305,14 @@ impl Router {
             SybilPool::Bep42 => self.metrics.inbound_get_peers_bep42.add(1),
             SybilPool::Random => self.metrics.inbound_get_peers_random.add(1),
         }
+        let sender_id = extract_id20(a, b"id");
+        let is_bep42 = sender_id
+            .map(|id| crate::dht::node_id::verify_bep42(from.ip(), &id))
+            .unwrap_or(false);
+        if let Some(surv) = &self.surveillance {
+            surv.record(from.ip(), is_bep42, ih);
+        }
+
         self.do_harvest(ih, crate::harvest::Source::GetPeers, None);
         let token = self
             .token
@@ -443,12 +455,51 @@ impl Router {
         None
     }
 
-    fn respond_get_peers_fast(&self, t: &[u8], ih: &[u8; 20], from: SocketAddr) {
+    fn extract_sender_id(buf: &[u8]) -> Option<[u8; 20]> {
+        let pat = b"2:id20:";
+        if let Some(pos) = buf.windows(pat.len()).position(|w| w == pat) {
+            let start = pos + pat.len();
+            if start + 20 <= buf.len() {
+                let mut id = [0u8; 20];
+                id.copy_from_slice(&buf[start..start + 20]);
+                return Some(id);
+            }
+        }
+        None
+    }
+
+    fn respond_get_peers_fast(
+        &self,
+        t: &[u8],
+        ih: &[u8; 20],
+        sender_id: Option<&[u8; 20]>,
+        from: SocketAddr,
+    ) {
         use std::io::Write;
         match self.classify_pool(ih) {
             SybilPool::Bep42 => self.metrics.inbound_get_peers_bep42.add(1),
             SybilPool::Random => self.metrics.inbound_get_peers_random.add(1),
         }
+
+        let is_bep42 = sender_id
+            .map(|id| crate::dht::node_id::verify_bep42(from.ip(), id))
+            .unwrap_or(false);
+
+        let mut is_blocked = false;
+        if let Some(surv) = &self.surveillance {
+            surv.record(from.ip(), is_bep42, *ih);
+            is_blocked = surv.is_blocked(&from.ip());
+        }
+
+        // Active Honey-Pot counter-measure:
+        // When confirmed surveillance bots query GAIA, feed them RFC 5737 dummy documentation nodes
+        // to poison their monitoring databases and waste their connection pool.
+        if is_blocked {
+            self.metrics.surveillance_queries_poisoned.add(1);
+            self.respond_get_peers_poisoned(t, from);
+            return;
+        }
+
         self.do_harvest(*ih, crate::harvest::Source::GetPeers, None);
         let token = self.token.read().expect("token").generate(from.ip());
         self.metrics.tokens_issued.add(1);
@@ -500,6 +551,75 @@ impl Router {
         pos += b5.len();
 
         self.try_send(&buf[..pos], from);
+    }
+
+    fn respond_get_peers_poisoned(&self, t: &[u8], from: SocketAddr) {
+        use std::io::Write;
+        let token = self.token.read().expect("token").generate(from.ip());
+        let dummy = Self::dummy_poison_nodes();
+
+        let mut buf = [0u8; 512];
+        let mut pos = 0;
+
+        let b1 = b"d1:rd2:id20:";
+        buf[pos..pos + b1.len()].copy_from_slice(b1);
+        pos += b1.len();
+
+        buf[pos..pos + 20].copy_from_slice(&self.self_id);
+        pos += 20;
+
+        let b2 = b"5:nodes208:";
+        buf[pos..pos + b2.len()].copy_from_slice(b2);
+        pos += b2.len();
+
+        buf[pos..pos + dummy.len()].copy_from_slice(&dummy);
+        pos += dummy.len();
+
+        let b3 = b"5:token8:";
+        buf[pos..pos + b3.len()].copy_from_slice(b3);
+        pos += b3.len();
+
+        buf[pos..pos + 8].copy_from_slice(&token);
+        pos += 8;
+
+        let b4 = b"e1:t";
+        buf[pos..pos + b4.len()].copy_from_slice(b4);
+        pos += b4.len();
+
+        let mut cursor = std::io::Cursor::new(&mut buf[pos..]);
+        write!(cursor, "{}:", t.len()).unwrap();
+        pos += cursor.position() as usize;
+
+        buf[pos..pos + t.len()].copy_from_slice(t);
+        pos += t.len();
+
+        let b5 = b"1:y1:re";
+        buf[pos..pos + b5.len()].copy_from_slice(b5);
+        pos += b5.len();
+
+        self.try_send(&buf[..pos], from);
+    }
+
+    fn dummy_poison_nodes() -> [u8; 8 * 26] {
+        let mut nodes = [0u8; 8 * 26];
+        let dummy_ips: [[u8; 4]; 8] = [
+            [192, 0, 2, 1],
+            [192, 0, 2, 2],
+            [198, 51, 100, 1],
+            [198, 51, 100, 2],
+            [203, 0, 113, 1],
+            [203, 0, 113, 2],
+            [192, 0, 2, 42],
+            [198, 51, 100, 42],
+        ];
+        for (i, ip) in dummy_ips.iter().enumerate() {
+            let offset = i * 26;
+            nodes[offset..offset + 20].copy_from_slice(&[0xaa; 20]);
+            nodes[offset + 20..offset + 24].copy_from_slice(ip);
+            nodes[offset + 24] = 0x1a;
+            nodes[offset + 25] = 0xe1;
+        }
+        nodes
     }
 
     fn respond_ping_fast(&self, t: &[u8], from: SocketAddr) {

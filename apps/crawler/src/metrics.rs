@@ -60,6 +60,10 @@ pub struct Metrics {
     // Announce direct-fetch metrics
     pub announce_attempts: AtomicU64,
     pub announce_success: AtomicU64,
+    // DHT Surveillance & Anti-Abuse metrics
+    pub surveillance_bep42_violations: AtomicU64,
+    pub surveillance_nodes_flagged: AtomicU64,
+    pub surveillance_queries_poisoned: AtomicU64,
     // Transport metrics
     pub tcp_attempts: AtomicU64,
     pub utp_attempts: AtomicU64,
@@ -297,6 +301,9 @@ pub struct Snapshot {
     pub source_deadline_peers: u64,
     pub announce_attempts: u64,
     pub announce_success: u64,
+    pub surveillance_bep42_violations: u64,
+    pub surveillance_nodes_flagged: u64,
+    pub surveillance_queries_poisoned: u64,
     pub tcp_attempts: u64,
     pub utp_attempts: u64,
     pub tcp_connect_ok: u64,
@@ -492,6 +499,15 @@ impl Metrics {
             source_deadline_peers: self.source_deadline_peers.load(Ordering::Relaxed),
             announce_attempts: self.announce_attempts.load(Ordering::Relaxed),
             announce_success: self.announce_success.load(Ordering::Relaxed),
+            surveillance_bep42_violations: self
+                .surveillance_bep42_violations
+                .load(Ordering::Relaxed),
+            surveillance_nodes_flagged: self
+                .surveillance_nodes_flagged
+                .load(Ordering::Relaxed),
+            surveillance_queries_poisoned: self
+                .surveillance_queries_poisoned
+                .load(Ordering::Relaxed),
             tcp_attempts: self.tcp_attempts.load(Ordering::Relaxed),
             utp_attempts: self.utp_attempts.load(Ordering::Relaxed),
             tcp_connect_ok: self.tcp_connect_ok.load(Ordering::Relaxed),

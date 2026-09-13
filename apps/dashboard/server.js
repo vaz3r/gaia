@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import dns from 'node:dns/promises';
 import pg from 'pg';
 import { fetchMetadataOnTheFly, buildTorrentBuffer, buildTurboMagnet } from './wireFetcher.js';
 
@@ -1224,6 +1225,202 @@ app.get('/api/routing/security', async (req, res) => {
 
 
 // ============================================================
+// DHT SURVEILLANCE & ABUSE RADAR API (Catching IKWYD, Copyright Trolls, Sybils)
+// ============================================================
+
+async function resolveAsn(ip) {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  const reversed = `${parts[3]}.${parts[2]}.${parts[1]}.${parts[0]}.origin.asn.cymru.com`;
+  try {
+    const txt = await dns.resolveTxt(reversed);
+    if (!txt || !txt[0] || !txt[0][0]) return null;
+    const fields = txt[0][0].split('|').map(s => s.trim());
+    const asn = fields[0] ? `AS${fields[0]}` : null;
+    if (!asn) return null;
+
+    let org = null;
+    try {
+      const orgTxt = await dns.resolveTxt(`${asn}.asn.cymru.com`);
+      if (orgTxt && orgTxt[0] && orgTxt[0][0]) {
+        const orgFields = orgTxt[0][0].split('|').map(s => s.trim());
+        org = orgFields[4] || orgFields[3] || null;
+      }
+    } catch {}
+
+    let suspected = 'Datacenter / Cloud Probe';
+    const lowerOrg = (org || '').toLowerCase();
+    if (lowerOrg.includes('selectel')) {
+      suspected = 'IKWYD Spying Node (Selectel)';
+    } else if (lowerOrg.includes('datacamp') || lowerOrg.includes('cdn77')) {
+      suspected = 'DataCamp Passive Scraper';
+    } else if (lowerOrg.includes('m247')) {
+      suspected = 'M247 DHT Probe';
+    } else if (lowerOrg.includes('markmonitor') || lowerOrg.includes('rightscorp')) {
+      suspected = 'Copyright Monitor (MarkMonitor/Rightscorp)';
+    } else if (lowerOrg.includes('hetzner')) {
+      suspected = 'Cloud DHT Crawler (Hetzner)';
+    } else if (lowerOrg.includes('digitalocean')) {
+      suspected = 'Cloud Monitor (DigitalOcean)';
+    } else if (lowerOrg.includes('amazon') || lowerOrg.includes('aws')) {
+      suspected = 'Cloud Crawler (Amazon AWS)';
+    } else if (lowerOrg.includes('cogent')) {
+      suspected = 'Copyright Monitor (MarkMonitor/Cogent)';
+    }
+
+    return { asn, org, suspected };
+  } catch {
+    return null;
+  }
+}
+
+async function enrichSurveillanceNodes() {
+  try {
+    const unres = await pool.query(
+      "SELECT host(ip) AS ip FROM dht_surveillance_nodes WHERE asn IS NULL LIMIT 20"
+    );
+    for (const row of unres.rows) {
+      const info = await resolveAsn(row.ip);
+      if (info) {
+        await pool.query(
+          `UPDATE dht_surveillance_nodes 
+           SET asn = $1, org = $2, 
+               suspected_entity = CASE WHEN suspected_entity = 'Unknown Monitor' OR suspected_entity = 'Suspicious Query Node' THEN $3 ELSE suspected_entity END,
+               score = LEAST(100, score + 35),
+               is_blocked = (LEAST(100, score + 35) >= 60)
+           WHERE ip = $4::inet`,
+          [info.asn, info.org, info.suspected, row.ip]
+        );
+      }
+    }
+  } catch (err) {
+    // Non-critical background enrichment
+  }
+}
+
+// GET /api/surveillance/nodes - List detected surveillance bots with threat scores
+app.get('/api/surveillance/nodes', async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '25', 10)));
+    const offset = (page - 1) * limit;
+    const minScore = parseInt(req.query.min_score || '0', 10);
+    const blockedOnly = req.query.blocked_only === 'true';
+    const search = req.query.search ? req.query.search.trim() : '';
+
+    const conditions = ['score >= $1'];
+    const params = [minScore];
+    let pIdx = 2;
+
+    if (blockedOnly) {
+      conditions.push('is_blocked = TRUE');
+    }
+
+    if (search) {
+      conditions.push(`(host(ip) ILIKE $${pIdx} OR asn ILIKE $${pIdx} OR org ILIKE $${pIdx} OR suspected_entity ILIKE $${pIdx})`);
+      params.push(`%${search}%`);
+      pIdx++;
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const countRes = await pool.query(`SELECT COUNT(*) FROM dht_surveillance_nodes ${whereClause}`, params);
+    const total = parseInt(countRes.rows[0].count, 10);
+
+    const listQuery = `
+      SELECT host(ip) AS ip, asn, org, score, query_count, distinct_hashes,
+             bep42_violations, bep42_compliant_count, suspected_entity,
+             is_blocked, first_seen, last_seen,
+             array_to_json(ARRAY(
+               SELECT encode(elem, 'hex') 
+               FROM UNNEST(sample_hashes) AS elem 
+               LIMIT 5
+             )) AS sample_hashes
+      FROM dht_surveillance_nodes
+      ${whereClause}
+      ORDER BY score DESC, last_seen DESC
+      LIMIT $${pIdx} OFFSET $${pIdx + 1}
+    `;
+    params.push(limit, offset);
+
+    const listRes = await pool.query(listQuery, params);
+
+    // Aggregate statistics
+    const statsRes = await pool.query(`
+      SELECT 
+        COUNT(*) AS total_surveillance_nodes,
+        COUNT(*) FILTER (WHERE is_blocked = TRUE) AS blocked_nodes,
+        COUNT(*) FILTER (WHERE suspected_entity ILIKE '%Selectel%' OR suspected_entity ILIKE '%IKWYD%') AS ikwyd_nodes,
+        COUNT(*) FILTER (WHERE suspected_entity ILIKE '%DataCamp%') AS datacamp_nodes,
+        COALESCE(SUM(query_count), 0) AS total_intercepted_queries,
+        COALESCE(SUM(bep42_violations), 0) AS total_bep42_violations
+      FROM dht_surveillance_nodes
+    `);
+
+    res.json({
+      nodes: listRes.rows,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+      stats: statsRes.rows[0]
+    });
+  } catch (err) {
+    console.error('Surveillance nodes error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/surveillance/nodes/:ip/toggle - Toggle block status for an IP
+app.post('/api/surveillance/nodes/:ip/toggle', async (req, res) => {
+  try {
+    const { ip } = req.params;
+    const r = await pool.query(
+      `UPDATE dht_surveillance_nodes 
+       SET is_blocked = NOT is_blocked 
+       WHERE ip = $1::inet 
+       RETURNING host(ip) AS ip, is_blocked, score`,
+      [ip]
+    );
+    if (r.rows.length === 0) {
+      return res.status(404).json({ error: 'Node not found' });
+    }
+    res.json({ success: true, node: r.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/surveillance/blocklist.txt - Export ipfilter.dat community blocklist
+app.get('/api/surveillance/blocklist.txt', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT host(ip) AS ip, suspected_entity, score 
+       FROM dht_surveillance_nodes 
+       WHERE is_blocked = TRUE 
+       ORDER BY score DESC, last_seen DESC`
+    );
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="ipfilter.dat"');
+
+    let out = '# GAIA DHT Anti-Surveillance Blocklist (ipfilter.dat)\n';
+    out += `# Generated: ${new Date().toISOString()}\n`;
+    out += `# Protecting users against IKWYD, copyright monitors, and Sybil spiders\n`;
+    out += `# Format: Start IP - End IP , Level , Description\n\n`;
+
+    for (const row of r.rows) {
+      out += `${row.ip} - ${row.ip} , 000 , [GAIA] ${row.suspected_entity} (Threat Score: ${row.score})\n`;
+    }
+    res.send(out);
+  } catch (err) {
+    res.status(500).send('# Error generating blocklist: ' + err.message);
+  }
+});
+
+
+// ============================================================
 // SERVER-SENT EVENTS (SSE) ENGINE: /api/live/stream
 // Broadcasts lightweight telemetry updates to connected clients
 // ============================================================
@@ -2021,6 +2218,7 @@ setInterval(refreshStats, 35000);          // Aggregates refreshed every 35s
 setInterval(refreshScoringStats, 45000);   // Scoring statistics refreshed every 45s
 setInterval(computeAnalysis, 120000);      // Swarm analysis refreshed every 120s
 setInterval(refreshCategoryCounts, 300000); // Category explorer counts refreshed every 5m
+setInterval(enrichSurveillanceNodes, 30000); // Background ASN resolution & threat enrichment
 
 app.listen(PORT, HOST, () => {
   console.log(`dashboard listening on ${HOST}:${PORT}`);

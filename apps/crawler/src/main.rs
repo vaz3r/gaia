@@ -28,6 +28,7 @@ use crate::storage::jobs::{RetryConfig as JobRetryConfig, VerifyStore};
 use crate::storage::pending_infohashes::{PendingInfohashScheduler, PendingInfohashWriter};
 use crate::storage::pg::PoolConfig;
 use crate::storage::sightings::SightingWriter;
+use crate::storage::surveillance::SurveillanceRecorder;
 use crate::trace::TraceConfig;
 use crate::verify::fetch_pool::FetchParams;
 use crate::verify::peer_cache::PeerCache;
@@ -179,6 +180,9 @@ async fn main() {
 
     let bootstrap = resolve_bootstrap(&config.bootstrap).await;
     eprintln!("[DBG] 8: bootstrap resolved");
+    let surveillance = SurveillanceRecorder::new(Some(pool.clone()), metrics.clone());
+    surveillance.load_blocked_nodes().await;
+    let surveillance_run = surveillance.clone().run(Duration::from_secs(15));
     let mut node_routers = Vec::with_capacity(config.nodes);
     for i in 0..config.nodes {
         eprintln!("[DBG] 9: spawning node {i}");
@@ -191,6 +195,7 @@ async fn main() {
             fresh_verify_tx.clone(),
             pending_writer.clone(),
             ip_cooldown.clone(),
+            surveillance.clone(),
             &mut node_routers,
         )
         .await;
@@ -437,6 +442,7 @@ async fn main() {
         _ = report => { eprintln!("[DBG] select: report resolved"); }
         _ = cache_cleanup => { eprintln!("[DBG] select: cache_cleanup resolved"); }
         _ = health_prober_run => { eprintln!("[DBG] select: health_prober_run resolved"); }
+        _ = surveillance_run => { eprintln!("[DBG] select: surveillance_run resolved"); }
         _ = shutdown_signal => { eprintln!("[DBG] select: shutdown_signal resolved"); }
     }
 
@@ -523,6 +529,7 @@ async fn spawn_node(
     fresh_verify_tx: mpsc::Sender<[u8; 20]>,
     pending_writer: Arc<PendingInfohashWriter>,
     ip_cooldown: Arc<crate::net::ip_cooldown::IpCooldownCache>,
+    surveillance: Arc<SurveillanceRecorder>,
     node_routers: &mut Vec<Arc<Router>>,
 ) {
     let data_dir = config.data_dir.join(format!("node_{node_index}"));
@@ -639,6 +646,7 @@ async fn spawn_node(
         metrics.clone(),
         config.dht.find_node_response_percent,
         inbound_limiter.clone(),
+        Some(surveillance.clone()),
     );
 
     if !use_mmsg {

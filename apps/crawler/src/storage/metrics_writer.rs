@@ -133,5 +133,15 @@ fn snapshot_rows(s: &Snapshot) -> Vec<(&'static str, u64)> {
             "pending_buffer_skipped_backpressure",
             s.pending_buffer_skipped_backpressure,
         ),
+        // DHT Surveillance & Anti-Abuse metrics
+        (
+            "surveillance_bep42_violations",
+            s.surveillance_bep42_violations,
+        ),
+        ("surveillance_nodes_flagged", s.surveillance_nodes_flagged),
+        (
+            "surveillance_queries_poisoned",
+            s.surveillance_queries_poisoned,
+        ),
     ]
 }

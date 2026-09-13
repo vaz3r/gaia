@@ -56,6 +56,7 @@ import { api, loadTrackers, magnetFrom, downloadTorrent } from './api.js';
 import { formatBytes, formatNum, formatTime, formatUptime, formatDubaiDate, formatDubaiTimeHM } from './utils.js';
 import AnalysisView from './components/AnalysisView.jsx';
 import ClassifierView from './components/ClassifierView.jsx';
+import SurveillanceRadar from './components/SurveillanceRadar.jsx';
 import { useTelemetryStream } from './useTelemetryStream.js';
 
 export const CANONICAL_CATEGORIES = [
@@ -805,6 +806,7 @@ export default function App() {
                     : (classifierReviewCount != null && classifierReviewCount > 0 ? `${classifierReviewCount.toLocaleString()}` : null),
                 },
                 { id: 'content_intelligence', label: 'Content Intelligence' },
+                { id: 'surveillance', label: 'Surveillance Radar' },
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -2801,6 +2803,13 @@ export default function App() {
             }}
             streamScoringStats={streamData?.scoringStats}
           />
+        )}
+
+        {/* ============================================================ */}
+        {/* TAB: SURVEILLANCE RADAR                                       */}
+        {/* ============================================================ */}
+        {activeTab === 'surveillance' && (
+          <SurveillanceRadar />
         )}
 
         {/* Global Torrent Details Drawer / Inspector Modal */}
