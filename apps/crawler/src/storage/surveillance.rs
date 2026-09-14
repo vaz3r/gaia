@@ -89,9 +89,9 @@ impl SurveillanceRecorder {
     /// strictly excluding any proven seedboxes present in stable_peers.
     pub async fn load_blocked_nodes(&self) {
         if let Some(pool) = &self.pool {
-            // First preload all proven seedbox IPs from stable_peers into immune_ips
+            // Preload proven seedbox IPs from stable_peers into immune_ips
             let immune_rows: Result<Vec<(String,)>, sqlx::Error> =
-                sqlx::query_as("SELECT DISTINCT ip::text FROM stable_peers")
+                sqlx::query_as("SELECT DISTINCT ip::text FROM stable_peers WHERE metadata_provided_count > 10 LIMIT 50000")
                     .fetch_all(pool)
                     .await;
             if let Ok(ips) = immune_rows {
@@ -107,7 +107,7 @@ impl SurveillanceRecorder {
             }
 
             let rows: Result<Vec<(String,)>, sqlx::Error> =
-                sqlx::query_as("SELECT ip::text FROM dht_surveillance_nodes WHERE is_blocked = TRUE AND ip NOT IN (SELECT ip FROM stable_peers)")
+                sqlx::query_as("SELECT ip::text FROM dht_surveillance_nodes WHERE is_blocked = TRUE AND NOT EXISTS (SELECT 1 FROM stable_peers sp WHERE sp.ip = dht_surveillance_nodes.ip)")
                     .fetch_all(pool)
                     .await;
             match rows {
