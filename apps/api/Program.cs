@@ -26,6 +26,7 @@ builder.Services.AddHttpClient<QuickwitClient>(client =>
 });
 
 // Register Singleton Services
+builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<DatabaseService>();
 
 var app = builder.Build();
@@ -35,6 +36,9 @@ app.UseCors("AllowAll");
 // Map Route Groups
 app.MapTorrentEndpoints();
 app.MapDashboardEndpoints();
+
+// Health check endpoint
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", runtime = ".NET 10.0" }));
 
 // Root greeting
 app.MapGet("/", () => Results.Ok(new

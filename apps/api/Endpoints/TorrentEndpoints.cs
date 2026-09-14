@@ -9,27 +9,42 @@ public static class TorrentEndpoints
     {
         var group = app.MapGroup("/api/torrents").WithTags("Torrents");
 
-        // 1. Search endpoint (Direct Quickwit sub-2ms query)
+        // 1. Search endpoint (Direct Quickwit query formatted for GAIA dashboard & portal)
         group.MapGet("/", async (
             [FromQuery] string? q,
+            [FromQuery] string? search,
             [FromQuery] string? category,
             [FromQuery] int? page,
             [FromQuery] int? limit,
+            [FromQuery] string? sort,
             [FromQuery] string? sort_by,
             [FromQuery] string? order,
             QuickwitClient quickwit,
             CancellationToken ct) =>
         {
+            var effectiveQuery = !string.IsNullOrWhiteSpace(search) ? search : q;
+            var effectiveSort = !string.IsNullOrWhiteSpace(sort) ? sort : sort_by;
+            var safeLimit = Math.Clamp(limit ?? 25, 1, 100);
+            var safePage = Math.Max(1, page ?? 1);
+
             var results = await quickwit.SearchAsync(
-                query: q,
+                query: effectiveQuery,
                 category: category,
-                page: page ?? 1,
-                limit: limit ?? 25,
-                sortBy: sort_by,
+                page: safePage,
+                limit: safeLimit,
+                sortBy: effectiveSort,
                 order: order ?? "desc",
                 ct: ct);
 
-            return Results.Ok(results);
+            return Results.Ok(new
+            {
+                data = results.Hits,
+                page = safePage,
+                limit = safeLimit,
+                total = results.Total,
+                pages = Math.Max(1, (int)Math.Ceiling((double)results.Total / safeLimit)),
+                elapsed_micros = results.ElapsedMicros
+            });
         });
 
         // 2. Single torrent details
@@ -52,8 +67,8 @@ public static class TorrentEndpoints
             CancellationToken ct) =>
         {
             var torrent = await db.GetTorrentDetailsAsync(infohash, ct);
-            var name = torrent?.Name ?? infohash;
-            var magnetUri = TorrentBuilder.BuildMagnetUri(infohash, name);
+            var name = (torrent != null && torrent.TryGetValue("name", out var n) && n != null) ? n.ToString() : infohash;
+            var magnetUri = TorrentBuilder.BuildMagnetUri(infohash, name ?? infohash);
 
             return Results.Ok(new { infohash, name, magnetUri });
         });
@@ -65,10 +80,10 @@ public static class TorrentEndpoints
             CancellationToken ct) =>
         {
             var torrent = await db.GetTorrentDetailsAsync(infohash, ct);
-            var name = torrent?.Name ?? infohash;
-            var torrentBytes = TorrentBuilder.BuildWrapperTorrent(infohash, name);
+            var name = (torrent != null && torrent.TryGetValue("name", out var n) && n != null) ? n.ToString() : infohash;
+            var torrentBytes = TorrentBuilder.BuildWrapperTorrent(infohash, name ?? infohash);
 
-            var safeFilename = Uri.EscapeDataString(name.Replace("/", "_").Replace("\\", "_")) + ".torrent";
+            var safeFilename = Uri.EscapeDataString((name ?? infohash).Replace("/", "_").Replace("\\", "_")) + ".torrent";
             return Results.File(torrentBytes, "application/x-bittorrent", safeFilename);
         });
 

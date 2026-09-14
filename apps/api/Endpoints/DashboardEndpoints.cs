@@ -41,9 +41,9 @@ public static class DashboardEndpoints
                 var payload = System.Text.Json.JsonSerializer.Serialize(new
                 {
                     timestamp = DateTime.UtcNow.ToString("o"),
-                    torrents = stats.TotalTorrents,
-                    verified24h = stats.VerifiedLast24h,
-                    healthy = stats.HealthyCount
+                    torrents = stats.TryGetValue("total_torrents", out var t) ? t : 0,
+                    verified24h = stats.TryGetValue("verified_last_24h", out var v) ? v : 0,
+                    healthy = stats.TryGetValue("healthy_count", out var h) ? h : 0
                 });
 
                 await ctx.Response.WriteAsync($"data: {payload}\n\n", ct);

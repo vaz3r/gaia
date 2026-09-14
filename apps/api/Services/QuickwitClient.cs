@@ -122,8 +122,13 @@ public class QuickwitSearchResponse
 
 public class QuickwitTorrentHit
 {
+    [JsonPropertyName("infohash")]
     public string Infohash { get; set; } = "";
+
+    [JsonPropertyName("name")]
     public string Name { get; set; } = "";
+
+    [JsonPropertyName("category")]
     public string Category { get; set; } = "Other";
     
     [JsonPropertyName("total_size")]
