@@ -68,6 +68,7 @@ pub struct SurveillanceRecorder {
     pool: Option<PgPool>,
     nodes: Arc<DashMap<IpAddr, SurveillanceNodeEntry>>,
     blocked_ips: Arc<DashSet<IpAddr>>,
+    immune_ips: Arc<DashSet<IpAddr>>,
     mesh_endpoints: Arc<RwLock<Vec<[u8; 6]>>>,
     metrics: Arc<Metrics>,
 }
@@ -78,16 +79,35 @@ impl SurveillanceRecorder {
             pool,
             nodes: Arc::new(DashMap::new()),
             blocked_ips: Arc::new(DashSet::new()),
+            immune_ips: Arc::new(DashSet::new()),
             mesh_endpoints: Arc::new(RwLock::new(Vec::with_capacity(2048))),
             metrics,
         })
     }
 
-    /// Preload confirmed malicious surveillance IPs from Postgres into memory
+    /// Preload confirmed malicious surveillance IPs from Postgres into memory,
+    /// strictly excluding any proven seedboxes present in stable_peers.
     pub async fn load_blocked_nodes(&self) {
         if let Some(pool) = &self.pool {
+            // First preload all proven seedbox IPs from stable_peers into immune_ips
+            let immune_rows: Result<Vec<(String,)>, sqlx::Error> =
+                sqlx::query_as("SELECT DISTINCT ip::text FROM stable_peers")
+                    .fetch_all(pool)
+                    .await;
+            if let Ok(ips) = immune_rows {
+                let mut immune_count = 0;
+                for (ip_str,) in ips {
+                    let bare_ip = ip_str.split('/').next().unwrap_or(&ip_str);
+                    if let Ok(parsed) = bare_ip.parse::<IpAddr>() {
+                        self.record_legitimate_peer(parsed);
+                        immune_count += 1;
+                    }
+                }
+                tracing::info!(count = immune_count, "surveillance: preloaded proven seedboxes from stable_peers into immunity list");
+            }
+
             let rows: Result<Vec<(String,)>, sqlx::Error> =
-                sqlx::query_as("SELECT ip::text FROM dht_surveillance_nodes WHERE is_blocked = TRUE")
+                sqlx::query_as("SELECT ip::text FROM dht_surveillance_nodes WHERE is_blocked = TRUE AND ip NOT IN (SELECT ip FROM stable_peers)")
                     .fetch_all(pool)
                     .await;
             match rows {
@@ -97,14 +117,16 @@ impl SurveillanceRecorder {
                     for (ip_str,) in ips {
                         let bare_ip = ip_str.split('/').next().unwrap_or(&ip_str);
                         if let Ok(parsed) = bare_ip.parse::<IpAddr>() {
-                            self.blocked_ips.insert(parsed);
-                            if let IpAddr::V4(v4) = parsed {
-                                let mut ep = [0u8; 6];
-                                ep[0..4].copy_from_slice(&v4.octets());
-                                ep[4..6].copy_from_slice(&6881u16.to_be_bytes());
-                                endpoints.push(ep);
+                            if !self.immune_ips.contains(&parsed) {
+                                self.blocked_ips.insert(parsed);
+                                if let IpAddr::V4(v4) = parsed {
+                                    let mut ep = [0u8; 6];
+                                    ep[0..4].copy_from_slice(&v4.octets());
+                                    ep[4..6].copy_from_slice(&6881u16.to_be_bytes());
+                                    endpoints.push(ep);
+                                }
+                                count += 1;
                             }
-                            count += 1;
                         }
                     }
                     if !endpoints.is_empty() {
@@ -124,10 +146,17 @@ impl SurveillanceRecorder {
         }
     }
 
+    /// Mark an IP as a proven legitimate peer or seedbox, removing it from blocked_ips
+    /// and granting permanent immunity against surveillance blocking.
+    pub fn record_legitimate_peer(&self, ip: IpAddr) {
+        self.blocked_ips.remove(&ip);
+        self.immune_ips.insert(ip);
+    }
+
     /// Fast lock-free check if an IP is a known surveillance/abusive bot
     #[inline]
     pub fn is_blocked(&self, ip: &IpAddr) -> bool {
-        self.blocked_ips.contains(ip)
+        !self.immune_ips.contains(ip) && self.blocked_ips.contains(ip)
     }
 
     /// Returns 4 compact peer endpoints (24 bytes) from the active surveillance mesh,
@@ -338,7 +367,7 @@ impl SurveillanceRecorder {
                 for (ip, entry, asn_hint, score, category, suspected) in chunk {
                     let asn = asn_hint.map(|h| h.asn.to_string());
                     let org = asn_hint.map(|h| h.org.to_string());
-                    let is_blocked = *score >= 70;
+                    let is_blocked = *score >= 70 && !self.immune_ips.contains(ip);
                     let sample_hashes: Vec<Vec<u8>> = entry.sample_hashes.iter().map(|h| h.to_vec()).collect();
                     let total_queries = (entry.get_peers_count + entry.find_node_count) as i64;
                     let distinct_node_ids = entry.total_node_ids_seen.max(1) as i32;
@@ -765,32 +794,35 @@ pub fn calculate_universal_threat_score(
         score = score.saturating_sub(announce_discount);
     }
 
-    let final_score = score.clamp(0, 100);
+    // Absolute guardrail for standard BitTorrent clients & seedboxes:
+    // Any node querying swarms (get_peers > 0) that does NOT belong to a confirmed
+    // copyright surveillance operator (Selectel/IKWYD, DataCamp, M247, Cogent)
+    // and uses <= 4 node IDs is a standard BitTorrent peer or seedbox.
+    // It can NEVER exceed score 45 and can NEVER be blocked.
+    let final_score = if !is_known_spy && entry.get_peers_count > 0 && entry.total_node_ids_seen <= 4 && total_queries < 300 {
+        score.clamp(0, 45)
+    } else {
+        score.clamp(0, 100)
+    };
 
     // Dynamic categorization
-    let (category, suspected) = if entry.total_node_ids_seen >= 3 {
+    let (category, suspected) = if entry.total_node_ids_seen >= 5 {
         (
             AbuseCategory::SybilRotator,
             format!("Sybil Node Rotator ({} distinct Node IDs)", entry.total_node_ids_seen),
         )
-    } else if entry.find_node_count >= 50 && entry.announce_peer_count == 0 {
+    } else if is_known_spy {
+        let h = asn_hint.as_ref().unwrap();
+        (
+            AbuseCategory::PassiveMonitor,
+            format!("{} ({})", h.hint_name, h.org),
+        )
+    } else if entry.find_node_count >= 100 && entry.get_peers_count == 0 && entry.announce_peer_count == 0 {
         (
             AbuseCategory::RoutingScraper,
             format!("DHT Table Scraper ({} find_node probes)", entry.find_node_count),
         )
-    } else if entry.get_peers_count >= 20 && entry.announce_peer_count == 0 {
-        if let Some(h) = &asn_hint {
-            (
-                AbuseCategory::PassiveMonitor,
-                format!("{} ({})", h.hint_name, h.org),
-            )
-        } else {
-            (
-                AbuseCategory::PassiveMonitor,
-                format!("Passive Swarm Monitor ({} queries / 0 announces)", entry.get_peers_count),
-            )
-        }
-    } else if total_queries >= 100 && entry.announce_peer_count == 0 {
+    } else if final_score >= 70 && total_queries >= 300 && entry.announce_peer_count == 0 {
         (
             AbuseCategory::QueryFlooder,
             format!("High-Rate Query Flooder ({} total queries)", total_queries),
@@ -799,11 +831,6 @@ pub fn calculate_universal_threat_score(
         (
             AbuseCategory::UnreciprocatingLeecher,
             "Unreciprocating DHT Leecher (0 Swarm Contribution)".to_string(),
-        )
-    } else if entry.bep42_violations > 0 && entry.bep42_valid == 0 && final_score >= 50 {
-        (
-            AbuseCategory::CryptoSpoofer,
-            "Cryptographic Spoofing Node (BEP 42 Failed)".to_string(),
         )
     } else {
         (

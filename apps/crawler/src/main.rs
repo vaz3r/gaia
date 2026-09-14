@@ -321,6 +321,7 @@ async fn main() {
     tracing::info!("Loaded {} stable peers for fast-lane", stable_peers.len());
     for sp in stable_peers.iter() {
         ip_cooldown.record_success(sp.ip());
+        surveillance.record_legitimate_peer(sp.ip());
     }
 
     let pipeline = verify::run_pipeline(
@@ -364,6 +365,7 @@ async fn main() {
             },
         },
         stable_peers,
+        surveillance.clone(),
     );
 
     let report = report_loop(

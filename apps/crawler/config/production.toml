@@ -16,7 +16,7 @@ walker_self_explore_prob = 0.25
 sybil_count = 256
 sybil_bep42_ratio = 1.0
 find_node_response_percent = 100
-source_deadline_ms = 25000
+source_deadline_ms = 12000
 source_max_queries = 48
 source_query_timeout_secs = 5
 rate_limit_per_sec = 8.0
@@ -24,8 +24,8 @@ rate_limit_per_sec = 8.0
 [fetch]
 pipeline_limit = 6000
 global_fetch_limit = 2500
-race_peers = 12
-metadata_timeout_secs = 35
+race_peers = 8
+metadata_timeout_secs = 25
 connect_deadline_ms = 10000
 lead_source_grace_ms = 1000
 tcp_timeout_secs = 3
@@ -47,8 +47,10 @@ announce_cache_max_entries = 100000
 peer_cache_failure_threshold = 1
 
 [retry]
-no_peers_terminal_on_first = false
-no_peers_max_retries = 2
+no_peers_terminal_on_first = true
+no_peers_max_retries = 1
+scheduler_interval_secs = 60
+scheduler_claim_limit = 100
 
 [storage]
 janitor_interval_secs = 300

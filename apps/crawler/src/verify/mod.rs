@@ -240,6 +240,7 @@ pub async fn run_pipeline(
     ip_cooldown: Arc<crate::net::ip_cooldown::IpCooldownCache>,
     config: VerifyConfig,
     stable_peers: Arc<Vec<SocketAddr>>,
+    surveillance: Arc<crate::storage::surveillance::SurveillanceRecorder>,
 ) {
     let pipeline_limit = Arc::new(Semaphore::new(config.pipeline_limit.max(1)));
     let fetch_limit = Arc::new(Semaphore::new(config.fetch_limit.max(1)));
@@ -365,6 +366,7 @@ pub async fn run_pipeline(
         let fetch_limit = fetch_limit.clone();
         let ip_cooldown = ip_cooldown.clone();
         let stable_peers = stable_peers.clone();
+        let surveillance = surveillance.clone();
         tokio::spawn(async move {
             let _pipeline_permit = _pipeline_permit;
             metrics.pipeline_spawned_total.add(1);
@@ -429,6 +431,7 @@ pub async fn run_pipeline(
                         metrics.announce_success.add(1);
                     }
                     batch_writer.push_torrent(ih, &meta, peer_addr);
+                    surveillance.record_legitimate_peer(peer_addr.ip());
                     crate::trace_lifecycle!(
                         &ih,
                         "persist_torrents",
