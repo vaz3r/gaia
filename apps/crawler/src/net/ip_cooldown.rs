@@ -68,7 +68,9 @@ impl Cidr {
 
 pub struct IpCooldownCache {
     quarantined: DashMap<IpAddr, Instant>,
+    immune_ips: DashMap<IpAddr, Instant>,
     cooldown_duration: Duration,
+    immunity_duration: Duration,
     max_entries: usize,
     blacklist_ips: HashSet<IpAddr>,
     blacklist_cidrs: Vec<Cidr>,
@@ -125,7 +127,9 @@ impl IpCooldownCache {
 
         IpCooldownCache {
             quarantined: DashMap::with_capacity_and_shard_amount(1024, 64),
+            immune_ips: DashMap::with_capacity_and_shard_amount(1024, 64),
             cooldown_duration,
+            immunity_duration: Duration::from_secs(3600),
             max_entries,
             blacklist_ips,
             blacklist_cidrs,
@@ -152,6 +156,13 @@ impl IpCooldownCache {
         if self.is_blacklisted(ip) {
             return true;
         }
+        if let Some(entry) = self.immune_ips.get(ip) {
+            if Instant::now() < *entry.value() {
+                return false;
+            }
+            drop(entry);
+            self.immune_ips.remove(ip);
+        }
         if let Some(entry) = self.quarantined.get(ip) {
             if Instant::now() < *entry.value() {
                 return true;
@@ -162,11 +173,30 @@ impl IpCooldownCache {
         false
     }
 
-    /// Quarantine an IP for `cooldown_duration` after a failed connection/probe.
+    /// Quarantine an IP for `cooldown_duration` after a failed connection/probe,
+    /// unless the IP is a proven active seedbox with immunity.
     pub fn mark_failure(&self, ip: IpAddr) {
+        if self.is_blacklisted(&ip) {
+            return;
+        }
+        if let Some(entry) = self.immune_ips.get(&ip) {
+            if Instant::now() < *entry.value() {
+                return;
+            }
+            drop(entry);
+            self.immune_ips.remove(&ip);
+        }
         let expiry = Instant::now() + self.cooldown_duration;
         self.quarantined.insert(ip, expiry);
         self.enforce_bound();
+    }
+
+    /// Record a successful metadata delivery from an IP, granting it immunity
+    /// from single-connection failure quarantine and unquarantining it if present.
+    pub fn record_success(&self, ip: IpAddr) {
+        self.quarantined.remove(&ip);
+        let expiry = Instant::now() + self.immunity_duration;
+        self.immune_ips.insert(ip, expiry);
     }
 
     /// Evict all expired entries. Returns count of evicted entries.
@@ -181,6 +211,7 @@ impl IpCooldownCache {
                 true
             }
         });
+        self.immune_ips.retain(|_, expiry| now < *expiry);
         evicted
     }
 
@@ -250,6 +281,32 @@ mod tests {
         assert!(!cache.is_blacklisted(&ip));
 
         std::thread::sleep(Duration::from_millis(60));
+        assert!(!cache.is_quarantined(&ip));
+    }
+
+    #[test]
+    fn seedbox_immunity_survives_failure() {
+        let cache = IpCooldownCache::new(Duration::from_millis(50), 1000, None);
+        let ip: IpAddr = "198.51.100.42".parse().unwrap();
+
+        cache.record_success(ip);
+        assert!(!cache.is_quarantined(&ip));
+
+        // Occasional failure on a missed torrent must NOT quarantine immune seedbox
+        cache.mark_failure(ip);
+        assert!(!cache.is_quarantined(&ip));
+    }
+
+    #[test]
+    fn record_success_clears_existing_quarantine() {
+        let cache = IpCooldownCache::new(Duration::from_millis(500), 1000, None);
+        let ip: IpAddr = "203.0.113.99".parse().unwrap();
+
+        cache.mark_failure(ip);
+        assert!(cache.is_quarantined(&ip));
+
+        // Delivering metadata immediately clears quarantine and grants immunity
+        cache.record_success(ip);
         assert!(!cache.is_quarantined(&ip));
     }
 }

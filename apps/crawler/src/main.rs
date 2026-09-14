@@ -319,6 +319,9 @@ async fn main() {
 
     let stable_peers = Arc::new(crate::storage::jobs::get_stable_peers(&pool).await.unwrap_or_default());
     tracing::info!("Loaded {} stable peers for fast-lane", stable_peers.len());
+    for sp in stable_peers.iter() {
+        ip_cooldown.record_success(sp.ip());
+    }
 
     let pipeline = verify::run_pipeline(
         verify_rx,
