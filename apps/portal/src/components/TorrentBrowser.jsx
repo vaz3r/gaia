@@ -57,6 +57,7 @@ export default function TorrentBrowser() {
   }, [input])
 
   useEffect(() => {
+    const controller = new AbortController()
     setLoading(true)
     setError(null)
     const params = new URLSearchParams({ page, limit })
@@ -65,12 +66,24 @@ export default function TorrentBrowser() {
     if (sort) params.set('sort', sort)
     params.set('order', order)
 
-    api(`/api/torrents?${params}`)
+    api(`/api/torrents?${params}`, { signal: controller.signal })
       .then((res) => {
         setData(res)
       })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false))
+      .catch((e) => {
+        if (e.name !== 'AbortError' && !controller.signal.aborted) {
+          setError(e.message)
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false)
+        }
+      })
+
+    return () => {
+      controller.abort()
+    }
   }, [search, category, sort, order, page, limit])
 
   function toggleSort(key) {

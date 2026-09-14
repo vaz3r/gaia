@@ -8,3 +8,8 @@ rest:
 
 indexer:
   enable_otlp_endpoint: false
+
+searcher:
+  fast_field_cache_capacity: 1G
+  split_footer_cache_capacity: 500M
+  partial_request_cache_capacity: 250M

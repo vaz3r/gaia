@@ -25,8 +25,8 @@ public static class DashboardEndpoints
             return Results.Ok(stats);
         });
 
-        // Server-Sent Events (SSE) live telemetry stream for dashboard client
-        group.MapGet("/live/stream", async (
+        // Server-Sent Events (SSE) live telemetry stream for dashboard & portal clients
+        var sseHandler = async (
             HttpContext ctx,
             DatabaseService db,
             CancellationToken ct) =>
@@ -34,6 +34,7 @@ public static class DashboardEndpoints
             ctx.Response.Headers.Append("Content-Type", "text/event-stream");
             ctx.Response.Headers.Append("Cache-Control", "no-cache");
             ctx.Response.Headers.Append("Connection", "keep-alive");
+            ctx.Response.Headers.Append("X-Accel-Buffering", "no");
 
             while (!ct.IsCancellationRequested)
             {
@@ -51,6 +52,9 @@ public static class DashboardEndpoints
 
                 await Task.Delay(3000, ct);
             }
-        });
+        };
+
+        group.MapGet("/live/stream", sseHandler);
+        group.MapGet("/stats/live", sseHandler);
     }
 }

@@ -22,7 +22,7 @@ builder.Services.AddHttpClient<QuickwitClient>(client =>
         ?? "http://127.0.0.1:7280";
 
     client.BaseAddress = new Uri(quickwitUrl);
-    client.Timeout = TimeSpan.FromSeconds(5);
+    client.Timeout = TimeSpan.FromSeconds(30);
 });
 
 // Register Singleton Services

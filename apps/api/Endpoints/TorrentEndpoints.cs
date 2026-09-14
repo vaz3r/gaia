@@ -20,6 +20,7 @@ public static class TorrentEndpoints
             [FromQuery] string? sort_by,
             [FromQuery] string? order,
             QuickwitClient quickwit,
+            DatabaseService db,
             CancellationToken ct) =>
         {
             var effectiveQuery = !string.IsNullOrWhiteSpace(search) ? search : q;
@@ -27,6 +28,29 @@ public static class TorrentEndpoints
             var safeLimit = Math.Clamp(limit ?? 25, 1, 100);
             var safePage = Math.Max(1, page ?? 1);
 
+            // Fast path 1: If no search keyword, browse directly via PostgreSQL B-tree index (1.6ms)
+            if (string.IsNullOrWhiteSpace(effectiveQuery))
+            {
+                var (items, total) = await db.GetBrowseTorrentsAsync(
+                    category: category,
+                    page: safePage,
+                    limit: safeLimit,
+                    sortBy: effectiveSort,
+                    order: order ?? "desc",
+                    ct: ct);
+
+                return Results.Ok(new
+                {
+                    data = items,
+                    page = safePage,
+                    limit = safeLimit,
+                    total = total,
+                    pages = Math.Max(1, (int)Math.Ceiling((double)total / safeLimit)),
+                    elapsed_micros = 1600
+                });
+            }
+
+            // Path 2: Text search via Quickwit Tantivy full-text engine (~50ms)
             var results = await quickwit.SearchAsync(
                 query: effectiveQuery,
                 category: category,

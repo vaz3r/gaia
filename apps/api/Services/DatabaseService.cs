@@ -132,6 +132,76 @@ public class DatabaseService
         }
     }
 
+    public async Task<(List<IDictionary<string, object?>> Items, long Total)> GetBrowseTorrentsAsync(
+        string? category = null,
+        int page = 1,
+        int limit = 25,
+        string? sortBy = null,
+        string? order = "desc",
+        CancellationToken ct = default)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 100);
+        var safePage = Math.Max(1, page);
+        var offset = (safePage - 1) * safeLimit;
+
+        var sortCol = sortBy?.ToLowerInvariant() switch
+        {
+            "size" => "total_size",
+            "files" => "file_count",
+            "health" => "health_score",
+            "popularity" => "popularity_score",
+            "first_seen" => "first_seen",
+            "sightings" => "total_seen",
+            "name" => "name",
+            _ => "verified_at"
+        };
+        var sortDir = order?.ToLowerInvariant() == "asc" ? "ASC" : "DESC";
+
+        var hasCategory = !string.IsNullOrWhiteSpace(category) && !category.Equals("All", StringComparison.OrdinalIgnoreCase);
+
+        var sql = $"""
+            SELECT 
+                encode(infohash, 'hex') AS infohash,
+                name,
+                category,
+                total_size,
+                file_count,
+                verified_at,
+                health_score,
+                popularity_score,
+                swarm_peers,
+                seed_confirmed,
+                risk_tier,
+                policy_action
+            FROM torrents
+            WHERE (policy_action IS NULL OR policy_action != 'SUPPRESS')
+              {(hasCategory ? "AND category = @cat" : "")}
+            ORDER BY {sortCol} {sortDir}
+            LIMIT @lim OFFSET @off;
+        """;
+
+        try
+        {
+            await using var conn = await _dataSource.OpenConnectionAsync(ct);
+            var rows = await conn.QueryAsync(sql, new
+            {
+                cat = category?.Trim(),
+                lim = safeLimit,
+                off = offset
+            });
+
+            var list = rows.Select(r => (IDictionary<string, object?>)r).ToList();
+            var total = _cachedStats.TryGetValue("total_torrents", out var t) && t is long tl ? tl : 3418496;
+
+            return (list, total);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to browse torrents from database");
+            return (new List<IDictionary<string, object?>>(), 0);
+        }
+    }
+
     private static Dictionary<string, object> _cachedStats = new()
     {
         ["total_torrents"] = 3418496,

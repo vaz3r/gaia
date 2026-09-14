@@ -17,18 +17,15 @@ export default function App() {
   const [stats, setStats] = useState(null)
 
   useEffect(() => {
-    // Preload public trackers for instant magnet composition
-    loadTrackers().catch(() => {})
-
     // Load initial stats
     api('/api/stats')
       .then(setStats)
       .catch((e) => console.warn('Failed to load stats:', e))
 
-    // Listen to SSE live stats updates if available
+    // Listen to SSE live stats updates
     let es
     try {
-      es = new EventSource('/api/stats/live')
+      es = new EventSource('/api/live/stream')
       es.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data)
@@ -40,6 +37,9 @@ export default function App() {
             updated_at: data.timestamp ?? prev?.updated_at
           }))
         } catch {}
+      }
+      es.onerror = () => {
+        es.close()
       }
     } catch {}
 
