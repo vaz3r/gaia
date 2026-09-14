@@ -31,21 +31,48 @@ class AlertRecorder:
     def get_connection(self):
         return psycopg2.connect(**self.conn_params)
 
-    def should_suppress_duplicate(self, incident_type: str, severity: str, window_minutes: int = 30) -> bool:
+    def should_suppress_duplicate(
+        self,
+        incident_type: str,
+        severity: str,
+        ts: Optional[datetime] = None,
+        window_minutes: int = 30,
+    ) -> bool:
         """
-        Check if an alert of the same incident_type and severity was already recorded recently.
+        Check if an alert of the same incident_type already exists for this exact timestamp,
+        or was recorded within the cool-off window.
         """
-        query = """
+        exact_query = """
+            SELECT 1 FROM operational_alerts
+            WHERE incident_type = %s AND ts = %s
+            LIMIT 1
+        """
+        window_query = """
             SELECT 1 FROM operational_alerts
             WHERE incident_type = %s AND severity = %s
-              AND ts >= now() - INTERVAL '%s minutes'
+              AND ts >= %s - make_interval(mins => %s)
             LIMIT 1
         """
         try:
             with self.get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(query, (incident_type, severity, window_minutes))
-                    return cur.fetchone() is not None
+                    if ts is not None:
+                        cur.execute(exact_query, (incident_type, ts))
+                        if cur.fetchone() is not None:
+                            return True
+                        cur.execute(window_query, (incident_type, severity, ts, window_minutes))
+                        return cur.fetchone() is not None
+                    else:
+                        cur.execute(
+                            """
+                            SELECT 1 FROM operational_alerts
+                            WHERE incident_type = %s AND severity = %s
+                              AND ts >= now() - make_interval(mins => %s)
+                            LIMIT 1
+                            """,
+                            (incident_type, severity, window_minutes),
+                        )
+                        return cur.fetchone() is not None
         except Exception as e:
             logger.warning(f"Could not check duplicate alerts: {e}")
             return False
@@ -57,8 +84,14 @@ class AlertRecorder:
         severity = alert.get("severity", "INFO")
         incident_type = alert.get("predicted_incident", "UNKNOWN")
 
-        if deduplicate and self.should_suppress_duplicate(incident_type, severity):
-            logger.info(f"Suppressing duplicate {severity} alert for {incident_type} within cool-off window.")
+        ts = alert.get("timestamp")
+        if isinstance(ts, str):
+            ts = datetime.fromisoformat(ts)
+        elif ts is None:
+            ts = datetime.utcnow()
+
+        if deduplicate and self.should_suppress_duplicate(incident_type, severity, ts):
+            logger.info(f"Suppressing duplicate {severity} alert for {incident_type} at {ts} within cool-off window.")
             return None
 
         query = """
@@ -68,11 +101,6 @@ class AlertRecorder:
                 %s, %s, %s, %s, %s, %s, %s
             ) RETURNING id
         """
-        ts = alert.get("timestamp")
-        if isinstance(ts, str):
-            ts = datetime.fromisoformat(ts)
-        elif ts is None:
-            ts = datetime.utcnow()
 
         top_features_json = json.dumps(alert.get("top_contributing_features", []))
 
