@@ -173,3 +173,26 @@ services:
       - /home/${DEPLOY_USER:-core}/gaia-data/scoring/models:/app/model_registry
       - /home/${DEPLOY_USER:-core}/gaia-data/scoring/reports:/app/reports
 
+  quickwit:
+    image: quickwit/quickwit:0.8.2
+    container_name: gaia-quickwit
+    restart: unless-stopped
+    ports:
+      - "7280:7280"
+    environment:
+      NO_COLOR: "true"
+    volumes:
+      - /home/${DEPLOY_USER:-core}/gaia-data/quickwit:/quickwit/qwdata
+      - ../../../apps/quickwit/config:/quickwit/config:ro
+    command: ["run"]
+
+  redis:
+    image: redis:7-alpine
+    container_name: gaia-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "1024mb", "--maxmemory-policy", "volatile-lru"]
+    volumes:
+      - /home/${DEPLOY_USER:-core}/gaia-data/redis:/data
+

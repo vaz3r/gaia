@@ -1,0 +1,10 @@
+version: 0.7
+
+node_id: gaia-quickwit-01
+listen_address: 0.0.0.0
+
+rest:
+  listen_port: 7280
+
+indexer:
+  enable_otlp_endpoint: false
