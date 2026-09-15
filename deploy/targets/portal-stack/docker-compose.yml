@@ -5,14 +5,17 @@ services:
     image: redis:7-alpine
     container_name: gaia-portal-redis
     restart: unless-stopped
-    network_mode: host
     command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   meilisearch:
     image: getmeili/meilisearch:v1.12
     container_name: gaia-portal-meilisearch
     restart: unless-stopped
-    network_mode: host
     environment:
       MEILI_ENV: production
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-meili_secure_master_key_v2_modern_scaling}
@@ -22,6 +25,11 @@ services:
       MEILI_HTTP_ADDR: 0.0.0.0:7700
     volumes:
       - /var/lib/meilisearch/data:/meili_data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:7700/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   api:
     build:
@@ -30,17 +38,36 @@ services:
     image: gaia-portal-api:${GIT_COMMIT:-latest}
     container_name: gaia-portal-api
     restart: unless-stopped
-    network_mode: host
     environment:
       ASPNETCORE_URLS: http://0.0.0.0:5000
       DATABASE_URL: ${DATABASE_URL:-Host=192.168.10.10;Port=6432;Database=craw;Username=crawler;Password=83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b;Pooling=true;Maximum Pool Size=50;Minimum Pool Size=5;Max Auto Prepare=0;No Reset On Close=true;}
       ConnectionStrings__Postgres: ${DATABASE_URL:-Host=192.168.10.10;Port=6432;Database=craw;Username=crawler;Password=83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b;Pooling=true;Maximum Pool Size=50;Minimum Pool Size=5;Max Auto Prepare=0;No Reset On Close=true;}
-      REDIS_URL: redis://127.0.0.1:6379
-      Meilisearch__Url: http://127.0.0.1:7700
+      REDIS_URL: redis://redis:6379
+      Meilisearch__Url: http://meilisearch:7700
       Meilisearch__ApiKey: ${MEILI_MASTER_KEY:-meili_secure_master_key_v2_modern_scaling}
     depends_on:
-      - redis
-      - meilisearch
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+
+  sync:
+    build:
+      context: ../../../apps/sync
+      dockerfile: Dockerfile
+    image: gaia-portal-sync:${GIT_COMMIT:-latest}
+    container_name: gaia-portal-sync
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: Host=192.168.10.10;Port=5432;Database=craw;Username=crawler;Password=83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b;Pooling=false;
+      REDIS_URL: redis://redis:6379
+      Meilisearch__Url: http://meilisearch:7700
+      Meilisearch__ApiKey: ${MEILI_MASTER_KEY:-meili_secure_master_key_v2_modern_scaling}
+    depends_on:
+      redis:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
 
   portal:
     build:
@@ -49,6 +76,7 @@ services:
     image: gaia-portal-web:${GIT_COMMIT:-latest}
     container_name: gaia-portal-web
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "3005:3005"
     depends_on:
       - api

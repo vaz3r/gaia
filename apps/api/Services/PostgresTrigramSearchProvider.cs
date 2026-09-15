@@ -5,20 +5,11 @@ namespace Gaia.Api.Services;
 public class PostgresTrigramSearchProvider : ISearchProvider
 {
     private readonly DatabaseService _db;
-    private readonly CacheService _redis;
     private readonly ILogger<PostgresTrigramSearchProvider> _logger;
 
-    private static readonly HashSet<string> QualityStopTokens = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "1080p", "720p", "480p", "2160p", "4k", "uhd", "bluray", "blu-ray", "remux",
-        "webrip", "web-dl", "webdl", "dvdrip", "hdtv", "x264", "x265", "hevc", "avc",
-        "aac", "dts", "ac3", "ddp5", "repack", "proper", "multi", "ita", "eng", "rus"
-    };
-
-    public PostgresTrigramSearchProvider(DatabaseService db, CacheService redis, ILogger<PostgresTrigramSearchProvider> logger)
+    public PostgresTrigramSearchProvider(DatabaseService db, ILogger<PostgresTrigramSearchProvider> logger)
     {
         _db = db;
-        _redis = redis;
         _logger = logger;
     }
 
@@ -32,20 +23,7 @@ public class PostgresTrigramSearchProvider : ISearchProvider
         var offset    = (safePage - 1) * safeLimit;
         var sortDir   = order?.ToLowerInvariant() == "asc" ? "ASC" : "DESC";
 
-        var cacheKey = CacheService.MakeKey("pg-search", query, category, safePage, safeLimit, sortBy, order);
-        var cached   = await _redis.GetAsync<SearchResponse>(cacheKey, ct);
-        if (cached is not null) return cached with { FromCache = true };
-
-        var allTokens = string.IsNullOrWhiteSpace(query)
-            ? new List<string>()
-            : System.Text.RegularExpressions.Regex.Split(query.Trim(), @"[\s._\-+]+")
-                .Where(t => !string.IsNullOrEmpty(t) && (t.Length > 1 || char.IsDigit(t[0])))
-                .ToList();
-
-        var titleTokens = allTokens.Where(t => !QualityStopTokens.Contains(t)).ToList();
-        var filterTokens = titleTokens.Count > 0 ? titleTokens : allTokens;
-
-        var whereClauses = new List<string> { "(policy_action IS NULL OR policy_action != 'SUPPRESS')" };
+        var whereClauses = new List<string> { "policy_action IS DISTINCT FROM 'SUPPRESS'" };
         var dynParams    = new DynamicParameters();
 
         if (!string.IsNullOrWhiteSpace(category) && !category.Equals("All", StringComparison.OrdinalIgnoreCase))
@@ -54,20 +32,14 @@ public class PostgresTrigramSearchProvider : ISearchProvider
             dynParams.Add("category", category.Trim());
         }
 
-        for (int i = 0; i < filterTokens.Count; i++)
+        var trimmedQuery = query?.Trim() ?? "";
+        if (!string.IsNullOrWhiteSpace(trimmedQuery))
         {
-            whereClauses.Add($"name ILIKE @tok{i} ESCAPE '\\'");
-            dynParams.Add($"tok{i}", $"%{EscapeLike(filterTokens[i])}%");
+            // Use GIN index idx_torrents_name_fts
+            whereClauses.Add("to_tsvector('simple', name) @@ websearch_to_tsquery('simple', @q)");
+            dynParams.Add("q", trimmedQuery);
         }
 
-        var extraTokens = allTokens.Where(t => QualityStopTokens.Contains(t)).ToList();
-        for (int i = 0; i < extraTokens.Count; i++)
-        {
-            whereClauses.Add($"name ILIKE @qtok{i} ESCAPE '\\'");
-            dynParams.Add($"qtok{i}", $"%{EscapeLike(extraTokens[i])}%");
-        }
-
-        dynParams.Add("fullPhrase", $"%{EscapeLike(query.Trim())}%");
         dynParams.Add("lim", safeLimit);
         dynParams.Add("off", offset);
 
@@ -77,9 +49,9 @@ public class PostgresTrigramSearchProvider : ISearchProvider
             "popularity" or "popularity_score" => $"ORDER BY popularity_score {sortDir}",
             "health" or "health_score"         => $"ORDER BY health_score {sortDir}",
             "date" or "verified_at"            => $"ORDER BY verified_at {sortDir}",
-            _ => string.IsNullOrWhiteSpace(query)
+            _ => string.IsNullOrWhiteSpace(trimmedQuery)
                 ? $"ORDER BY verified_at {sortDir}"
-                : $"ORDER BY CASE WHEN name ILIKE @fullPhrase ESCAPE '\\' THEN 200 ELSE 100 END DESC, popularity_score DESC"
+                : $"ORDER BY popularity_score DESC, verified_at DESC"
         };
 
         var sql = $"""
@@ -98,9 +70,8 @@ public class PostgresTrigramSearchProvider : ISearchProvider
         long total = rows.Count < safeLimit ? offset + rows.Count : 50000;
         sw.Stop();
 
-        var response = new SearchResponse(rows, total, safePage, safeLimit, sw.ElapsedMilliseconds, false, "postgresql-trigram");
-        await _redis.SetAsync(cacheKey, response, CacheService.SearchTtl, ct);
-        return response;
+        // G4: Never cache fallback results in hot cache!
+        return new SearchResponse(rows, total, safePage, safeLimit, sw.ElapsedMilliseconds, false, "postgresql-fallback");
     }
 
     private static SearchResultItem MapRow(dynamic r) => new(
@@ -108,6 +79,4 @@ public class PostgresTrigramSearchProvider : ISearchProvider
         r.verified_at as DateTime?, (int)(r.health_score ?? 0), (int)(r.popularity_score ?? 0),
         (int)(r.swarm_peers ?? 0), (bool)(r.seed_confirmed ?? false), r.risk_tier ?? "SAFE", r.policy_action ?? "ALLOW"
     );
-
-    private static string EscapeLike(string s) => s.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
 }

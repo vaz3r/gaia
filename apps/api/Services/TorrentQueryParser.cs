@@ -12,6 +12,7 @@ public record ParsedQuery(
     QueryType Type,
     string OriginalQuery,
     string CleanQuery,
+    IReadOnlyList<string> QueryVariants,
     string? Infohash = null
 );
 
@@ -19,33 +20,33 @@ public static class TorrentQueryParser
 {
     private static readonly Regex InfohashRegex = new(@"^[0-9a-fA-F]{40}$", RegexOptions.Compiled);
     private static readonly Regex TwoDigitYearRegex = new(@"\b(7\d|8\d|9\d)\b", RegexOptions.Compiled);
+    private static readonly Regex FourDigitYearRegex = new(@"\b(19\d{2}|20[0-2]\d)\b", RegexOptions.Compiled);
     private static readonly Regex LeadingArticlesRegex = new(@"\b(th|teh)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // Protected wordlist: never split tokens matching these words
     private static readonly HashSet<string> TheWords = new(StringComparer.OrdinalIgnoreCase)
     {
-        "theater", "theatre", "theatrical", "theatricals",
-        "theory", "theories", "theorist", "theorists",
-        "theology", "theological",
-        "theft", "thefts",
-        "theme", "themes", "thematic",
-        "thesis", "theses",
-        "therapy", "therapist", "therapists", "therapeutic",
-        "thermal",
+        "thx", "thq", "thunder", "third", "threat", "thor", "theft", "thefts",
+        "theory", "theories", "theorist", "theorists", "theology", "theological",
+        "thing", "things", "thief", "thieves", "three", "thru", "through", "throughout",
+        "though", "thought", "thoughts", "throttle", "throttled", "throttling",
+        "thanks", "thank", "thankful", "theater", "theatre", "theatrical", "theatricals",
+        "thesis", "theses", "therapy", "therapist", "therapists", "therapeutic",
+        "thermal", "theme", "themes", "thematic",
         "there", "thereby", "therefore", "therein", "thereof",
         "these", "they", "their", "theirs", "them", "themselves", "then", "thence"
     };
 
-    // Splits scene dots between words/numbers, but preserves version numbers (e.g. 24.04, 5.1)
     public static ParsedQuery Parse(string? input)
     {
         if (string.IsNullOrWhiteSpace(input))
-            return new ParsedQuery(QueryType.Standard, string.Empty, string.Empty);
+            return new ParsedQuery(QueryType.Standard, string.Empty, string.Empty, Array.Empty<string>());
 
         var trimmed = input.Trim();
 
-        // 1. O(1) Direct infohash detection
+        // 1. Direct infohash detection
         if (InfohashRegex.IsMatch(trimmed))
-            return new ParsedQuery(QueryType.Infohash, trimmed, trimmed.ToLowerInvariant(), trimmed.ToLowerInvariant());
+            return new ParsedQuery(QueryType.Infohash, trimmed, trimmed.ToLowerInvariant(), new[] { trimmed.ToLowerInvariant() }, trimmed.ToLowerInvariant());
 
         var clean = trimmed;
 
@@ -61,43 +62,51 @@ public static class TorrentQueryParser
         clean = LeadingArticlesRegex.Replace(clean, "the");
 
         // 4. Scene release punctuation clean-up
-        // Replace brackets, underscores, pluses with spaces
         clean = Regex.Replace(clean, @"[_\-+\[\](){}]", " ");
 
-        // Split dots unless it's a version number or audio channel (e.g. 5.1, 24.04, 7.1)
+        // Split dots unless version number
         clean = Regex.Replace(clean, @"(?<=[a-zA-Z])\.(?=[a-zA-Z0-9])|(?<=[0-9])\.(?=[a-zA-Z])|(?<=\b\d{4})\.(?=\d)", " ");
-
-        // 5. Contextual year expansion: 70-99 expands to 19xx (e.g. 'matrix 99' -> 'matrix 1999')
-        // Does NOT expand 00-29 to avoid breaking TV show '24' or release versions
-        clean = TwoDigitYearRegex.Replace(clean, m =>
-        {
-            var val = int.Parse(m.Value);
-            return val >= 70 && val <= 99 ? $"19{val}" : m.Value;
-        });
 
         // Collapse whitespace
         clean = Regex.Replace(clean, @"\s+", " ").Trim();
 
-        return new ParsedQuery(QueryType.Standard, trimmed, clean);
-    }
+        // 5. Generate Year Disjunction Variants (Feature 2)
+        var variants = new List<string>();
 
-    // Helper for indexing: creates name_clean field from raw release name
-    public static string CleanReleaseName(string? rawName)
-    {
-        if (string.IsNullOrWhiteSpace(rawName)) return string.Empty;
+        var twoDigitMatch = TwoDigitYearRegex.Match(clean);
+        var fourDigitMatch = FourDigitYearRegex.Match(clean);
 
-        // Split scene dots and separators, but preserve 1-2 digit version numbers (e.g. 24.04, 5.1)
-        var s = Regex.Replace(rawName, @"[_\-+\[\](){}|/]", " ");
+        if (twoDigitMatch.Success)
+        {
+            int val = int.Parse(twoDigitMatch.Value);
+            string expandedYear = $"19{val}";
+            string expandedQuery = TwoDigitYearRegex.Replace(clean, expandedYear, 1);
 
-        // Match 4-digit years followed by resolution or numbers (e.g. 1999.1080p -> 1999 1080p)
-        s = Regex.Replace(s, @"(?<=\b\d{4})\.(?=\d)", " ");
+            variants.Add(expandedQuery); // Primary: expanded "the matrix 1999"
+            variants.Add(clean);         // Secondary: original "the matrix 99"
+        }
+        else if (fourDigitMatch.Success)
+        {
+            int val = int.Parse(fourDigitMatch.Value);
+            if (val >= 1970 && val <= 1999)
+            {
+                string shortYear = (val % 100).ToString();
+                string contractedQuery = FourDigitYearRegex.Replace(clean, shortYear, 1);
 
-        // Match letters adjacent to dots
-        s = Regex.Replace(s, @"(?<=[a-zA-Z])\.(?=[a-zA-Z0-9])|(?<=[0-9])\.(?=[a-zA-Z])", " ");
+                variants.Add(clean);           // Primary: original "matrix 1999"
+                variants.Add(contractedQuery); // Secondary: contracted "matrix 99"
+            }
+            else
+            {
+                variants.Add(clean);
+            }
+        }
+        else
+        {
+            variants.Add(clean);
+        }
 
-        // Split any remaining dots that are NOT between single or two-digit numbers (like 5.1 or 24.04)
-        s = Regex.Replace(s, @"(?<!\b\d{1,2})\.|\.(?!\d{1,2}\b)", " ");
-
-        return Regex.Replace(s, @"\s+", " ").Trim();
+        string primaryClean = variants[0];
+        return new ParsedQuery(QueryType.Standard, trimmed, primaryClean, variants);
     }
 }

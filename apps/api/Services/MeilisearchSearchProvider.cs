@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Caching.Memory;
 
@@ -12,6 +13,13 @@ public class MeilisearchSearchProvider : ISearchProvider
     private readonly PostgresTrigramSearchProvider _fallback;
     private readonly CircuitBreaker _circuitBreaker;
     private readonly ILogger<MeilisearchSearchProvider> _logger;
+
+    private static readonly string[] RetrievalAttributes = new[]
+    {
+        "infohash", "name", "category", "total_size", "file_count",
+        "verified_at", "health_score", "popularity_score",
+        "swarm_peers", "seed_confirmed", "risk_tier", "policy_action"
+    };
 
     public MeilisearchSearchProvider(
         HttpClient http,
@@ -37,11 +45,12 @@ public class MeilisearchSearchProvider : ISearchProvider
         var safeLimit = Math.Clamp(limit, 1, 100);
         var offset    = (safePage - 1) * safeLimit;
 
-        // 1. Smart Query Preprocessing
+        // 1. Smart Query Preprocessing (glued words + year disjunction)
         var parsed = TorrentQueryParser.Parse(query);
 
-        // 2. Multi-tier cache check (L1 MemoryCache -> L2 Redis)
-        var cacheKey = CacheService.MakeKey("ms-search", parsed.CleanQuery, category, safePage, safeLimit, sortBy, order);
+        // 2. Generation key for safe cache invalidation
+        var gen = await _redis.GetGenerationAsync(ct);
+        var cacheKey = CacheService.MakeKey("ms-search", gen, parsed.CleanQuery, category, safePage, safeLimit, sortBy, order);
 
         // L1: In-Memory (0.2ms)
         if (_memCache.TryGetValue<SearchResponse>(cacheKey, out var memCached) && memCached is not null)
@@ -67,18 +76,17 @@ public class MeilisearchSearchProvider : ISearchProvider
         if (!_circuitBreaker.CanExecute())
         {
             _logger.LogWarning("Circuit breaker is OPEN. Fast-failing to PostgreSQL fallback (0ms delay).");
-            var fallbackResp = await _fallback.SearchAsync(parsed.OriginalQuery, category, safePage, safeLimit, sortBy, order, ct);
-            // CRITICAL: NEVER cache degraded fallback responses in hot cache!
-            return fallbackResp;
+            return await _fallback.SearchAsync(parsed.OriginalQuery, category, safePage, safeLimit, sortBy, order, ct);
         }
 
-        // 5. Build Meilisearch Query
+        // 5. Build Filter and Sort
         var filters = new List<string> { "policy_action != \"SUPPRESS\"" };
         if (!string.IsNullOrWhiteSpace(category) && !category.Equals("All", StringComparison.OrdinalIgnoreCase))
         {
             var cleanCat = category.Trim().Replace("\"", "");
             filters.Add($"category = \"{cleanCat}\"");
         }
+        var filterExpr = string.Join(" AND ", filters);
 
         var dir = order?.ToLowerInvariant() == "asc" ? "asc" : "desc";
         string[]? sort = sortBy?.ToLowerInvariant() switch
@@ -89,64 +97,91 @@ public class MeilisearchSearchProvider : ISearchProvider
             "date" or "verified_at"            => new[] { $"verified_at:{dir}" },
             _                                  => string.IsNullOrWhiteSpace(parsed.CleanQuery)
                                                     ? new[] { $"verified_at:{dir}" }
-                                                    : null // Let ranking rules govern text relevance!
+                                                    : null
         };
 
-        var requestBody = new
-        {
-            q                = parsed.CleanQuery,
-            limit            = safeLimit,
-            offset,
-            filter           = string.Join(" AND ", filters),
-            sort,
-            matchingStrategy = "all",
-            attributesToRetrieve = new[]
-            {
-                "infohash", "name", "category", "total_size", "file_count",
-                "verified_at", "health_score", "popularity_score",
-                "swarm_peers", "seed_confirmed", "risk_tier", "policy_action"
-            }
-        };
+        // 6. Execute with strict 800ms SLA budget
+        using var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        budgetCts.CancelAfter(TimeSpan.FromMilliseconds(800));
 
         try
         {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(800)); // 800ms SLA
+            MeiliRawResponse? raw = null;
 
-            var resp = await _http.PostAsJsonAsync("/indexes/torrents/search", requestBody, timeoutCts.Token);
-            if (!resp.IsSuccessStatusCode)
+            if (parsed.QueryVariants.Count > 1)
             {
-                _circuitBreaker.RecordFailure();
-                _logger.LogWarning("Meilisearch HTTP {Code}, tripping failure and calling fallback", resp.StatusCode);
-                return await _fallback.SearchAsync(parsed.OriginalQuery, category, safePage, safeLimit, sortBy, order, ct);
+                // Feature 2: Multi-Search Native Federation for year disjunctions (e.g. matrix 1999 OR matrix 99)
+                var multiSearchPayload = new
+                {
+                    federation = new { limit = safeLimit, offset },
+                    queries = parsed.QueryVariants.Select(v => new
+                    {
+                        indexUid = "torrents",
+                        q = v,
+                        filter = filterExpr,
+                        sort,
+                        attributesToRetrieve = RetrievalAttributes
+                    }).ToArray()
+                };
+
+                var multiResp = await _http.PostAsJsonAsync("/multi-search", multiSearchPayload, budgetCts.Token);
+                if (!multiResp.IsSuccessStatusCode)
+                {
+                    _circuitBreaker.RecordFailure();
+                    return await _fallback.SearchAsync(parsed.OriginalQuery, category, safePage, safeLimit, sortBy, order, ct);
+                }
+
+                raw = await multiResp.Content.ReadFromJsonAsync<MeiliRawResponse>(cancellationToken: budgetCts.Token);
             }
-
-            var raw = await resp.Content.ReadFromJsonAsync<MeiliRawResponse>(cancellationToken: timeoutCts.Token);
-            var hits = (raw?.Hits ?? new()).Select(MapHit).ToList();
-
-            // 6. Relaxed Retry: If matchingStrategy: 'all' returned 0 hits for a multi-word query (>= 2 words), retry with 'last'
-            if (hits.Count == 0 && !string.IsNullOrWhiteSpace(parsed.CleanQuery) && parsed.CleanQuery.Split(' ').Length >= 2)
+            else
             {
-                var relaxedBody = new
+                // Single query search
+                var requestBody = new
                 {
                     q                = parsed.CleanQuery,
                     limit            = safeLimit,
                     offset,
-                    filter           = string.Join(" AND ", filters),
+                    filter           = filterExpr,
                     sort,
-                    matchingStrategy = "last",
-                    attributesToRetrieve = requestBody.attributesToRetrieve
+                    matchingStrategy = "all",
+                    attributesToRetrieve = RetrievalAttributes
                 };
 
-                var relaxedResp = await _http.PostAsJsonAsync("/indexes/torrents/search", relaxedBody, timeoutCts.Token);
-                if (relaxedResp.IsSuccessStatusCode)
+                var resp = await _http.PostAsJsonAsync("/indexes/torrents/search", requestBody, budgetCts.Token);
+                if (!resp.IsSuccessStatusCode)
                 {
-                    var relaxedRaw = await relaxedResp.Content.ReadFromJsonAsync<MeiliRawResponse>(cancellationToken: timeoutCts.Token);
-                    hits = (relaxedRaw?.Hits ?? new()).Select(MapHit).ToList();
-                    raw = relaxedRaw;
+                    _circuitBreaker.RecordFailure();
+                    return await _fallback.SearchAsync(parsed.OriginalQuery, category, safePage, safeLimit, sortBy, order, ct);
+                }
+
+                raw = await resp.Content.ReadFromJsonAsync<MeiliRawResponse>(cancellationToken: budgetCts.Token);
+
+                // Relaxed retry if 0 hits on multi-word query
+                if ((raw?.Hits == null || raw.Hits.Count == 0) &&
+                    !string.IsNullOrWhiteSpace(parsed.CleanQuery) &&
+                    parsed.CleanQuery.Split(' ').Length >= 2 &&
+                    !budgetCts.IsCancellationRequested)
+                {
+                    var relaxedBody = new
+                    {
+                        q                = parsed.CleanQuery,
+                        limit            = safeLimit,
+                        offset,
+                        filter           = filterExpr,
+                        sort,
+                        matchingStrategy = "last",
+                        attributesToRetrieve = RetrievalAttributes
+                    };
+
+                    var relaxedResp = await _http.PostAsJsonAsync("/indexes/torrents/search", relaxedBody, budgetCts.Token);
+                    if (relaxedResp.IsSuccessStatusCode)
+                    {
+                        raw = await relaxedResp.Content.ReadFromJsonAsync<MeiliRawResponse>(cancellationToken: budgetCts.Token);
+                    }
                 }
             }
 
+            var hits = (raw?.Hits ?? new()).Select(MapHit).ToList();
             _circuitBreaker.RecordSuccess();
 
             var response = new SearchResponse(
@@ -160,7 +195,7 @@ public class MeilisearchSearchProvider : ISearchProvider
                 "none"
             );
 
-            // 7. ONLY cache high-quality primary Meilisearch responses
+            // ONLY cache primary Meilisearch responses
             _memCache.Set(cacheKey, response, TimeSpan.FromSeconds(15));
             await _redis.SetAsync(cacheKey, response, CacheService.SearchTtl, ct);
 
@@ -169,7 +204,7 @@ public class MeilisearchSearchProvider : ISearchProvider
         catch (Exception ex)
         {
             _circuitBreaker.RecordFailure();
-            _logger.LogWarning(ex, "Meilisearch query failed or timed out. Falling back to PostgreSQL.");
+            _logger.LogWarning(ex, "Meilisearch execution failed or timed out. Falling back to PostgreSQL.");
             return await _fallback.SearchAsync(parsed.OriginalQuery, category, safePage, safeLimit, sortBy, order, ct);
         }
     }
@@ -205,14 +240,29 @@ public class MeilisearchSearchProvider : ISearchProvider
 
     private static SearchResultItem MapHit(MeiliTorrentHit h)
     {
-        DateTime? verifiedDate = (h.VerifiedAt.HasValue && h.VerifiedAt.Value > 0)
-            ? DateTimeOffset.FromUnixTimeSeconds(h.VerifiedAt.Value).UtcDateTime 
-            : null;
+        DateTime? verifiedDate = null;
+        if (h.VerifiedAt.ValueKind == JsonValueKind.Number && h.VerifiedAt.TryGetInt64(out var unixSec))
+        {
+            verifiedDate = DateTimeOffset.FromUnixTimeSeconds(unixSec).UtcDateTime;
+        }
+        else if (h.VerifiedAt.ValueKind == JsonValueKind.String && DateTime.TryParse(h.VerifiedAt.GetString(), out var dt))
+        {
+            verifiedDate = dt.ToUniversalTime();
+        }
 
         return new SearchResultItem(
-            h.Infohash, h.Name, h.Category, h.TotalSize, h.FileCount,
-            verifiedDate, h.HealthScore, h.PopularityScore, h.SwarmPeers,
-            h.SeedConfirmed, h.RiskTier, h.PolicyAction
+            h.Infohash,
+            h.Name,
+            h.Category,
+            h.TotalSize,
+            h.FileCount,
+            verifiedDate,
+            h.HealthScore,
+            h.PopularityScore,
+            h.SwarmPeers,
+            h.SeedConfirmed,
+            h.RiskTier,
+            h.PolicyAction
         );
     }
 }
@@ -247,7 +297,7 @@ public class MeiliTorrentHit
     public int FileCount { get; set; }
 
     [JsonPropertyName("verified_at")]
-    public long? VerifiedAt { get; set; }
+    public JsonElement VerifiedAt { get; set; }
 
     [JsonPropertyName("health_score")]
     public int HealthScore { get; set; }

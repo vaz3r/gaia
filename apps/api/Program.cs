@@ -62,9 +62,6 @@ builder.Services.AddHttpClient<ISearchProvider, MeilisearchSearchProvider>(clien
     MaxConnectionsPerServer     = 20,
 });
 
-// ── Meilisearch Sync Background Service ──────────────────────────────────────
-builder.Services.AddHostedService<MeilisearchSyncService>();
-builder.Services.Configure<HostOptions>(opts => opts.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore);
 
 // ── Core Services ─────────────────────────────────────────────────────────────
 builder.Services.AddMemoryCache();

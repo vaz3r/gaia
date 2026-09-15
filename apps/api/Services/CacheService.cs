@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Caching.Memory;
 using StackExchange.Redis;
 
 namespace Gaia.Api.Services;
@@ -15,6 +16,9 @@ public class CacheService
     private readonly IDatabase? _db;
     private readonly ILogger<CacheService> _logger;
     private readonly bool _enabled;
+    private string _cachedGen = "1";
+    private DateTime _lastGenFetch = DateTime.MinValue;
+    private readonly object _genLock = new();
 
     // TTL constants
     public static readonly TimeSpan SearchTtl  = TimeSpan.FromSeconds(60);
@@ -33,6 +37,35 @@ public class CacheService
         _db = redis.GetDatabase();
         _enabled = true;
         _logger.LogInformation("Redis cache enabled.");
+    }
+
+    public async Task<string> GetGenerationAsync(CancellationToken ct = default)
+    {
+        if (!_enabled || _db is null) return "1";
+
+        lock (_genLock)
+        {
+            if ((DateTime.UtcNow - _lastGenFetch).TotalSeconds < 5.0)
+            {
+                return _cachedGen;
+            }
+        }
+
+        try
+        {
+            var val = await _db.StringGetAsync("gaia:search:gen");
+            var gen = val.IsNullOrEmpty ? "1" : val.ToString();
+            lock (_genLock)
+            {
+                _cachedGen = gen;
+                _lastGenFetch = DateTime.UtcNow;
+            }
+            return gen;
+        }
+        catch
+        {
+            return _cachedGen;
+        }
     }
 
     public async Task<T?> GetAsync<T>(string key, CancellationToken ct = default)
