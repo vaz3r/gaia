@@ -2,6 +2,8 @@ using Gaia.Api.Endpoints;
 using Gaia.Api.Services;
 using StackExchange.Redis;
 
+Dapper.DefaultTypeMap.MatchNamesWithUnderscores = true;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // ── CORS ──────────────────────────────────────────────────────────────────────

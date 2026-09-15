@@ -2,6 +2,8 @@ using Gaia.Sync;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 
+Dapper.DefaultTypeMap.MatchNamesWithUnderscores = true;
+
 var loggerFactory = LoggerFactory.Create(builder =>
 {
     builder.AddSimpleConsole(options =>

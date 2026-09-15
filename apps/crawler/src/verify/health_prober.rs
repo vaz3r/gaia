@@ -207,7 +207,7 @@ impl HealthProber {
             if let Ok((ih_bytes, peers_count, health_score, pop_score, seed_confirmed)) = res {
                 let _ = sqlx::query(
                     "UPDATE torrents \
-                     SET swarm_peers = $2, health_score = $3, popularity_score = $4, seed_confirmed = $5, last_health_check = now() \
+                     SET swarm_peers = $2, health_score = $3, popularity_score = $4, seed_confirmed = $5, last_health_check = now(), last_health_attempt = now() \
                      WHERE infohash = $1",
                 )
                 .bind(&ih_bytes)

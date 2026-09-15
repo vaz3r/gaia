@@ -90,7 +90,8 @@ public class SyncEngine
                 query = @"
                     SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
                            t.verified_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
-                           t.risk_tier, t.policy_action, t.availability_state, t.last_health_attempt
+                           t.risk_tier, t.policy_action, t.availability_state,
+                           COALESCE(t.last_health_attempt, t.last_health_check, t.verified_at) AS last_health_attempt
                     FROM torrents t
                     WHERE t.policy_action IS DISTINCT FROM 'SUPPRESS'
                     ORDER BY t.verified_at ASC, t.infohash ASC
@@ -102,7 +103,8 @@ public class SyncEngine
                 query = @"
                     SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
                            t.verified_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
-                           t.risk_tier, t.policy_action, t.availability_state, t.last_health_attempt
+                           t.risk_tier, t.policy_action, t.availability_state,
+                           COALESCE(t.last_health_attempt, t.last_health_check, t.verified_at) AS last_health_attempt
                     FROM torrents t
                     WHERE (t.verified_at, t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
                       AND t.policy_action IS DISTINCT FROM 'SUPPRESS'
@@ -171,7 +173,8 @@ public class SyncEngine
             var query = @"
                 SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
                        t.verified_at, t.updated_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
-                       t.risk_tier, t.policy_action, t.availability_state, t.last_health_attempt
+                       t.risk_tier, t.policy_action, t.availability_state,
+                       COALESCE(t.last_health_attempt, t.last_health_check, t.verified_at) AS last_health_attempt
                 FROM torrents t
                 WHERE (t.updated_at, t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
                 ORDER BY t.updated_at ASC, t.infohash ASC
@@ -235,7 +238,8 @@ public class SyncEngine
             var query = @"
                 SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
                        t.verified_at, t.updated_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
-                       t.risk_tier, t.policy_action, t.availability_state, t.last_health_attempt
+                       t.risk_tier, t.policy_action, t.availability_state,
+                       t.last_health_attempt
                 FROM torrents t
                 WHERE (t.last_health_attempt, t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
                   AND t.policy_action IS DISTINCT FROM 'SUPPRESS'
@@ -339,13 +343,15 @@ public class SyncEngine
             var query = @"
                 SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
                        t.verified_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
-                       t.risk_tier, t.policy_action, t.availability_state, t.last_health_attempt, t.last_decay_sweep
+                       t.risk_tier, t.policy_action, t.availability_state,
+                       COALESCE(t.last_health_attempt, t.last_health_check, t.verified_at) AS last_health_attempt,
+                       t.last_decay_sweep
                 FROM torrents t
-                WHERE (COALESCE(t.last_decay_sweep, '1970-01-01'::timestamptz), t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
-                  AND t.last_health_attempt < now() - interval '7 days'
+                WHERE (COALESCE(t.last_decay_sweep, '1970-01-01 00:00:00+00'::timestamptz), t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
+                  AND COALESCE(t.last_health_attempt, t.last_health_check, t.verified_at) < now() - interval '7 days'
                   AND t.health_score > 0
                   AND t.policy_action IS DISTINCT FROM 'SUPPRESS'
-                ORDER BY COALESCE(t.last_decay_sweep, '1970-01-01'::timestamptz) ASC, t.infohash ASC
+                ORDER BY COALESCE(t.last_decay_sweep, '1970-01-01 00:00:00+00'::timestamptz) ASC, t.infohash ASC
                 LIMIT @limit";
 
             var rows = (await conn.QueryAsync<TorrentDocRow>(query, new { cursorTs, cursorHash, limit = BatchSize })).ToList();
@@ -465,7 +471,7 @@ public class SyncEngine
     private static object MapDocument(TorrentDocRow r)
     {
         var cleanName = NameCleaner.Clean(r.Name);
-        var decayedHealth = ScoreDecay.ComputeDecayedHealth(r.HealthScore, r.LastHealthAttempt);
+        var decayedHealth = ScoreDecay.ComputeDecayedHealth(r.HealthScore, r.LastHealthAttempt, r.SwarmPeers, r.SeedConfirmed);
 
         long? verifiedUnix = r.VerifiedAt.HasValue ? new DateTimeOffset(r.VerifiedAt.Value).ToUnixTimeSeconds() : null;
 

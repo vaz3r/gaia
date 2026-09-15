@@ -127,15 +127,10 @@ public static class TorrentEndpoints
 
     private static bool ShouldEmitHeaders(HttpContext ctx)
     {
-        // Emit if explicitly requested via X-Debug header
-        if (ctx.Request.Headers.ContainsKey("X-Debug")) return true;
+        var expectedToken = Environment.GetEnvironmentVariable("GAIA_DEBUG_TOKEN") ?? "gaia_debug_secret_token_v2";
+        if (ctx.Request.Headers.TryGetValue("X-Gaia-Debug", out var token) && token == expectedToken)
+            return true;
 
-        // Emit if client is internal/Tailscale/LAN
-        var ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
-        return ip == "127.0.0.1" || ip == "::1" 
-            || ip.StartsWith("100.")    // Tailscale
-            || ip.StartsWith("192.168.") // Private LAN
-            || ip.StartsWith("10.") 
-            || ip.StartsWith("172.");
+        return false;
     }
 }
