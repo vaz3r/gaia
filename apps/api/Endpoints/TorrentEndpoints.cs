@@ -9,7 +9,7 @@ public static class TorrentEndpoints
     {
         var group = app.MapGroup("/api/torrents").WithTags("Torrents");
 
-        // 1. Search endpoint (Direct Quickwit query formatted for GAIA dashboard & portal)
+        // 1. List / Search endpoint
         group.MapGet("/", async (
             [FromQuery] string? q,
             [FromQuery] string? search,
@@ -19,56 +19,86 @@ public static class TorrentEndpoints
             [FromQuery] string? sort,
             [FromQuery] string? sort_by,
             [FromQuery] string? order,
-            QuickwitClient quickwit,
+            MeilisearchClient meili,
             DatabaseService db,
             CancellationToken ct) =>
         {
             var effectiveQuery = !string.IsNullOrWhiteSpace(search) ? search : q;
-            var effectiveSort = !string.IsNullOrWhiteSpace(sort) ? sort : sort_by;
-            var safeLimit = Math.Clamp(limit ?? 25, 1, 100);
-            var safePage = Math.Max(1, page ?? 1);
+            var effectiveSort  = !string.IsNullOrWhiteSpace(sort) ? sort : sort_by;
+            var safeLimit      = Math.Clamp(limit ?? 25, 1, 100);
+            var safePage       = Math.Max(1, page ?? 1);
 
-            // Fast path 1: If no search keyword, browse directly via PostgreSQL B-tree index (1.6ms)
+            // ── Browse path (no search term) ──────────────────────────────────
+            // Fast PostgreSQL B-tree index, cached 30s in Redis
             if (string.IsNullOrWhiteSpace(effectiveQuery))
             {
                 var (items, total) = await db.GetBrowseTorrentsAsync(
                     category: category,
-                    page: safePage,
-                    limit: safeLimit,
-                    sortBy: effectiveSort,
-                    order: order ?? "desc",
-                    ct: ct);
+                    page:     safePage,
+                    limit:    safeLimit,
+                    sortBy:   effectiveSort,
+                    order:    order ?? "desc",
+                    ct:       ct);
 
                 return Results.Ok(new
                 {
-                    data = items,
-                    page = safePage,
-                    limit = safeLimit,
-                    total = total,
-                    pages = Math.Max(1, (int)Math.Ceiling((double)total / safeLimit)),
-                    elapsed_micros = 1600
+                    data      = items,
+                    page      = safePage,
+                    limit     = safeLimit,
+                    total,
+                    pages     = Math.Max(1, (int)Math.Ceiling((double)total / safeLimit)),
+                    source    = "postgresql"
                 });
             }
 
-            // Path 2: Text search via Quickwit Tantivy full-text engine (~50ms)
-            var results = await quickwit.SearchAsync(
-                query: effectiveQuery,
-                category: category,
-                page: safePage,
-                limit: safeLimit,
-                sortBy: effectiveSort,
-                order: order ?? "desc",
-                ct: ct);
-
-            return Results.Ok(new
+            // ── Search path ───────────────────────────────────────────────────
+            // Use Meilisearch when ready (5–20ms, BM25, typo-tolerant).
+            // Fall back to PostgreSQL trigram during the initial bulk import (~5-10 min after first deploy).
+            if (MeilisearchSyncService.IsReady)
             {
-                data = results.Hits,
-                page = safePage,
-                limit = safeLimit,
-                total = results.Total,
-                pages = Math.Max(1, (int)Math.Ceiling((double)results.Total / safeLimit)),
-                elapsed_micros = results.ElapsedMicros
-            });
+                var results = await meili.SearchAsync(
+                    query:    effectiveQuery,
+                    category: category,
+                    page:     safePage,
+                    limit:    safeLimit,
+                    sortBy:   effectiveSort,
+                    order:    order ?? "desc",
+                    ct:       ct);
+
+                return Results.Ok(new
+                {
+                    data      = results.Hits,
+                    page      = safePage,
+                    limit     = safeLimit,
+                    total     = results.Total,
+                    pages     = Math.Max(1, (int)Math.Ceiling((double)results.Total / safeLimit)),
+                    elapsed_ms = results.ElapsedMs,
+                    from_cache = results.FromCache,
+                    source    = results.FromCache ? "redis" : "meilisearch"
+                });
+            }
+
+            // ── Fallback: PostgreSQL trigram search (during Meilisearch index build) ──
+            {
+                var (items, total) = await db.SearchTorrentsAsync(
+                    query:    effectiveQuery,
+                    category: category,
+                    page:     safePage,
+                    limit:    safeLimit,
+                    sortBy:   effectiveSort,
+                    order:    order ?? "desc",
+                    ct:       ct);
+
+                return Results.Ok(new
+                {
+                    data      = items,
+                    page      = safePage,
+                    limit     = safeLimit,
+                    total,
+                    pages     = Math.Max(1, (int)Math.Ceiling((double)total / safeLimit)),
+                    source    = "postgresql-fallback"
+                });
+            }
         });
 
         // 2. Single torrent details
@@ -84,30 +114,30 @@ public static class TorrentEndpoints
             return Results.Ok(torrent);
         });
 
-        // 3. 1-Click Magnet URI generator
+        // 3. Magnet URI generator
         group.MapGet("/{infohash}/magnet", async (
             string infohash,
             DatabaseService db,
             CancellationToken ct) =>
         {
-            var torrent = await db.GetTorrentDetailsAsync(infohash, ct);
-            var name = (torrent != null && torrent.TryGetValue("name", out var n) && n != null) ? n.ToString() : infohash;
+            var torrent   = await db.GetTorrentDetailsAsync(infohash, ct);
+            var name      = torrent?.TryGetValue("name", out var n) == true && n != null ? n.ToString() : infohash;
             var magnetUri = TorrentBuilder.BuildMagnetUri(infohash, name ?? infohash);
 
             return Results.Ok(new { infohash, name, magnetUri });
         });
 
-        // 4. Direct .torrent download stream
+        // 4. Direct .torrent download
         group.MapGet("/{infohash}/torrent", async (
             string infohash,
             DatabaseService db,
             CancellationToken ct) =>
         {
-            var torrent = await db.GetTorrentDetailsAsync(infohash, ct);
-            var name = (torrent != null && torrent.TryGetValue("name", out var n) && n != null) ? n.ToString() : infohash;
+            var torrent      = await db.GetTorrentDetailsAsync(infohash, ct);
+            var name         = torrent?.TryGetValue("name", out var n) == true && n != null ? n.ToString() : infohash;
             var torrentBytes = TorrentBuilder.BuildWrapperTorrent(infohash, name ?? infohash);
-
             var safeFilename = Uri.EscapeDataString((name ?? infohash).Replace("/", "_").Replace("\\", "_")) + ".torrent";
+
             return Results.File(torrentBytes, "application/x-bittorrent", safeFilename);
         });
 
@@ -116,16 +146,8 @@ public static class TorrentEndpoints
         {
             var categories = new[]
             {
-                "All",
-                "Movies",
-                "Television",
-                "Anime",
-                "Games",
-                "Applications",
-                "Music",
-                "Books & Learning",
-                "Audiobooks",
-                "Documentaries"
+                "All", "Movies", "Television", "Anime", "Games",
+                "Applications", "Music", "Books & Learning", "Audiobooks", "Documentaries"
             };
             return Results.Ok(categories);
         }).WithTags("Categories");

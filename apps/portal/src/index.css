@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 body {
-  background-color: #0a0e1a;
+  background-color: #000000;
   color: #ededed;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -15,12 +15,12 @@ body {
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1a2237;
+  background: #222222;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #26304d;
+  background: #333333;
 }
 ::-webkit-scrollbar-track {
-  background: #0a0e1a;
+  background: #090909;
 }

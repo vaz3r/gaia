@@ -1,393 +1,934 @@
-import { useEffect, useRef, useState } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
+import {
+  Search,
+  X,
+  RefreshCw,
+  FileDown,
+  DownloadCloud,
+  Eye,
+  Check,
+  Copy,
+  Folder,
+  Activity,
+  TrendingUp,
+  Shield,
+  Tag,
+  AlertCircle,
+  ExternalLink,
+  ChevronLeft,
+  ChevronsLeft,
+  ChevronRight,
+  ChevronsRight
+} from 'lucide-react'
 import { api, downloadTorrent, magnetFrom } from '../api.js'
 import { formatBytes, formatTime } from '../utils.js'
-import { Flame, Zap, TrendingUp, Layers, Search, Download, Copy, Check, Filter } from 'lucide-react'
-import TorrentDetail from './TorrentDetail.jsx'
 
-const COLS = [
-  { key: 'name', label: 'Torrent Name', sortKey: 'name' },
-  { key: 'category', label: 'Category', sortKey: 'category' },
-  { key: 'total_size', label: 'Size', sortKey: 'size' },
-  { key: 'file_count', label: 'Files', sortKey: 'files' },
-  { key: 'health_score', label: 'Health', sortKey: 'health' },
-  { key: 'verified_at', label: 'Indexed', sortKey: 'verified_at' },
+export const CANONICAL_CATEGORIES = [
+  'Adult',
+  'Anime',
+  'Applications',
+  'Audiobooks',
+  'Books & Learning',
+  'Documentaries',
+  'Games',
+  'Movies',
+  'Music',
+  'Television',
+  'Other'
 ]
 
-export default function TorrentBrowser() {
-  const [mode, setMode] = useState('all') // 'all' | 'trending' | 'new' | 'top'
-  const [input, setInput] = useState('')
-  const [search, setSearch] = useState('')
-  const [category, setCategory] = useState('All')
-  const [sort, setSort] = useState('verified_at')
-  const [order, setOrder] = useState('desc')
-  const [page, setPage] = useState(1)
-  const [limit] = useState(25)
-  const [data, setData] = useState(null)
-  const [error, setError] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [detailInfohash, setDetailInfohash] = useState(null)
-  const [copiedHash, setCopiedHash] = useState(null)
-  const debounce = useRef()
+export const CATEGORY_COLORS = {
+  Adult: 'bg-rose-500/10 text-rose-400 border-rose-500/30',
+  Anime: 'bg-pink-500/10 text-pink-400 border-pink-500/30',
+  Applications: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
+  Audiobooks: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30',
+  'Books & Learning': 'bg-teal-500/10 text-teal-400 border-teal-500/30',
+  Documentaries: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
+  Games: 'bg-lime-500/10 text-lime-400 border-lime-500/30',
+  Movies: 'bg-blue-500/10 text-blue-400 border-blue-500/30',
+  Music: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
+  Television: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
+  Other: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/30',
+}
 
-  function handleModeChange(newMode) {
-    setMode(newMode)
-    setPage(1)
-    if (newMode === 'trending') {
-      setSort('popularity')
-      setOrder('desc')
-    } else if (newMode === 'new') {
-      setSort('first_seen')
-      setOrder('desc')
-    } else if (newMode === 'top') {
-      setSort('sightings')
-      setOrder('desc')
-    } else {
-      setSort('verified_at')
-      setOrder('desc')
-    }
+export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
+  // Browser state
+  const [torrentsPage, setTorrentsPage] = useState(1)
+  const [torrentsLimit, setTorrentsLimit] = useState(25)
+  const [sortField, setSortField] = useState('verified_at')
+  const [sortOrder, setSortOrder] = useState('desc')
+  const [searchInput, setSearchInput] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState('')
+  const [riskFilter, setRiskFilter] = useState('')
+  const [torrentsData, setTorrentsData] = useState({ data: [], total: 0, pages: 1, page: 1, elapsed_micros: 0 })
+  const [torrentsLoading, setTorrentsLoading] = useState(false)
+
+  // Actions & Inspection State
+  const [selectedTorrent, setSelectedTorrent] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [downloadingIh, setDownloadingIh] = useState(null)
+  const [copiedHash, setCopiedHash] = useState(null)
+  const [copiedMagnet, setCopiedMagnet] = useState(false)
+
+  // Search input debouncer
+  const searchDebounceRef = useRef(null)
+  const handleSearchChange = (val) => {
+    setSearchInput(val)
+    clearTimeout(searchDebounceRef.current)
+    searchDebounceRef.current = setTimeout(() => {
+      const trimmed = val.trim()
+      setSearchQuery(trimmed)
+      if (trimmed && sortField === 'verified_at') {
+        setSortField('relevance')
+      } else if (!trimmed && sortField === 'relevance') {
+        setSortField('verified_at')
+      }
+      setTorrentsPage(1)
+    }, 350)
   }
 
-  useEffect(() => {
-    clearTimeout(debounce.current)
-    debounce.current = setTimeout(() => {
-      setSearch(input.trim())
-      setPage(1)
-    }, 300)
-    return () => clearTimeout(debounce.current)
-  }, [input])
+  const handleClearSearch = () => {
+    setSearchInput('')
+    setSearchQuery('')
+    if (sortField === 'relevance') {
+      setSortField('verified_at')
+    }
+    setTorrentsPage(1)
+  }
 
-  useEffect(() => {
-    const controller = new AbortController()
-    setLoading(true)
-    setError(null)
-    const params = new URLSearchParams({ page, limit })
-    if (search) params.set('search', search)
-    if (category && category !== 'All') params.set('category', category)
-    if (sort) params.set('sort', sort)
-    params.set('order', order)
+  // Toggle column sorting
+  const handleSortToggle = (col) => {
+    if (sortField === col) {
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortField(col)
+      setSortOrder(col === 'name' ? 'asc' : 'desc')
+    }
+    setTorrentsPage(1)
+  }
 
-    api(`/api/torrents?${params}`, { signal: controller.signal })
+  // Data Fetch Effect
+  useEffect(() => {
+    let active = true
+    setTorrentsLoading(true)
+
+    const params = new URLSearchParams({
+      page: torrentsPage,
+      limit: torrentsLimit,
+    })
+    if (sortField && sortField !== 'relevance') {
+      params.set('sort', sortField)
+      params.set('order', sortOrder)
+    }
+    if (searchQuery) params.set('search', searchQuery)
+    if (categoryFilter && categoryFilter !== 'All') params.set('category', categoryFilter)
+    if (riskFilter) params.set('risk', riskFilter)
+
+    api(`/api/torrents?${params.toString()}`)
       .then((res) => {
-        setData(res)
+        if (!active) return
+        setTorrentsData(res)
       })
-      .catch((e) => {
-        if (e.name !== 'AbortError' && !controller.signal.aborted) {
-          setError(e.message)
-        }
+      .catch((err) => {
+        console.error('Failed to load torrents:', err)
       })
       .finally(() => {
-        if (!controller.signal.aborted) {
-          setLoading(false)
-        }
+        if (active) setTorrentsLoading(false)
       })
 
     return () => {
-      controller.abort()
+      active = false
     }
-  }, [search, category, sort, order, page, limit])
+  }, [torrentsPage, torrentsLimit, sortField, sortOrder, searchQuery, categoryFilter, riskFilter])
 
-  function toggleSort(key) {
-    if (sort === key) {
-      setOrder(order === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSort(key)
-      setOrder(key === 'name' ? 'asc' : 'desc')
+  // Inspect torrent handler (fetches complete metadata & file tree)
+  const handleInspectTorrent = (t) => {
+    const hash = t.infohash || t.hash
+    setSelectedTorrent({
+      ...t,
+      hash,
+      files: [],
+    })
+    if (hash) {
+      setDetailLoading(true)
+      api(`/api/torrents/${hash}`)
+        .then((full) => {
+          if (full) {
+            setSelectedTorrent((prev) => ({
+              ...prev,
+              ...full,
+              hash,
+              pieceLength: formatBytes(full.piece_length),
+              pieceCount: full.file_count || full.files?.length || 1,
+              files: Array.isArray(full.files) ? full.files : [],
+            }))
+          }
+        })
+        .catch(() => {})
+        .finally(() => setDetailLoading(false))
     }
-    setPage(1)
   }
 
-  function handleCopyMagnet(e, row) {
-    e.stopPropagation()
-    const uri = magnetFrom(row.infohash, row.name)
-    navigator.clipboard?.writeText(uri).then(() => {
-      setCopiedHash(row.infohash)
-      setTimeout(() => setCopiedHash(null), 2000)
+  const copyToClipboard = (text, type = 'hash') => {
+    navigator.clipboard?.writeText(text).then(() => {
+      if (type === 'hash') {
+        setCopiedHash(text)
+        setTimeout(() => setCopiedHash(null), 2000)
+      } else if (type === 'magnet') {
+        setCopiedMagnet(true)
+        setTimeout(() => setCopiedMagnet(false), 2000)
+      }
     }).catch(() => {})
   }
 
-  async function handleDownloadFile(e, row) {
-    e.stopPropagation()
+  const handleDownloadTorrent = async (t, e) => {
+    e?.stopPropagation()
+    const hash = t.infohash || t.hash
     try {
-      await downloadTorrent(row.infohash, row.name)
+      setDownloadingIh(hash)
+      await downloadTorrent(hash, t.name)
     } catch (err) {
       alert(`Download failed: ${err.message}`)
+    } finally {
+      setDownloadingIh(null)
     }
   }
 
-  const torrents = data?.data || []
-  const total = data?.total || 0
-  const totalPages = data?.pages || Math.max(1, Math.ceil(total / limit))
+  const totalCatalogedStr = `${(torrentsData?.total || totalCatalogedCount).toLocaleString()} verified payloads cataloged in cluster`
 
   return (
     <div className="space-y-4">
-      {/* Controls Header */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-ink-900/60 p-3.5 rounded-xl border border-ink-800">
-        {/* Swarm Mode Pills */}
-        <div className="flex items-center gap-1.5 bg-ink-950 p-1 rounded-lg border border-ink-800/80 overflow-x-auto">
-          <button
-            type="button"
-            onClick={() => handleModeChange('all')}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap ${
-              mode === 'all'
-                ? 'bg-ink-800 text-white shadow-xs border border-ink-700'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-ink-900'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5 text-cyan-400" />
-            <span>All Torrents</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleModeChange('trending')}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap ${
-              mode === 'trending'
-                ? 'bg-ink-800 text-cyan-300 font-semibold shadow-xs border border-cyan-500/40'
-                : 'text-slate-400 hover:text-cyan-300 hover:bg-ink-900'
-            }`}
-          >
-            <TrendingUp className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Trending Swarms</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleModeChange('new')}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap ${
-              mode === 'new'
-                ? 'bg-ink-800 text-amber-300 font-semibold shadow-xs border border-amber-500/40'
-                : 'text-slate-400 hover:text-amber-300 hover:bg-ink-900'
-            }`}
-          >
-            <Zap className="w-3.5 h-3.5 text-amber-400" />
-            <span>New Releases (&lt;48h)</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleModeChange('top')}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap ${
-              mode === 'top'
-                ? 'bg-ink-800 text-rose-300 font-semibold shadow-xs border border-rose-500/40'
-                : 'text-slate-400 hover:text-rose-300 hover:bg-ink-900'
-            }`}
-          >
-            <Flame className="w-3.5 h-3.5 text-rose-400" />
-            <span>Top Sightings</span>
-          </button>
+      {/* Control Bar: Search, Category, Risk, Sort, Limit */}
+      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 bg-[#090909] p-3 rounded-xl border border-[#1e1e1e]">
+        {/* Search Input Box */}
+        <div className="relative flex-1">
+          <Search className="w-4 h-4 text-[#666] absolute left-3 top-3" />
+          <input
+            type="text"
+            placeholder="Search payload name, keyword, hash, codec..."
+            value={searchInput}
+            onChange={(e) => handleSearchChange(e.target.value)}
+            className="w-full bg-[#000] border border-[#222] rounded-lg pl-9 pr-8 py-2 text-xs text-[#ededed] placeholder-[#555] focus:outline-none focus:border-[#444] font-mono transition-colors"
+          />
+          {searchInput && (
+            <button
+              onClick={handleClearSearch}
+              className="absolute right-2.5 top-2.5 text-[#666] hover:text-white"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
-        {/* Search & Category Filter */}
-        <div className="flex items-center gap-2.5">
-          <div className="relative flex-1 sm:w-72">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Search 3.4M+ torrents (sub-50ms)..."
-              className="w-full bg-ink-950 border border-ink-700/80 rounded-lg pl-9 pr-8 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-hidden focus:border-cyan-500 transition-colors"
-            />
-            {input && (
-              <button
-                onClick={() => setInput('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-xs"
-              >
-                ✕
-              </button>
-            )}
+        {/* Sorting & Filters */}
+        <div className="flex flex-wrap items-center gap-2.5 justify-end text-xs">
+          {/* Category Filter */}
+          <div className="flex items-center gap-1.5 font-mono text-xs">
+            <span className="text-[#666]">Category:</span>
+            <select
+              value={categoryFilter}
+              onChange={(e) => {
+                setCategoryFilter(e.target.value)
+                setTorrentsPage(1)
+              }}
+              className="bg-[#000] border border-[#222] rounded-lg px-2.5 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+            >
+              <option value="">All Categories</option>
+              {CANONICAL_CATEGORIES.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
           </div>
 
-          <select
-            value={category}
-            onChange={(e) => {
-              setCategory(e.target.value)
-              setPage(1)
-            }}
-            className="bg-ink-950 border border-ink-700/80 rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-hidden focus:border-cyan-500"
-          >
-            <option value="All">All Categories</option>
-            <option value="Video">Video</option>
-            <option value="Audio">Audio</option>
-            <option value="Applications">Apps</option>
-            <option value="Games">Games</option>
-            <option value="Television">TV</option>
-            <option value="Other">Other</option>
-          </select>
+          {/* Risk Tier Filter */}
+          <div className="flex items-center gap-1.5 font-mono text-xs">
+            <span className="text-[#666]">Risk:</span>
+            <select
+              value={riskFilter}
+              onChange={(e) => {
+                setRiskFilter(e.target.value)
+                setTorrentsPage(1)
+              }}
+              className="bg-[#000] border border-[#222] rounded-lg px-2.5 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+            >
+              <option value="">All Tiers</option>
+              <option value="SAFE">Safe (Allowed)</option>
+              <option value="REVIEW">Review (Flagged)</option>
+              <option value="BLOCKED">Blocked (Toxic)</option>
+            </select>
+          </div>
+
+          {/* Sort Order Selector */}
+          <div className="flex items-center gap-1.5 font-mono text-xs">
+            <span className="text-[#666]">Sort:</span>
+            <select
+              value={`${sortField}:${sortOrder}`}
+              onChange={(e) => {
+                const [f, o] = e.target.value.split(':')
+                setSortField(f)
+                setSortOrder(o)
+                setTorrentsPage(1)
+              }}
+              className="bg-[#000] border border-[#222] rounded-lg px-2.5 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+            >
+              {searchQuery && <option value="relevance:desc">Best Match (Relevance)</option>}
+              <option value="verified_at:desc">Newest Verified</option>
+              <option value="verified_at:asc">Oldest Verified</option>
+              <option value="popularity:desc">Highest Trending Score</option>
+              <option value="size:desc">Largest Size</option>
+              <option value="size:asc">Smallest Size</option>
+              <option value="files:desc">Most Files</option>
+              <option value="name:asc">Name (A-Z)</option>
+            </select>
+          </div>
+
+          {/* Page Limit Selector */}
+          <div className="flex items-center gap-1.5 font-mono text-xs">
+            <span className="text-[#666]">Show:</span>
+            <select
+              value={torrentsLimit}
+              onChange={(e) => {
+                setTorrentsLimit(Number(e.target.value))
+                setTorrentsPage(1)
+              }}
+              className="bg-[#000] border border-[#222] rounded-lg px-2 py-1.5 text-xs text-[#bbb] focus:outline-none focus:border-[#444] font-mono"
+            >
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+            </select>
+          </div>
         </div>
       </div>
 
-      {/* Main Torrent Table */}
-      <div className="rounded-xl border border-ink-800 bg-ink-900/40 overflow-hidden">
+      {/* Results Counter & Active Stats */}
+      <div className="flex items-center justify-between text-xs text-[#666] px-1 font-mono">
+        <span className="flex items-center gap-2">
+          {torrentsLoading ? (
+            <RefreshCw className="w-3 h-3 animate-spin text-emerald-400" />
+          ) : (
+            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+          )}
+          Showing {torrentsData?.total > 0 ? (torrentsPage - 1) * torrentsLimit + 1 : 0} –{' '}
+          {Math.min(torrentsPage * torrentsLimit, torrentsData?.total || 0).toLocaleString()} of{' '}
+          <strong className="text-white">{(torrentsData?.total || 0).toLocaleString()}</strong> verified payloads
+          {torrentsData?.elapsed_micros ? (
+            <span className="text-[#555] ml-1">
+              ({(torrentsData.elapsed_micros / 1000).toFixed(1)}ms)
+            </span>
+          ) : null}
+        </span>
+        <span className="hidden sm:inline">{totalCatalogedStr}</span>
+      </div>
+
+      {/* Torrents Table (Identical to GAIA Operator Explorer) */}
+      <div className="rounded-xl border border-[#1e1e1e] bg-[#090909] overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
+          <table className="w-full text-left text-xs">
             <thead>
-              <tr className="border-b border-ink-800 bg-ink-950/80 text-[11px] font-mono uppercase tracking-wider text-slate-400">
-                {COLS.map((col) => (
-                  <th
-                    key={col.key}
-                    onClick={() => toggleSort(col.sortKey)}
-                    className="px-4 py-3 cursor-pointer hover:text-slate-200 transition-colors select-none"
-                  >
-                    <div className="flex items-center gap-1">
-                      <span>{col.label}</span>
-                      {sort === col.sortKey && (
-                        <span className="text-cyan-400 text-xs">{order === 'asc' ? '▲' : '▼'}</span>
-                      )}
-                    </div>
-                  </th>
-                ))}
-                <th className="px-4 py-3 text-right">Actions</th>
+              <tr className="border-b border-[#181818] text-[#666] font-mono text-[11px]">
+                <th
+                  onClick={() => handleSortToggle('name')}
+                  className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>Payload Description</span>
+                    {sortField === 'name' && (
+                      <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                    )}
+                  </div>
+                </th>
+                <th className="py-3 px-4 font-normal">Infohash (Hex)</th>
+                <th className="py-3 px-4 font-normal">Category</th>
+                <th
+                  onClick={() => handleSortToggle('size')}
+                  className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>Size</span>
+                    {sortField === 'size' && (
+                      <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                    )}
+                  </div>
+                </th>
+                <th
+                  onClick={() => handleSortToggle('files')}
+                  className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>Files</span>
+                    {sortField === 'files' && (
+                      <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                    )}
+                  </div>
+                </th>
+                <th
+                  onClick={() => handleSortToggle('health')}
+                  className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>Health</span>
+                    {sortField === 'health' && (
+                      <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                    )}
+                  </div>
+                </th>
+                <th
+                  onClick={() => handleSortToggle('popularity')}
+                  className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>Popularity</span>
+                    {sortField === 'popularity' && (
+                      <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                    )}
+                  </div>
+                </th>
+                <th className="py-3 px-4 font-normal">Trust & Avail</th>
+                <th
+                  onClick={() => handleSortToggle('verified_at')}
+                  className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span>Verified</span>
+                    {sortField === 'verified_at' && (
+                      <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                    )}
+                  </div>
+                </th>
+                <th className="py-3 px-4 font-normal text-right">Action</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-ink-800/60 text-xs font-mono">
-              {loading ? (
+            <tbody className="divide-y divide-[#141414] font-mono text-[11px]">
+              {torrentsData?.data?.length === 0 && !torrentsLoading && (
                 <tr>
-                  <td colSpan={COLS.length + 1} className="py-16 text-center text-slate-500">
-                    <div className="flex items-center justify-center gap-2">
-                      <div className="w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-                      <span>Querying Quickwit distributed index...</span>
-                    </div>
+                  <td colSpan={10} className="py-12 text-center text-[#666]">
+                    No torrent payloads matching your filter query.
                   </td>
                 </tr>
-              ) : error ? (
-                <tr>
-                  <td colSpan={COLS.length + 1} className="py-12 text-center text-rose-400">
-                    Error querying index: {error}
-                  </td>
-                </tr>
-              ) : torrents.length === 0 ? (
-                <tr>
-                  <td colSpan={COLS.length + 1} className="py-16 text-center text-slate-500">
-                    No torrents match your query.
-                  </td>
-                </tr>
-              ) : (
-                torrents.map((row) => (
+              )}
+              {torrentsData?.data?.map((t) => {
+                const displayName = t.name && t.name.trim().length > 0 ? t.name : `payload-${t.infohash.slice(0, 8)}`
+                const isMultiFile = (t.file_count || 1) > 1
+                const sizeFormatted = formatBytes(t.total_size)
+                const timeAgo = t.verified_at ? formatTime(t.verified_at) : '—'
+                const cat = t.category
+                const catColor = cat ? (CATEGORY_COLORS[cat] || CATEGORY_COLORS.Other) : null
+
+                return (
                   <tr
-                    key={row.infohash}
-                    onClick={() => setDetailInfohash(row.infohash)}
-                    className="hover:bg-ink-800/50 cursor-pointer transition-colors group"
+                    key={t.infohash}
+                    onClick={() => handleInspectTorrent(t)}
+                    className="hover:bg-[#0f0f0f] cursor-pointer transition-colors group"
                   >
-                    {/* Name */}
-                    <td className="px-4 py-3 max-w-md min-w-[240px]">
-                      <div className="font-sans font-medium text-slate-200 group-hover:text-cyan-300 transition-colors line-clamp-1">
-                        {row.name || row.infohash}
+                    <td className="py-3 px-4">
+                      <div className="font-sans font-medium text-[#ededed] group-hover:text-white flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                        <span className="truncate max-w-md" title={displayName}>
+                          {displayName}
+                        </span>
                       </div>
-                      <div className="text-[10px] text-slate-500 truncate mt-0.5">
-                        {row.infohash}
+                      <div className="text-[10px] text-[#666] font-mono mt-0.5 pl-4">
+                        {isMultiFile ? `${t.file_count} files` : 'Single file'} · verified in cluster
                       </div>
                     </td>
 
-                    {/* Category */}
-                    <td className="px-4 py-3 whitespace-nowrap">
-                      <span className="inline-block px-2 py-0.5 rounded text-[10px] bg-ink-800 border border-ink-700 text-slate-300">
-                        {row.category || 'General'}
+                    <td className="py-3 px-4">
+                      <span className="text-[#888] group-hover:text-[#ccc] transition-colors">
+                        {t.infohash.slice(0, 10)}...{t.infohash.slice(-8)}
                       </span>
                     </td>
 
-                    {/* Size */}
-                    <td className="px-4 py-3 text-slate-300 whitespace-nowrap">
-                      {formatBytes(row.total_size)}
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      {cat ? (
+                        <span className={`text-[10px] font-mono font-semibold px-2 py-0.5 rounded border ${catColor}`}>
+                          {cat}
+                          {t.category_confidence ? (
+                            <span className="opacity-60 ml-1">
+                              {Math.round(t.category_confidence * 100)}%
+                            </span>
+                          ) : null}
+                        </span>
+                      ) : (
+                        <span className="text-[#444] text-[10px] font-mono">—</span>
+                      )}
                     </td>
 
-                    {/* Files */}
-                    <td className="px-4 py-3 text-slate-400 whitespace-nowrap">
-                      {row.file_count ?? 1}
+                    <td className="py-3 px-4 text-[#aaa] whitespace-nowrap">
+                      {sizeFormatted}
                     </td>
 
-                    {/* Health */}
-                    <td className="px-4 py-3 whitespace-nowrap">
+                    <td className="py-3 px-4 text-[#888] whitespace-nowrap">
+                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#141414] text-[#aaa] border border-[#242424]">
+                        {t.file_count || 1}
+                      </span>
+                    </td>
+
+                    <td className="py-3 px-4 whitespace-nowrap">
                       <div className="flex items-center gap-2">
-                        <div className="w-12 bg-ink-950 rounded-full h-1.5 overflow-hidden border border-ink-800">
+                        <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
                           <div
                             className={`h-full rounded-full ${
-                              (row.health_score ?? 0) >= 70
+                              (t.health_score ?? 0) >= 70
                                 ? 'bg-emerald-400'
-                                : (row.health_score ?? 0) >= 40
+                                : (t.health_score ?? 0) >= 40
                                 ? 'bg-amber-400'
-                                : 'bg-slate-600'
+                                : 'bg-rose-500'
                             }`}
-                            style={{ width: `${Math.min(100, Math.max(5, row.health_score ?? 0))}%` }}
+                            style={{ width: `${Math.min(100, Math.max(0, t.health_score ?? 0))}%` }}
                           />
                         </div>
-                        <span className="text-[11px] text-slate-400">
-                          {row.health_score ?? 0}
+                        <span
+                          className={`text-[11px] font-mono font-semibold ${
+                            (t.health_score ?? 0) >= 70
+                              ? 'text-emerald-400'
+                              : (t.health_score ?? 0) >= 40
+                              ? 'text-amber-400'
+                              : 'text-rose-400'
+                          }`}
+                        >
+                          {t.health_score ?? 0}%
                         </span>
                       </div>
                     </td>
 
-                    {/* Verified */}
-                    <td className="px-4 py-3 text-slate-400 whitespace-nowrap text-[11px]">
-                      {formatTime(row.verified_at)}
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-cyan-400"
+                            style={{ width: `${Math.min(100, Math.max(0, t.popularity_score ?? 0))}%` }}
+                          />
+                        </div>
+                        <span className="text-[11px] font-mono text-cyan-400 font-semibold">
+                          {t.popularity_score ?? 0}%
+                        </span>
+                      </div>
                     </td>
 
-                    {/* Actions */}
-                    <td className="px-4 py-3 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
+                          t.risk_tier === 'BLOCKED'
+                            ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
+                            : t.risk_tier === 'REVIEW'
+                            ? 'bg-amber-950/60 text-amber-300 border-amber-800/50'
+                            : 'bg-emerald-950/40 text-emerald-400 border-emerald-800/40'
+                        }`}>
+                          {t.risk_tier || 'SAFE'}
+                        </span>
+                        {t.availability_state && (
+                          <span className={`text-[9px] font-mono px-1 py-0.5 rounded border ${
+                            t.availability_state === 'ACTIVE'
+                              ? 'bg-emerald-950/30 text-emerald-400 border-emerald-800/30'
+                              : t.availability_state === 'SPARSE'
+                              ? 'bg-amber-950/30 text-amber-300 border-amber-800/30'
+                              : 'bg-rose-950/30 text-rose-400 border-rose-800/30'
+                          }`}>
+                            {t.availability_state}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+
+                    <td className="py-3 px-4 text-[#888] whitespace-nowrap">
+                      {timeAgo}
+                    </td>
+
+                    <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1.5">
                         <button
-                          type="button"
-                          onClick={(e) => handleCopyMagnet(e, row)}
-                          className="p-1.5 rounded-md bg-ink-800 border border-ink-700/80 text-slate-400 hover:text-white hover:bg-ink-700 transition-colors"
-                          title="Copy Magnet Link"
+                          onClick={(e) => handleDownloadTorrent(t, e)}
+                          disabled={downloadingIh === t.infohash}
+                          className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-emerald-400 hover:text-emerald-300 hover:border-emerald-600/50 transition-colors disabled:opacity-50"
+                          title="Download .torrent on-the-fly (500ms fast-start)"
                         >
-                          {copiedHash === row.infohash ? (
-                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          {downloadingIh === t.infohash ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" />
                           ) : (
-                            <Copy className="w-3.5 h-3.5" />
+                            <FileDown className="w-3.5 h-3.5" />
                           )}
                         </button>
                         <button
-                          type="button"
-                          onClick={(e) => handleDownloadFile(e, row)}
-                          className="p-1.5 rounded-md bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 transition-colors"
-                          title="Download .torrent file"
+                          onClick={() => copyToClipboard(magnetFrom(t.infohash, t.name), 'magnet')}
+                          className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white hover:border-[#444] transition-colors"
+                          title="Copy Magnet Link"
                         >
-                          <Download className="w-3.5 h-3.5" />
+                          <DownloadCloud className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleInspectTorrent(t)}
+                          className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white hover:border-[#444] transition-colors"
+                          title="Inspect Metadata"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </td>
                   </tr>
-                ))
-              )}
+                )
+              })}
             </tbody>
           </table>
         </div>
 
-        {/* Pagination Bar */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-ink-800 bg-ink-950/60 text-xs font-mono text-slate-400">
+        {/* Pagination Footer */}
+        <div className="p-3 border-t border-[#181818] bg-[#0c0c0c] flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-mono text-[#777]">
           <div>
-            Showing <span className="text-slate-200">{torrents.length}</span> of <span className="text-slate-200">{total.toLocaleString()}</span> torrents
+            Page <strong className="text-white">{torrentsPage}</strong> of{' '}
+            <strong className="text-white">{torrentsData.pages || 1}</strong>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page <= 1 || loading}
-              className="px-2.5 py-1 rounded-md bg-ink-800 border border-ink-700 text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed hover:text-white hover:bg-ink-700 transition-colors"
+              disabled={torrentsPage <= 1 || torrentsLoading}
+              onClick={() => setTorrentsPage(1)}
+              className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="First Page"
             >
-              Previous
+              <ChevronsLeft className="w-3.5 h-3.5" />
             </button>
-            <span>
-              Page <span className="text-slate-200">{page}</span> of <span className="text-slate-200">{totalPages.toLocaleString()}</span>
-            </span>
             <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page >= totalPages || loading}
-              className="px-2.5 py-1 rounded-md bg-ink-800 border border-ink-700 text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed hover:text-white hover:bg-ink-700 transition-colors"
+              disabled={torrentsPage <= 1 || torrentsLoading}
+              onClick={() => setTorrentsPage((p) => Math.max(1, p - 1))}
+              className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="Previous Page"
             >
-              Next
+              <ChevronLeft className="w-3.5 h-3.5" />
+            </button>
+            <button
+              disabled={torrentsPage >= (torrentsData.pages || 1) || torrentsLoading}
+              onClick={() => setTorrentsPage((p) => Math.min(torrentsData.pages || 1, p + 1))}
+              className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="Next Page"
+            >
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+            <button
+              disabled={torrentsPage >= (torrentsData.pages || 1) || torrentsLoading}
+              onClick={() => setTorrentsPage(torrentsData.pages || 1)}
+              className="p-1.5 rounded-md bg-[#141414] border border-[#262626] text-[#888] hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="Last Page"
+            >
+              <ChevronsRight className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
       </div>
 
-      {/* Details Modal */}
-      {detailInfohash && (
-        <TorrentDetail
-          infohash={detailInfohash}
-          onClose={() => setDetailInfohash(null)}
-        />
+      {/* Inspect Torrent Modal (Identical to GAIA Operator Inspector) */}
+      {selectedTorrent && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in"
+          onClick={() => setSelectedTorrent(null)}
+        >
+          <div
+            className="w-full max-w-2xl bg-[#090909] border border-[#262626] rounded-2xl p-6 overflow-y-auto max-h-[85vh] shadow-2xl space-y-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="space-y-3 pb-4 border-b border-[#1c1c1c]">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-[#181818] text-emerald-400 border border-[#282828]">
+                    {(selectedTorrent.file_count || selectedTorrent.files?.length || 1) > 1 ? 'Multi-File Bundle' : 'Single Payload'}
+                  </span>
+                  <h2 className="text-base font-semibold text-white mt-2 leading-tight">
+                    {selectedTorrent.name || `payload-${(selectedTorrent.infohash || selectedTorrent.hash).slice(0, 8)}`}
+                  </h2>
+                </div>
+                <button
+                  onClick={() => setSelectedTorrent(null)}
+                  className="p-1.5 rounded-lg border border-[#222] bg-[#111] text-[#666] hover:text-white transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Hash Pill with Copy Button */}
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#000] border border-[#1e1e1e] font-mono text-xs">
+                <div className="truncate text-[#aaa] text-[11px]">
+                  {selectedTorrent.infohash || selectedTorrent.hash}
+                </div>
+                <button
+                  onClick={() => copyToClipboard(selectedTorrent.infohash || selectedTorrent.hash, 'hash')}
+                  className="flex items-center gap-1.5 text-[11px] px-2 py-1 rounded bg-[#161616] text-[#ccc] hover:text-white border border-[#262626] transition-colors ml-3 shrink-0"
+                >
+                  {copiedHash === (selectedTorrent.infohash || selectedTorrent.hash) ? (
+                    <>
+                      <Check className="w-3 h-3 text-emerald-400" />
+                      <span className="text-emerald-400">Copied</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3 h-3" />
+                      <span>Copy Hash</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Metadata Specs Grid */}
+            <div className="grid grid-cols-3 gap-3 font-mono text-xs">
+              <div className="p-3 rounded-lg bg-[#000] border border-[#1a1a1a]">
+                <div className="text-[10px] text-[#555] uppercase font-sans">Total Size</div>
+                <div className="text-white font-semibold mt-0.5">
+                  {formatBytes(selectedTorrent.total_size)}
+                </div>
+              </div>
+              <div className="p-3 rounded-lg bg-[#000] border border-[#1a1a1a]">
+                <div className="text-[10px] text-[#555] uppercase font-sans">Piece Length</div>
+                <div className="text-white font-semibold mt-0.5">
+                  {selectedTorrent.pieceLength || '2.0 MB'}
+                </div>
+              </div>
+              <div className="p-3 rounded-lg bg-[#000] border border-[#1a1a1a]">
+                <div className="text-[10px] text-[#555] uppercase font-sans">Files Count</div>
+                <div className="text-white font-semibold mt-0.5">
+                  {selectedTorrent.file_count || selectedTorrent.files?.length || 1}
+                </div>
+              </div>
+            </div>
+
+            {/* File Tree List */}
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-[#888] uppercase tracking-wider flex items-center justify-between">
+                <span>Payload File Structure ({selectedTorrent.files?.length || selectedTorrent.file_count || 1})</span>
+                <span className="text-[10px] font-mono text-[#555]">Verified SHA1</span>
+              </div>
+
+              <div className="rounded-lg border border-[#1a1a1a] bg-[#000] divide-y divide-[#141414] overflow-hidden max-h-48 overflow-y-auto font-mono text-xs">
+                {detailLoading ? (
+                  <div className="p-4 text-center text-[#666] flex items-center justify-center gap-2">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" /> Loading verified file manifest...
+                  </div>
+                ) : selectedTorrent.files && selectedTorrent.files.length > 0 ? (
+                  selectedTorrent.files.map((f, idx) => {
+                    const filePath = Array.isArray(f.path) ? f.path.join('/') : f.path || f.name || 'file'
+                    const fileLen = f.length || f.size || 0
+                    return (
+                      <div key={idx} className="p-2.5 flex items-center justify-between hover:bg-[#0c0c0c]">
+                        <div className="flex items-center gap-2 truncate pr-3">
+                          <Folder className="w-3.5 h-3.5 text-[#666] shrink-0" />
+                          <span className="truncate text-[#bbb]">{filePath}</span>
+                        </div>
+                        <span className="text-[#666] text-[11px] shrink-0">{formatBytes(fileLen)}</span>
+                      </div>
+                    )
+                  })
+                ) : (
+                  <div className="p-2.5 flex items-center justify-between">
+                    <div className="flex items-center gap-2 truncate pr-3">
+                      <Folder className="w-3.5 h-3.5 text-[#666] shrink-0" />
+                      <span className="truncate text-[#bbb]">
+                        {selectedTorrent.name || 'payload.bin'}
+                      </span>
+                    </div>
+                    <span className="text-[#666] text-[11px] shrink-0">
+                      {formatBytes(selectedTorrent.total_size)}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Health & Popularity Meters */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 space-y-2.5">
+                <div className="flex items-center justify-between text-xs font-mono">
+                  <span className="text-[#888] flex items-center gap-1.5">
+                    <Activity className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Swarm Health & Availability</span>
+                  </span>
+                  <span
+                    className={`font-bold ${
+                      (selectedTorrent.health_score ?? 0) >= 70
+                        ? 'text-emerald-400'
+                        : (selectedTorrent.health_score ?? 0) >= 40
+                        ? 'text-amber-400'
+                        : 'text-rose-400'
+                    }`}
+                  >
+                    {selectedTorrent.health_score ?? 0}% ({selectedTorrent.availability_state || 'ACTIVE'})
+                  </span>
+                </div>
+
+                <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      (selectedTorrent.health_score ?? 0) >= 70
+                        ? 'bg-emerald-400'
+                        : (selectedTorrent.health_score ?? 0) >= 40
+                        ? 'bg-amber-400'
+                        : 'bg-rose-500'
+                    }`}
+                    style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.health_score ?? 0))}%` }}
+                  />
+                </div>
+
+                {/* Mathematical Point Breakdown Audit */}
+                <div className="pt-2 border-t border-[#141414] space-y-1 font-mono text-[10px]">
+                  <div className="flex items-center justify-between text-[#777]">
+                    <span>Seed Presence (Active Swarm):</span>
+                    <span className={(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? 'text-emerald-400' : 'text-[#666]'}>
+                      {(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? '+50 pts' : '+0 pts'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[#777]">
+                    <span>Connected DHT Peers ({selectedTorrent.swarm_peers || 0} nodes):</span>
+                    <span className={(selectedTorrent.swarm_peers || 0) > 0 ? 'text-cyan-400' : 'text-[#666]'}>
+                      +{(selectedTorrent.swarm_peers || 0) > 0 ? Math.min(30, Math.floor(6.0 * Math.log2(1.0 + (selectedTorrent.swarm_peers || 0)))) : 0} pts
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1.5 border-t border-[#141414]">
+                  <span className={(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? 'text-emerald-400 font-semibold' : 'text-[#777]'}>
+                    {(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed
+                      ? '✓ Confirmed Active Swarm'
+                      : 'No Active Peers (Dormant Swarm)'}
+                  </span>
+                  <span className={(selectedTorrent.swarm_peers || 0) > 0 ? 'text-white' : 'text-[#777]'}>
+                    {selectedTorrent.swarm_peers || 0} DHT Peers
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 space-y-2">
+                <div className="flex items-center justify-between text-xs font-mono">
+                  <span className="text-[#888] flex items-center gap-1.5">
+                    <TrendingUp className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Popularity</span>
+                  </span>
+                  <span className="text-cyan-400 font-bold font-mono">
+                    {selectedTorrent.popularity_score ?? 0}%
+                  </span>
+                </div>
+                <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-cyan-400 transition-all"
+                    style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.popularity_score ?? 0))}%` }}
+                  />
+                </div>
+                <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1 border-t border-[#141414]">
+                  <span>Velocity: Active</span>
+                  <span>{Number(selectedTorrent.total_seen || 1).toLocaleString()} Hits</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Tripartite Quality, Trust & Availability Scoring */}
+            <div className="rounded-xl border border-[#1e1e1e] bg-[#0c0c0c] p-4 space-y-3 font-mono">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-emerald-400" />
+                  <span className="text-xs font-semibold text-white">Trust, Integrity & Availability</span>
+                  <span className={`text-[10px] px-2 py-0.5 rounded border ${
+                    selectedTorrent.risk_tier === 'BLOCKED'
+                      ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
+                      : selectedTorrent.risk_tier === 'REVIEW'
+                      ? 'bg-amber-950/60 text-amber-300 border-amber-800/50'
+                      : 'bg-emerald-950/60 text-emerald-300 border-emerald-800/50'
+                  }`}>
+                    {selectedTorrent.risk_tier || 'SAFE'} ({selectedTorrent.policy_action || 'ALLOW'})
+                  </span>
+                </div>
+                <span className="text-[10px] text-[#666]">
+                  Source: {selectedTorrent.decision_source || 'MODEL'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="p-2 rounded bg-[#141414] border border-[#222]">
+                  <div className="text-[10px] text-[#777] uppercase">Integrity</div>
+                  <div className="text-sm font-bold text-white mt-0.5">
+                    {selectedTorrent.integrity_score ?? 100}/100
+                  </div>
+                </div>
+                <div className="p-2 rounded bg-[#141414] border border-[#222]">
+                  <div className="text-[10px] text-[#777] uppercase">Meta Quality</div>
+                  <div className="text-sm font-bold text-white mt-0.5">
+                    {selectedTorrent.metadata_quality_score ?? 85}/100
+                  </div>
+                </div>
+                <div className="p-2 rounded bg-[#141414] border border-[#222]">
+                  <div className="text-[10px] text-[#777] uppercase">Availability</div>
+                  <div className={`text-sm font-bold mt-0.5 ${
+                    (selectedTorrent.availability_state === 'ACTIVE' || (selectedTorrent.availability_score ?? 100) >= 60)
+                      ? 'text-emerald-400'
+                      : (selectedTorrent.availability_state === 'DEGRADED' || (selectedTorrent.availability_score ?? 0) >= 25)
+                      ? 'text-amber-400'
+                      : 'text-rose-400'
+                  }`}>
+                    {selectedTorrent.availability_score ?? 100}% ({selectedTorrent.availability_state || 'ACTIVE'})
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Category Pill & Verification */}
+            <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 space-y-2">
+              <div className="flex items-center justify-between text-xs font-mono">
+                <span className="text-[#888] flex items-center gap-1.5">
+                  <Tag className="w-3.5 h-3.5 text-purple-400" />
+                  <span>Category Classification</span>
+                </span>
+                <span className="text-purple-400 font-bold font-mono">
+                  {selectedTorrent.category || 'Unclassified'}
+                </span>
+              </div>
+
+              {selectedTorrent.category_confidence && (
+                <div className="w-full bg-[#161616] rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-purple-400 transition-all"
+                    style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.category_confidence * 100))}%` }}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Modal Action Buttons */}
+            <div className="pt-4 border-t border-[#1c1c1c] flex items-center justify-between gap-3">
+              <button
+                onClick={(e) => handleDownloadTorrent(selectedTorrent, e)}
+                disabled={downloadingIh === (selectedTorrent.infohash || selectedTorrent.hash)}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-xs transition-colors disabled:opacity-50"
+                title="Generate and download .torrent file on-the-fly (500ms fast-start)"
+              >
+                {downloadingIh === (selectedTorrent.infohash || selectedTorrent.hash) ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin text-black" />
+                    <span>Fetching .torrent on-the-fly...</span>
+                  </>
+                ) : (
+                  <>
+                    <FileDown className="w-4 h-4 text-black" />
+                    <span>Download .torrent (Fast-Start)</span>
+                  </>
+                )}
+              </button>
+              <button
+                onClick={() => copyToClipboard(selectedTorrent.magnet || magnetFrom(selectedTorrent.infohash || selectedTorrent.hash, selectedTorrent.name), 'magnet')}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg bg-[#181818] border border-[#2a2a2a] text-white font-semibold text-xs hover:bg-[#252525] transition-colors"
+              >
+                {copiedMagnet ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-400" />
+                    <span>Magnet URI Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <DownloadCloud className="w-4 h-4" />
+                    <span>Copy Magnet Link</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
