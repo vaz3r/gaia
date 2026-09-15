@@ -1386,8 +1386,7 @@ async function enrichSurveillanceNodes() {
           `UPDATE dht_surveillance_nodes 
            SET asn = $1, org = $2, 
                suspected_entity = CASE WHEN suspected_entity = 'Unknown Monitor' OR suspected_entity = 'Suspicious Query Node' OR suspected_entity = 'Suspicious Non-Contributing Node' THEN $3 ELSE suspected_entity END,
-               score = LEAST(100, score + 25),
-               is_blocked = (LEAST(100, score + 25) >= 60)
+               score = LEAST(100, score + 25)
            WHERE ip = $4::inet`,
           [info.asn, info.org, info.suspected, row.ip]
         );
