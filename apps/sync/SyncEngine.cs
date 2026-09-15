@@ -371,10 +371,10 @@ public class SyncEngine
             await _meili.PushBatchAsync(docs);
 
             // Stamp last_decay_sweep in Postgres
-            var byteaHashes = rows.Select(r => Convert.FromHexString(r.Infohash)).ToArray();
+            var hexHashes = rows.Select(r => $"\\x{r.Infohash}").ToArray();
             await conn.ExecuteAsync(
-                "UPDATE torrents SET last_decay_sweep = now() WHERE infohash = ANY(@byteaHashes)",
-                new { byteaHashes }, commandTimeout: 120);
+                "UPDATE torrents SET last_decay_sweep = now() WHERE infohash = ANY(@hexHashes::bytea[])",
+                new { hexHashes }, commandTimeout: 120);
 
             var last = rows.Last();
             cursorTs = last.LastDecaySweep ?? new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
