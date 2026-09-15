@@ -68,7 +68,6 @@ pub struct SurveillanceRecorder {
     pool: Option<PgPool>,
     nodes: Arc<DashMap<IpAddr, SurveillanceNodeEntry>>,
     blocked_ips: Arc<DashSet<IpAddr>>,
-    immune_ips: Arc<DashSet<IpAddr>>,
     mesh_endpoints: Arc<RwLock<Vec<[u8; 6]>>>,
     metrics: Arc<Metrics>,
 }
@@ -79,35 +78,18 @@ impl SurveillanceRecorder {
             pool,
             nodes: Arc::new(DashMap::new()),
             blocked_ips: Arc::new(DashSet::new()),
-            immune_ips: Arc::new(DashSet::new()),
             mesh_endpoints: Arc::new(RwLock::new(Vec::with_capacity(2048))),
             metrics,
         })
     }
 
-    /// Preload confirmed malicious surveillance IPs from Postgres into memory,
-    /// strictly excluding any proven seedboxes present in stable_peers.
+    /// Load manually-blocked IPs from Postgres into the in-memory blocked_ips set.
+    /// Only rows explicitly set via the dashboard operator toggle (is_blocked = TRUE) are loaded.
+    /// Automatic blocking has been removed — this set is exclusively operator-controlled.
     pub async fn load_blocked_nodes(&self) {
         if let Some(pool) = &self.pool {
-            // Preload proven seedbox IPs from stable_peers into immune_ips
-            let immune_rows: Result<Vec<(String,)>, sqlx::Error> =
-                sqlx::query_as("SELECT DISTINCT ip::text FROM stable_peers WHERE metadata_provided_count > 10 LIMIT 50000")
-                    .fetch_all(pool)
-                    .await;
-            if let Ok(ips) = immune_rows {
-                let mut immune_count = 0;
-                for (ip_str,) in ips {
-                    let bare_ip = ip_str.split('/').next().unwrap_or(&ip_str);
-                    if let Ok(parsed) = bare_ip.parse::<IpAddr>() {
-                        self.record_legitimate_peer(parsed);
-                        immune_count += 1;
-                    }
-                }
-                tracing::info!(count = immune_count, "surveillance: preloaded proven seedboxes from stable_peers into immunity list");
-            }
-
             let rows: Result<Vec<(String,)>, sqlx::Error> =
-                sqlx::query_as("SELECT ip::text FROM dht_surveillance_nodes WHERE is_blocked = TRUE AND NOT EXISTS (SELECT 1 FROM stable_peers sp WHERE sp.ip = dht_surveillance_nodes.ip)")
+                sqlx::query_as("SELECT ip::text FROM dht_surveillance_nodes WHERE is_blocked = TRUE")
                     .fetch_all(pool)
                     .await;
             match rows {
@@ -117,16 +99,14 @@ impl SurveillanceRecorder {
                     for (ip_str,) in ips {
                         let bare_ip = ip_str.split('/').next().unwrap_or(&ip_str);
                         if let Ok(parsed) = bare_ip.parse::<IpAddr>() {
-                            if !self.immune_ips.contains(&parsed) {
-                                self.blocked_ips.insert(parsed);
-                                if let IpAddr::V4(v4) = parsed {
-                                    let mut ep = [0u8; 6];
-                                    ep[0..4].copy_from_slice(&v4.octets());
-                                    ep[4..6].copy_from_slice(&6881u16.to_be_bytes());
-                                    endpoints.push(ep);
-                                }
-                                count += 1;
+                            self.blocked_ips.insert(parsed);
+                            if let IpAddr::V4(v4) = parsed {
+                                let mut ep = [0u8; 6];
+                                ep[0..4].copy_from_slice(&v4.octets());
+                                ep[4..6].copy_from_slice(&6881u16.to_be_bytes());
+                                endpoints.push(ep);
                             }
+                            count += 1;
                         }
                     }
                     if !endpoints.is_empty() {
@@ -137,26 +117,20 @@ impl SurveillanceRecorder {
                             }
                         }
                     }
-                    tracing::info!(loaded = count, "surveillance: preloaded blocked surveillance IPs into redirection mesh");
+                    tracing::info!(loaded = count, "surveillance: loaded manually-blocked IPs (operator-controlled)");
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "surveillance: failed to preload blocked IPs");
+                    tracing::warn!(error = %e, "surveillance: failed to load manually-blocked IPs");
                 }
             }
         }
     }
 
-    /// Mark an IP as a proven legitimate peer or seedbox, removing it from blocked_ips
-    /// and granting permanent immunity against surveillance blocking.
-    pub fn record_legitimate_peer(&self, ip: IpAddr) {
-        self.blocked_ips.remove(&ip);
-        self.immune_ips.insert(ip);
-    }
-
-    /// Fast lock-free check if an IP is a known surveillance/abusive bot
+    /// Fast lock-free check if an IP is a manually-blocked surveillance node.
+    /// Only returns true for IPs explicitly blocked via the dashboard operator toggle.
     #[inline]
     pub fn is_blocked(&self, ip: &IpAddr) -> bool {
-        !self.immune_ips.contains(ip) && self.blocked_ips.contains(ip)
+        self.blocked_ips.contains(ip)
     }
 
     /// Returns 4 compact peer endpoints (24 bytes) from the active surveillance mesh,
@@ -367,51 +341,14 @@ impl SurveillanceRecorder {
                 for (ip, entry, asn_hint, score, category, suspected) in chunk {
                     let asn = asn_hint.map(|h| h.asn.to_string());
                     let org = asn_hint.map(|h| h.org.to_string());
-                    let is_blocked = *score >= 70 && !self.immune_ips.contains(ip);
                     let sample_hashes: Vec<Vec<u8>> = entry.sample_hashes.iter().map(|h| h.to_vec()).collect();
                     let total_queries = (entry.get_peers_count + entry.find_node_count) as i64;
                     let distinct_node_ids = entry.total_node_ids_seen.max(1) as i32;
 
-                    if is_blocked {
-                        if !self.blocked_ips.contains(ip) {
-                            self.blocked_ips.insert(*ip);
-                            self.metrics.surveillance_nodes_flagged.add(1);
-                            if let IpAddr::V4(v4) = ip {
-                                let mut ep = [0u8; 6];
-                                ep[0..4].copy_from_slice(&v4.octets());
-                                ep[4..6].copy_from_slice(&6881u16.to_be_bytes());
-                                if let Ok(mut mesh) = self.mesh_endpoints.write() {
-                                    if mesh.len() < 4096 {
-                                        mesh.push(ep);
-                                    } else {
-                                        let idx = rand::random::<u64>() as usize % 4096;
-                                        mesh[idx] = ep;
-                                    }
-                                }
-                            }
-                            tracing::info!(
-                                ip = %ip,
-                                score = score,
-                                category = category.as_str(),
-                                entity = %suspected,
-                                "surveillance: intercepted & blocked non-contributing/spying node into redirection mesh"
-                            );
-                        }
-                    } else if self.blocked_ips.contains(ip) {
-                        self.blocked_ips.remove(ip);
-                        if let IpAddr::V4(v4) = ip {
-                            let octets = v4.octets();
-                            if let Ok(mut mesh) = self.mesh_endpoints.write() {
-                                mesh.retain(|ep| ep[0..4] != octets);
-                            }
-                        }
-                        tracing::info!(
-                            ip = %ip,
-                            score = score,
-                            category = category.as_str(),
-                            "surveillance: unblocked legitimate peer / seedbox"
-                        );
-                    }
+                    // NOTE: is_blocked is never set automatically. It is exclusively
+                    // controlled by the dashboard operator via the manual toggle.
+                    // The UPSERT preserves the existing DB value on conflict.
+                    // New rows insert as false (unblocked) by default.
 
                     let query_result = sqlx::query(
                         r#"
@@ -446,7 +383,7 @@ impl SurveillanceRecorder {
                             sample_hashes = ARRAY(
                                 SELECT DISTINCT elem FROM UNNEST(dht_surveillance_nodes.sample_hashes || EXCLUDED.sample_hashes) AS elem LIMIT 10
                             ),
-                            is_blocked = EXCLUDED.is_blocked,
+                            is_blocked = dht_surveillance_nodes.is_blocked,
                             last_seen = EXCLUDED.last_seen
                         "#,
                     )
@@ -460,7 +397,7 @@ impl SurveillanceRecorder {
                     .bind(entry.bep42_valid as i32)
                     .bind(suspected)
                     .bind(&sample_hashes)
-                    .bind(is_blocked)
+                    .bind(false) // new rows: never auto-blocked; operator sets is_blocked via dashboard
                     .bind(entry.first_seen)
                     .bind(entry.last_seen)
                     .bind(entry.find_node_count as i64)
