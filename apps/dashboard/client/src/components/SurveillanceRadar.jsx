@@ -246,18 +246,18 @@ export default function SurveillanceRadar({ onInspectTorrent }) {
             <div>
               <div className="flex items-center gap-2.5">
                 <h2 className="text-xl font-bold text-white tracking-tight">
-                  Universal DHT Abuse & Surveillance Radar
+                  DHT Surveillance Radar
                 </h2>
-                <span className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                <span className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-medium">
                   <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
                   </span>
-                  Active Interception
+                  Manual Blocking Mode
                 </span>
               </div>
               <p className="text-xs text-[#888] mt-1">
-                Autonomous defense identifying and neutralizing all non-contributing DHT abusers: Sybil rotators, passive swarm monitors, table scrapers, and unreciprocating leeches.
+                Observing and scoring all DHT nodes. No automatic blocking — all nodes receive legitimate responses unless you explicitly block them below.
               </p>
             </div>
           </div>
@@ -340,17 +340,17 @@ export default function SurveillanceRadar({ onInspectTorrent }) {
       </div>
 
       {/* Counter-Measure Explainer Banner */}
-      <div className="p-4 rounded-xl bg-gradient-to-r from-rose-950/25 via-[#111] to-[#111] border border-rose-500/20">
+      <div className="p-4 rounded-xl bg-gradient-to-r from-blue-950/25 via-[#111] to-[#111] border border-blue-500/20">
         <div className="flex items-start gap-3">
-          <Shield className="w-5 h-5 text-rose-400 mt-0.5 shrink-0" />
+          <Shield className="w-5 h-5 text-blue-400 mt-0.5 shrink-0" />
           <div className="space-y-1 text-xs text-[#aaa]">
             <p className="font-semibold text-white">
-              Autonomous Honey-Pot Counter-Measures & Protocol Defense
+              Manual Honey-Pot Blocking
             </p>
             <p>
-              When a detected surveillance bot or unreciprocating leecher queries GAIA for torrent peers or node routing tables, GAIA automatically responds with{' '}
-              <span className="text-rose-300 font-mono font-medium">RFC 5737 dummy documentation addresses (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24)</span>.
-              This pollutes external tracking logs, derails scrapers into phantom routing loops, and insulates real BitTorrent seeders from swarm surveillance.
+              When you manually block a confirmed spy using the toggle below, GAIA responds to its DHT queries with{' '}
+              <span className="text-blue-300 font-mono font-medium">RFC 5737 dummy documentation addresses (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24)</span>.
+              This pollutes their tracking logs and derails their scrapers. All other nodes receive legitimate responses.
             </p>
           </div>
         </div>
