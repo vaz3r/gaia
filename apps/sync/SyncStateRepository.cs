@@ -84,4 +84,23 @@ public class SyncStateRepository
             // Suppress secondary failures during error logging
         }
     }
+
+    public async Task TouchLoopAsync(string loopName)
+    {
+        try
+        {
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            await conn.ExecuteAsync(@"
+                UPDATE portal_sync_state
+                SET last_run_at = now()
+                WHERE loop_name = @loopName",
+                new { loopName });
+        }
+        catch
+        {
+            // Suppress secondary failures
+        }
+    }
 }

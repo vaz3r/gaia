@@ -7,6 +7,7 @@ sample integrity (n=1000), and zero-leak suppression guarantees.
 
 import sys
 import os
+import time
 import json
 import urllib.request
 import urllib.error
@@ -17,39 +18,60 @@ MEILI_CONTAINER = os.getenv("MEILI_CONTAINER", "gaia-portal-meilisearch")
 MEILI_URL = os.getenv("MEILI_URL", "http://127.0.0.1:7700")
 MEILI_KEY = os.getenv("MEILI_MASTER_KEY", "meili_secure_master_key_v2_modern_scaling")
 
-def meili_get(path):
+_USE_DOCKER = None
+
+def _check_transport():
+    global _USE_DOCKER
+    if _USE_DOCKER is not None:
+        return
     try:
-        url = f"{MEILI_URL}{path}"
-        req = urllib.request.Request(url, headers={
-            "Authorization": f"Bearer {MEILI_KEY}",
-            "Content-Type": "application/json"
-        })
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read().decode())
+        req = urllib.request.Request(f"{MEILI_URL}/health", headers={"Authorization": f"Bearer {MEILI_KEY}"})
+        with urllib.request.urlopen(req, timeout=1) as resp:
+            _USE_DOCKER = False
     except Exception:
-        cmd = ["docker", "exec", "-i", MEILI_CONTAINER, "curl", "-s", f"http://localhost:7700{path}",
-               "-H", f"Authorization: Bearer {MEILI_KEY}"]
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return json.loads(res.stdout)
+        _USE_DOCKER = True
+
+def meili_get(path):
+    _check_transport()
+    if not _USE_DOCKER:
+        try:
+            url = f"{MEILI_URL}{path}"
+            req = urllib.request.Request(url, headers={
+                "Authorization": f"Bearer {MEILI_KEY}",
+                "Content-Type": "application/json"
+            })
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return json.loads(resp.read().decode())
+        except Exception:
+            pass
+
+    cmd = ["docker", "exec", "-i", MEILI_CONTAINER, "curl", "-s", f"http://localhost:7700{path}",
+           "-H", f"Authorization: Bearer {MEILI_KEY}"]
+    res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    return json.loads(res.stdout)
 
 def meili_post(path, body):
-    try:
-        url = f"{MEILI_URL}{path}"
-        data = json.dumps(body).encode('utf-8')
-        req = urllib.request.Request(url, data=data, headers={
-            "Authorization": f"Bearer {MEILI_KEY}",
-            "Content-Type": "application/json"
-        })
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read().decode())
-    except Exception:
-        cmd = ["docker", "exec", "-i", MEILI_CONTAINER, "curl", "-s", "-X", "POST",
-               f"http://localhost:7700{path}",
-               "-H", f"Authorization: Bearer {MEILI_KEY}",
-               "-H", "Content-Type: application/json",
-               "-d", json.dumps(body)]
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return json.loads(res.stdout)
+    _check_transport()
+    if not _USE_DOCKER:
+        try:
+            url = f"{MEILI_URL}{path}"
+            data = json.dumps(body).encode('utf-8')
+            req = urllib.request.Request(url, data=data, headers={
+                "Authorization": f"Bearer {MEILI_KEY}",
+                "Content-Type": "application/json"
+            })
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return json.loads(resp.read().decode())
+        except Exception:
+            pass
+
+    cmd = ["docker", "exec", "-i", MEILI_CONTAINER, "curl", "-s", "-X", "POST",
+           f"http://localhost:7700{path}",
+           "-H", f"Authorization: Bearer {MEILI_KEY}",
+           "-H", "Content-Type: application/json",
+           "-d", json.dumps(body)]
+    res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    return json.loads(res.stdout)
 
 def run_sql(query):
     cmd = ["psql", "-U", "crawler", "-d", "craw", "-h", "192.168.10.10", "-p", "5432", "-t", "-A", "-c", query]
@@ -68,6 +90,17 @@ def main():
 
     # 1. Meilisearch Index Stats
     try:
+        if "--wait" in sys.argv or "-w" in sys.argv:
+            print("Waiting for active Meilisearch indexing tasks to finish...")
+            while True:
+                stats = meili_get("/indexes/torrents/stats")
+                if not stats.get("isIndexing", False):
+                    tasks = meili_get("/tasks?statuses=enqueued,processing&limit=1")
+                    if tasks.get("total", 0) == 0:
+                        break
+                print(".", end="", flush=True)
+                time.sleep(3)
+            print()
         stats = meili_get("/indexes/torrents/stats")
         meili_docs = stats.get("numberOfDocuments", 0)
         is_indexing = stats.get("isIndexing", False)

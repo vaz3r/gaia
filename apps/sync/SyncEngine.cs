@@ -148,6 +148,7 @@ public class SyncEngine
             try
             {
                 await DrainFastLoopAsync(ct);
+                await _stateRepo.TouchLoopAsync("fast");
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
@@ -213,6 +214,7 @@ public class SyncEngine
             try
             {
                 await DrainHealthLoopAsync(ct);
+                await _stateRepo.TouchLoopAsync("health");
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
@@ -301,6 +303,8 @@ public class SyncEngine
 
                     if (rows.Count < BatchSize) break;
                 }
+
+                await _stateRepo.TouchLoopAsync("suppression");
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
@@ -318,6 +322,7 @@ public class SyncEngine
             try
             {
                 await DrainDecaySweepAsync(ct);
+                await _stateRepo.TouchLoopAsync("decay");
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
@@ -369,7 +374,7 @@ public class SyncEngine
             var byteaHashes = rows.Select(r => Convert.FromHexString(r.Infohash)).ToArray();
             await conn.ExecuteAsync(
                 "UPDATE torrents SET last_decay_sweep = now() WHERE infohash = ANY(@byteaHashes)",
-                new { byteaHashes });
+                new { byteaHashes }, commandTimeout: 120);
 
             var last = rows.Last();
             cursorTs = last.LastDecaySweep ?? new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
