@@ -127,7 +127,7 @@ public class SyncEngine
             cursorTs = last.VerifiedAt;
             cursorHash = last.Infohash;
 
-            await _stateRepo.UpdateProgressAsync("backfill", cursorTs.Value, cursorHash, rows.Count);
+            await _stateRepo.UpdateProgressAsync("backfill", cursorTs ?? DateTime.UtcNow, cursorHash, rows.Count);
             BumpGenerationIfAllowed();
 
             if (rows.Count < BatchSize)
