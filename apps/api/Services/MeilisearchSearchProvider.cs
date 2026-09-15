@@ -45,11 +45,13 @@ public class MeilisearchSearchProvider : ISearchProvider
         var dir = order?.ToLowerInvariant() == "asc" ? "asc" : "desc";
         string[]? sort = sortBy?.ToLowerInvariant() switch
         {
-            "size"       => new[] { $"total_size:{dir}" },
-            "health"     => new[] { $"health_score:{dir}" },
-            "popularity" => new[] { $"popularity_score:{dir}" },
-            "date"       => new[] { $"verified_at:{dir}" },
-            _            => new[] { "popularity_score:desc" }
+            "size" or "total_size"             => new[] { $"total_size:{dir}" },
+            "health" or "health_score"         => new[] { $"health_score:{dir}" },
+            "popularity" or "popularity_score" => new[] { $"popularity_score:{dir}" },
+            "date" or "verified_at"            => new[] { $"verified_at:{dir}" },
+            _                                  => string.IsNullOrWhiteSpace(query)
+                                                    ? new[] { $"verified_at:{dir}" }
+                                                    : new[] { "popularity_score:desc" }
         };
 
         var requestBody = new
@@ -70,7 +72,7 @@ public class MeilisearchSearchProvider : ISearchProvider
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(1500));
+            timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(4000));
 
             var resp = await _http.PostAsJsonAsync("/indexes/torrents/search", requestBody, timeoutCts.Token);
             if (!resp.IsSuccessStatusCode)

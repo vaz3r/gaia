@@ -51,7 +51,7 @@ builder.Services.AddSingleton<PostgresTrigramSearchProvider>();
 builder.Services.AddHttpClient<ISearchProvider, MeilisearchSearchProvider>(client =>
 {
     client.BaseAddress = new Uri(meiliUrl);
-    client.Timeout     = TimeSpan.FromMilliseconds(1500);
+    client.Timeout     = TimeSpan.FromSeconds(5);
     if (!string.IsNullOrWhiteSpace(meiliKey))
         client.DefaultRequestHeaders.Add("Authorization", $"Bearer {meiliKey}");
 }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler

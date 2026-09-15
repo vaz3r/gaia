@@ -36,9 +36,11 @@ public class PostgresTrigramSearchProvider : ISearchProvider
         var cached   = await _redis.GetAsync<SearchResponse>(cacheKey, ct);
         if (cached is not null) return cached with { FromCache = true };
 
-        var allTokens = System.Text.RegularExpressions.Regex.Split(query.Trim(), @"[\s._\-+]+")
-            .Where(t => t.Length > 1 || char.IsDigit(t[0]))
-            .ToList();
+        var allTokens = string.IsNullOrWhiteSpace(query)
+            ? new List<string>()
+            : System.Text.RegularExpressions.Regex.Split(query.Trim(), @"[\s._\-+]+")
+                .Where(t => !string.IsNullOrEmpty(t) && (t.Length > 1 || char.IsDigit(t[0])))
+                .ToList();
 
         var titleTokens = allTokens.Where(t => !QualityStopTokens.Contains(t)).ToList();
         var filterTokens = titleTokens.Count > 0 ? titleTokens : allTokens;
@@ -71,11 +73,13 @@ public class PostgresTrigramSearchProvider : ISearchProvider
 
         var orderBy = sortBy?.ToLowerInvariant() switch
         {
-            "size"       => $"ORDER BY total_size {sortDir}",
-            "popularity" => $"ORDER BY popularity_score {sortDir}",
-            "health"     => $"ORDER BY health_score {sortDir}",
-            "date"       => $"ORDER BY verified_at {sortDir}",
-            _ => $"ORDER BY CASE WHEN name ILIKE @fullPhrase ESCAPE '\\' THEN 200 ELSE 100 END DESC, popularity_score DESC"
+            "size" or "total_size"             => $"ORDER BY total_size {sortDir}",
+            "popularity" or "popularity_score" => $"ORDER BY popularity_score {sortDir}",
+            "health" or "health_score"         => $"ORDER BY health_score {sortDir}",
+            "date" or "verified_at"            => $"ORDER BY verified_at {sortDir}",
+            _ => string.IsNullOrWhiteSpace(query)
+                ? $"ORDER BY verified_at {sortDir}"
+                : $"ORDER BY CASE WHEN name ILIKE @fullPhrase ESCAPE '\\' THEN 200 ELSE 100 END DESC, popularity_score DESC"
         };
 
         var sql = $"""

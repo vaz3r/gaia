@@ -28,32 +28,9 @@ public static class TorrentEndpoints
             var safeLimit      = Math.Clamp(limit ?? 25, 1, 100);
             var safePage       = Math.Max(1, page ?? 1);
 
-            // ── Browse path (no search term) ──────────────────────────────────
-            // Fast PostgreSQL B-tree index, cached 30s in Redis
-            if (string.IsNullOrWhiteSpace(effectiveQuery))
-            {
-                var (items, total) = await db.GetBrowseTorrentsAsync(
-                    category: category,
-                    page:     safePage,
-                    limit:    safeLimit,
-                    sortBy:   effectiveSort,
-                    order:    order ?? "desc",
-                    ct:       ct);
-
-                return Results.Ok(new
-                {
-                    data      = items,
-                    page      = safePage,
-                    limit     = safeLimit,
-                    total,
-                    pages     = Math.Max(1, (int)Math.Ceiling((double)total / safeLimit)),
-                    source    = "postgresql"
-                });
-            }
-
-            // ── Search path (Meilisearch primary, PostgreSQL trigram fallback) ─
+            // ── Search & Browse path (Meilisearch primary, PostgreSQL trigram fallback) ─
             var results = await searchProvider.SearchAsync(
-                query:    effectiveQuery,
+                query:    effectiveQuery ?? "",
                 category: category,
                 page:     safePage,
                 limit:    safeLimit,
