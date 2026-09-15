@@ -36,7 +36,8 @@ logger.LogInformation("Target Redis: {Url}", redisUrl);
 IConnectionMultiplexer redis;
 try
 {
-    var redisConfig = ConfigurationOptions.Parse(redisUrl);
+    var redisEndpoint = redisUrl.Replace("redis://", "").TrimEnd('/');
+    var redisConfig = ConfigurationOptions.Parse(redisEndpoint);
     redisConfig.AbortOnConnectFail = false;
     redisConfig.ConnectRetry = 5;
     redis = await ConnectionMultiplexer.ConnectAsync(redisConfig);
