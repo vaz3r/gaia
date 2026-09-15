@@ -88,25 +88,25 @@ public class SyncEngine
             if (cursorTs == null || string.IsNullOrEmpty(cursorHash))
             {
                 query = @"
-                    SELECT encode(infohash, 'hex') AS infohash, name, category, total_size, file_count,
-                           verified_at, health_score, popularity_score, swarm_peers, seed_confirmed,
-                           risk_tier, policy_action, availability_state, last_health_attempt
-                    FROM torrents
-                    WHERE policy_action IS DISTINCT FROM 'SUPPRESS'
-                    ORDER BY verified_at ASC, infohash ASC
+                    SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
+                           t.verified_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
+                           t.risk_tier, t.policy_action, t.availability_state, t.last_health_attempt
+                    FROM torrents t
+                    WHERE t.policy_action IS DISTINCT FROM 'SUPPRESS'
+                    ORDER BY t.verified_at ASC, t.infohash ASC
                     LIMIT @limit";
                 parameters = new { limit = BatchSize };
             }
             else
             {
                 query = @"
-                    SELECT encode(infohash, 'hex') AS infohash, name, category, total_size, file_count,
-                           verified_at, health_score, popularity_score, swarm_peers, seed_confirmed,
-                           risk_tier, policy_action, availability_state, last_health_attempt
-                    FROM torrents
-                    WHERE (verified_at, infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
-                      AND policy_action IS DISTINCT FROM 'SUPPRESS'
-                    ORDER BY verified_at ASC, infohash ASC
+                    SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
+                           t.verified_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
+                           t.risk_tier, t.policy_action, t.availability_state, t.last_health_attempt
+                    FROM torrents t
+                    WHERE (t.verified_at, t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
+                      AND t.policy_action IS DISTINCT FROM 'SUPPRESS'
+                    ORDER BY t.verified_at ASC, t.infohash ASC
                     LIMIT @limit";
                 parameters = new { cursorTs, cursorHash, limit = BatchSize };
             }
@@ -169,12 +169,12 @@ public class SyncEngine
             await conn.OpenAsync(ct);
 
             var query = @"
-                SELECT encode(infohash, 'hex') AS infohash, name, category, total_size, file_count,
-                       verified_at, updated_at, health_score, popularity_score, swarm_peers, seed_confirmed,
-                       risk_tier, policy_action, availability_state, last_health_attempt
-                FROM torrents
-                WHERE (updated_at, infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
-                ORDER BY updated_at ASC, infohash ASC
+                SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
+                       t.verified_at, t.updated_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
+                       t.risk_tier, t.policy_action, t.availability_state, t.last_health_attempt
+                FROM torrents t
+                WHERE (t.updated_at, t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
+                ORDER BY t.updated_at ASC, t.infohash ASC
                 LIMIT @limit";
 
             var rows = (await conn.QueryAsync<TorrentDocRow>(query, new { cursorTs, cursorHash, limit = BatchSize })).ToList();
@@ -233,13 +233,13 @@ public class SyncEngine
             await conn.OpenAsync(ct);
 
             var query = @"
-                SELECT encode(infohash, 'hex') AS infohash, name, category, total_size, file_count,
-                       verified_at, updated_at, health_score, popularity_score, swarm_peers, seed_confirmed,
-                       risk_tier, policy_action, availability_state, last_health_attempt
-                FROM torrents
-                WHERE (last_health_attempt, infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
-                  AND policy_action IS DISTINCT FROM 'SUPPRESS'
-                ORDER BY last_health_attempt ASC, infohash ASC
+                SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
+                       t.verified_at, t.updated_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
+                       t.risk_tier, t.policy_action, t.availability_state, t.last_health_attempt
+                FROM torrents t
+                WHERE (t.last_health_attempt, t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
+                  AND t.policy_action IS DISTINCT FROM 'SUPPRESS'
+                ORDER BY t.last_health_attempt ASC, t.infohash ASC
                 LIMIT @limit";
 
             var rows = (await conn.QueryAsync<TorrentDocRow>(query, new { cursorTs, cursorHash, limit = BatchSize })).ToList();
@@ -275,11 +275,11 @@ public class SyncEngine
                     await conn.OpenAsync(ct);
 
                     var query = @"
-                        SELECT encode(infohash, 'hex') AS infohash, updated_at
-                        FROM torrents
-                        WHERE policy_action = 'SUPPRESS'
-                          AND (updated_at, infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
-                        ORDER BY updated_at ASC, infohash ASC
+                        SELECT encode(t.infohash, 'hex') AS infohash, t.updated_at
+                        FROM torrents t
+                        WHERE t.policy_action = 'SUPPRESS'
+                          AND (t.updated_at, t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
+                        ORDER BY t.updated_at ASC, t.infohash ASC
                         LIMIT @limit";
 
                     var rows = (await conn.QueryAsync<dynamic>(query, new { cursorTs, cursorHash, limit = BatchSize })).ToList();
@@ -337,15 +337,15 @@ public class SyncEngine
             await conn.OpenAsync(ct);
 
             var query = @"
-                SELECT encode(infohash, 'hex') AS infohash, name, category, total_size, file_count,
-                       verified_at, health_score, popularity_score, swarm_peers, seed_confirmed,
-                       risk_tier, policy_action, availability_state, last_health_attempt, last_decay_sweep
-                FROM torrents
-                WHERE (COALESCE(last_decay_sweep, '1970-01-01'::timestamptz), infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
-                  AND last_health_attempt < now() - interval '7 days'
-                  AND health_score > 0
-                  AND policy_action IS DISTINCT FROM 'SUPPRESS'
-                ORDER BY COALESCE(last_decay_sweep, '1970-01-01'::timestamptz) ASC, infohash ASC
+                SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
+                       t.verified_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
+                       t.risk_tier, t.policy_action, t.availability_state, t.last_health_attempt, t.last_decay_sweep
+                FROM torrents t
+                WHERE (COALESCE(t.last_decay_sweep, '1970-01-01'::timestamptz), t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
+                  AND t.last_health_attempt < now() - interval '7 days'
+                  AND t.health_score > 0
+                  AND t.policy_action IS DISTINCT FROM 'SUPPRESS'
+                ORDER BY COALESCE(t.last_decay_sweep, '1970-01-01'::timestamptz) ASC, t.infohash ASC
                 LIMIT @limit";
 
             var rows = (await conn.QueryAsync<TorrentDocRow>(query, new { cursorTs, cursorHash, limit = BatchSize })).ToList();
