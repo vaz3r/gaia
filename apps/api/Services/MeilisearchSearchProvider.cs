@@ -76,7 +76,7 @@ public class MeilisearchSearchProvider : ISearchProvider
         if (!_circuitBreaker.CanExecute())
         {
             _logger.LogWarning("Circuit breaker is OPEN. Fast-failing to PostgreSQL fallback (0ms delay).");
-            return await _fallback.SearchAsync(parsed.OriginalQuery, category, safePage, safeLimit, sortBy, order, ct);
+            return await _fallback.SearchAsync(parsed.CleanQuery, category, safePage, safeLimit, sortBy, order, ct);
         }
 
         // 5. Build Filter and Sort
@@ -100,9 +100,9 @@ public class MeilisearchSearchProvider : ISearchProvider
                                                     : null
         };
 
-        // 6. Execute with strict 800ms SLA budget
+        // 6. Execute with SLA budget (2000ms max)
         using var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        budgetCts.CancelAfter(TimeSpan.FromMilliseconds(800));
+        budgetCts.CancelAfter(TimeSpan.FromMilliseconds(2000));
 
         try
         {
@@ -128,7 +128,7 @@ public class MeilisearchSearchProvider : ISearchProvider
                 if (!multiResp.IsSuccessStatusCode)
                 {
                     _circuitBreaker.RecordFailure();
-                    return await _fallback.SearchAsync(parsed.OriginalQuery, category, safePage, safeLimit, sortBy, order, ct);
+                    return await _fallback.SearchAsync(parsed.CleanQuery, category, safePage, safeLimit, sortBy, order, ct);
                 }
 
                 raw = await multiResp.Content.ReadFromJsonAsync<MeiliRawResponse>(cancellationToken: budgetCts.Token);
@@ -151,7 +151,7 @@ public class MeilisearchSearchProvider : ISearchProvider
                 if (!resp.IsSuccessStatusCode)
                 {
                     _circuitBreaker.RecordFailure();
-                    return await _fallback.SearchAsync(parsed.OriginalQuery, category, safePage, safeLimit, sortBy, order, ct);
+                    return await _fallback.SearchAsync(parsed.CleanQuery, category, safePage, safeLimit, sortBy, order, ct);
                 }
 
                 raw = await resp.Content.ReadFromJsonAsync<MeiliRawResponse>(cancellationToken: budgetCts.Token);
@@ -205,7 +205,7 @@ public class MeilisearchSearchProvider : ISearchProvider
         {
             _circuitBreaker.RecordFailure();
             _logger.LogWarning(ex, "Meilisearch execution failed or timed out. Falling back to PostgreSQL.");
-            return await _fallback.SearchAsync(parsed.OriginalQuery, category, safePage, safeLimit, sortBy, order, ct);
+            return await _fallback.SearchAsync(parsed.CleanQuery, category, safePage, safeLimit, sortBy, order, ct);
         }
     }
 
