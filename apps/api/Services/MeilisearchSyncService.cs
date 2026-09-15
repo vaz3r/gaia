@@ -117,7 +117,7 @@ public class MeilisearchSyncService : BackgroundService
                     return dict;
                 }).ToList();
 
-                var resp = await http.PutAsJsonAsync("/indexes/torrents/documents", docs, ct);
+                var resp = await http.PutAsJsonAsync("/indexes/torrents/documents?primaryKey=infohash", docs, ct);
                 if (!resp.IsSuccessStatusCode)
                 {
                     _logger.LogWarning("Meilisearch backfill push returned {Code}, retrying in 5s...", resp.StatusCode);
@@ -188,7 +188,7 @@ public class MeilisearchSyncService : BackgroundService
                 return dict;
             }).ToList();
 
-            var resp = await http.PutAsJsonAsync("/indexes/torrents/documents", docs, ct);
+            var resp = await http.PutAsJsonAsync("/indexes/torrents/documents?primaryKey=infohash", docs, ct);
             if (resp.IsSuccessStatusCode)
             {
                 cursorTs = nextCursorTs;
@@ -270,7 +270,7 @@ public class MeilisearchSyncService : BackgroundService
                 return dict;
             }).ToList();
 
-            var resp = await http.PutAsJsonAsync("/indexes/torrents/documents", docs, ct);
+            var resp = await http.PutAsJsonAsync("/indexes/torrents/documents?primaryKey=infohash", docs, ct);
             if (resp.IsSuccessStatusCode)
             {
                 cursorTs = nextCursorTs;
@@ -284,13 +284,14 @@ public class MeilisearchSyncService : BackgroundService
 
         if (totalHealth > 0)
         {
-            _logger.LogInformation("Slow health loop: {Count:N0} health records synced to Meilisearch", totalHealth);
+            _logger.LogInformation("Slow health loop: {Count:N0} records updated in Meilisearch", totalHealth);
         }
     }
 
     public static async Task EnsureIndexSettingsAsync(HttpClient http, CancellationToken ct)
     {
         await http.PostAsJsonAsync("/indexes", new { uid = "torrents", primaryKey = "infohash" }, ct);
+        await http.PatchAsJsonAsync("/indexes/torrents", new { primaryKey = "infohash" }, ct);
         var settings = new
         {
             searchableAttributes = new[] { "name", "name_clean" },
@@ -306,7 +307,7 @@ public class MeilisearchSyncService : BackgroundService
                 "popularity_score:desc",
                 "verified_at:desc"
             },
-            stopWords = new[] { "a", "an", "the", "and", "or", "of", "in", "for", "to", "with", "on", "at", "by", "from", "www", "com", "net", "org" },
+            stopWords = new[] { "a", "an", "the", "th", "teh", "and", "or", "of", "in", "for", "to", "with", "on", "at", "by", "from", "www", "com", "net", "org" },
             separatorTokens = new[] { "_", "-", "+", "[", "]", "(", ")" },
             synonyms = new Dictionary<string, string[]>
             {

@@ -21,6 +21,20 @@ public static class TorrentQueryParser
     private static readonly Regex TwoDigitYearRegex = new(@"\b(7\d|8\d|9\d)\b", RegexOptions.Compiled);
     private static readonly Regex LeadingArticlesRegex = new(@"\b(th|teh)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private static readonly HashSet<string> TheWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "theater", "theatre", "theatrical", "theatricals",
+        "theory", "theories", "theorist", "theorists",
+        "theology", "theological",
+        "theft", "thefts",
+        "theme", "themes", "thematic",
+        "thesis", "theses",
+        "therapy", "therapist", "therapists", "therapeutic",
+        "thermal",
+        "there", "thereby", "therefore", "therein", "thereof",
+        "these", "they", "their", "theirs", "them", "themselves", "then", "thence"
+    };
+
     // Splits scene dots between words/numbers, but preserves version numbers (e.g. 24.04, 5.1)
     public static ParsedQuery Parse(string? input)
     {
@@ -35,17 +49,25 @@ public static class TorrentQueryParser
 
         var clean = trimmed;
 
-        // 2. Normalize common article typos (th -> the, teh -> the)
+        // 2. Normalize glued article typos (e.g. "thmatrix" -> "the matrix", "thematrix" -> "the matrix", "tehmatrix" -> "the matrix")
+        clean = Regex.Replace(clean, @"\b(the|teh|th)([a-zA-Z]{3,})\b", m =>
+        {
+            var full = m.Value;
+            if (TheWords.Contains(full)) return full;
+            return "the " + m.Groups[2].Value;
+        }, RegexOptions.IgnoreCase);
+
+        // 3. Normalize common isolated article typos (th -> the, teh -> the)
         clean = LeadingArticlesRegex.Replace(clean, "the");
 
-        // 3. Scene release punctuation clean-up
+        // 4. Scene release punctuation clean-up
         // Replace brackets, underscores, pluses with spaces
         clean = Regex.Replace(clean, @"[_\-+\[\](){}]", " ");
 
         // Split dots unless it's a version number or audio channel (e.g. 5.1, 24.04, 7.1)
         clean = Regex.Replace(clean, @"(?<=[a-zA-Z])\.(?=[a-zA-Z0-9])|(?<=[0-9])\.(?=[a-zA-Z])|(?<=\b\d{4})\.(?=\d)", " ");
 
-        // 4. Contextual year expansion: 70-99 expands to 19xx (e.g. 'matrix 99' -> 'matrix 1999')
+        // 5. Contextual year expansion: 70-99 expands to 19xx (e.g. 'matrix 99' -> 'matrix 1999')
         // Does NOT expand 00-29 to avoid breaking TV show '24' or release versions
         clean = TwoDigitYearRegex.Replace(clean, m =>
         {

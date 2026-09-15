@@ -123,8 +123,8 @@ public class MeilisearchSearchProvider : ISearchProvider
             var raw = await resp.Content.ReadFromJsonAsync<MeiliRawResponse>(cancellationToken: timeoutCts.Token);
             var hits = (raw?.Hits ?? new()).Select(MapHit).ToList();
 
-            // 6. Relaxed Retry: If matchingStrategy: 'all' returned 0 hits for a multi-word query (>= 3 words), retry with 'last'
-            if (hits.Count == 0 && !string.IsNullOrWhiteSpace(parsed.CleanQuery) && parsed.CleanQuery.Split(' ').Length >= 3)
+            // 6. Relaxed Retry: If matchingStrategy: 'all' returned 0 hits for a multi-word query (>= 2 words), retry with 'last'
+            if (hits.Count == 0 && !string.IsNullOrWhiteSpace(parsed.CleanQuery) && parsed.CleanQuery.Split(' ').Length >= 2)
             {
                 var relaxedBody = new
                 {
@@ -204,8 +204,8 @@ public class MeilisearchSearchProvider : ISearchProvider
 
     private static SearchResultItem MapHit(MeiliTorrentHit h)
     {
-        DateTime? verifiedDate = h.VerifiedAt > 0 
-            ? DateTimeOffset.FromUnixTimeSeconds(h.VerifiedAt).UtcDateTime 
+        DateTime? verifiedDate = (h.VerifiedAt.HasValue && h.VerifiedAt.Value > 0)
+            ? DateTimeOffset.FromUnixTimeSeconds(h.VerifiedAt.Value).UtcDateTime 
             : null;
 
         return new SearchResultItem(
@@ -218,23 +218,51 @@ public class MeilisearchSearchProvider : ISearchProvider
 
 public class MeiliRawResponse
 {
+    [JsonPropertyName("hits")]
     public List<MeiliTorrentHit> Hits { get; set; } = new();
+
+    [JsonPropertyName("estimatedTotalHits")]
     public int EstimatedTotalHits { get; set; }
+
+    [JsonPropertyName("processingTimeMs")]
     public long ProcessingTimeMs { get; set; }
 }
 
 public class MeiliTorrentHit
 {
+    [JsonPropertyName("infohash")]
     public string Infohash { get; set; } = "";
+
+    [JsonPropertyName("name")]
     public string Name { get; set; } = "";
+
+    [JsonPropertyName("category")]
     public string Category { get; set; } = "Other";
+
+    [JsonPropertyName("total_size")]
     public long TotalSize { get; set; }
+
+    [JsonPropertyName("file_count")]
     public int FileCount { get; set; }
-    public long VerifiedAt { get; set; }
+
+    [JsonPropertyName("verified_at")]
+    public long? VerifiedAt { get; set; }
+
+    [JsonPropertyName("health_score")]
     public int HealthScore { get; set; }
+
+    [JsonPropertyName("popularity_score")]
     public int PopularityScore { get; set; }
+
+    [JsonPropertyName("swarm_peers")]
     public int SwarmPeers { get; set; }
+
+    [JsonPropertyName("seed_confirmed")]
     public bool SeedConfirmed { get; set; }
+
+    [JsonPropertyName("risk_tier")]
     public string RiskTier { get; set; } = "SAFE";
+
+    [JsonPropertyName("policy_action")]
     public string PolicyAction { get; set; } = "ALLOW";
 }
