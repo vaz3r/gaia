@@ -17,9 +17,10 @@ public class DatabaseService
         _cache = cache;
         _redis = redis;
         _logger = logger;
-        var connectionString = config.GetConnectionString("Postgres") 
+        var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL")
             ?? config["DATABASE_URL"]
-            ?? "Host=localhost;Port=5432;Database=craw;Username=crawler;Password=83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b;Pooling=true;Maximum Pool Size=50;Minimum Pool Size=5;";
+            ?? config.GetConnectionString("Postgres") 
+            ?? "Host=192.168.10.10;Port=6432;Database=craw;Username=crawler;Password=83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b;Pooling=true;Maximum Pool Size=50;Minimum Pool Size=5;Max Auto Prepare=0;No Reset On Close=true;";
 
         var builder = new NpgsqlDataSourceBuilder(connectionString);
         _dataSource = builder.Build();

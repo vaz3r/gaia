@@ -39,7 +39,7 @@ builder.Services.AddSingleton<CacheService>(sp =>
     return new CacheService(muxer, logger);
 });
 
-// ── Meilisearch HTTP Client ───────────────────────────────────────────────────
+// ── Search Providers ──────────────────────────────────────────────────────────
 var meiliUrl = builder.Configuration["Meilisearch:Url"]
     ?? Environment.GetEnvironmentVariable("MEILI_URL")
     ?? "http://127.0.0.1:7700";
@@ -47,21 +47,23 @@ var meiliKey = builder.Configuration["Meilisearch:ApiKey"]
     ?? Environment.GetEnvironmentVariable("MEILI_API_KEY")
     ?? "";
 
-builder.Services.AddHttpClient<MeilisearchClient>(client =>
+builder.Services.AddSingleton<PostgresTrigramSearchProvider>();
+builder.Services.AddHttpClient<ISearchProvider, MeilisearchSearchProvider>(client =>
 {
     client.BaseAddress = new Uri(meiliUrl);
-    client.Timeout     = TimeSpan.FromSeconds(10);
+    client.Timeout     = TimeSpan.FromMilliseconds(1500);
     if (!string.IsNullOrWhiteSpace(meiliKey))
         client.DefaultRequestHeaders.Add("Authorization", $"Bearer {meiliKey}");
 }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
 {
     PooledConnectionLifetime    = TimeSpan.FromMinutes(10),
     PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
-    MaxConnectionsPerServer     = 10,
+    MaxConnectionsPerServer     = 20,
 });
 
 // ── Meilisearch Sync Background Service ──────────────────────────────────────
 builder.Services.AddHostedService<MeilisearchSyncService>();
+builder.Services.Configure<HostOptions>(opts => opts.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore);
 
 // ── Core Services ─────────────────────────────────────────────────────────────
 builder.Services.AddMemoryCache();
@@ -93,9 +95,9 @@ app.MapDashboardEndpoints();
 
 app.MapGet("/health", () => Results.Ok(new
 {
-    status           = "healthy",
-    runtime          = ".NET 10.0",
-    meilisearch_ready = MeilisearchSyncService.IsReady
+    status          = "healthy",
+    runtime         = ".NET 10.0",
+    search_provider = "meilisearch-primary"
 }));
 
 app.MapGet("/", () => Results.Ok(new

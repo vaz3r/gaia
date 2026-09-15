@@ -1,97 +1,182 @@
-using System.Text.Json;
+using System.Net.Http.Json;
 using Dapper;
 
 namespace Gaia.Api.Services;
 
-/// <summary>
-/// Background service that keeps Meilisearch in sync with PostgreSQL.
-///
-/// Phase 1 (startup): Checks if index is populated. If < 500k docs,
-///   bulk-imports all 3.4M torrents in batches of 10,000.
-///   Falls back to PostgreSQL trigram search during import.
-///
-/// Phase 2 (steady state): Polls every 60s for recently verified/updated
-///   records and upserts them into Meilisearch.
-/// </summary>
 public class MeilisearchSyncService : BackgroundService
 {
     private readonly IServiceProvider _services;
+    private readonly IConfiguration _config;
     private readonly ILogger<MeilisearchSyncService> _logger;
-    private readonly string _meiliUrl;
-    private readonly string _meiliKey;
-
-    // Exposed so TorrentEndpoints can check readiness before using Meilisearch
-    public static volatile bool IsReady = false;
 
     public MeilisearchSyncService(
         IServiceProvider services,
         IConfiguration config,
         ILogger<MeilisearchSyncService> logger)
     {
-        _services  = services;
-        _logger    = logger;
-        _meiliUrl  = config["Meilisearch:Url"] ?? "http://127.0.0.1:7700";
-        _meiliKey  = config["Meilisearch:ApiKey"] ?? "";
+        _services = services;
+        _config = config;
+        _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        // Brief delay so the app fully starts before we touch PG
         await Task.Delay(TimeSpan.FromSeconds(3), ct);
 
         using var http = new HttpClient();
-        http.BaseAddress = new Uri(_meiliUrl);
-        if (!string.IsNullOrWhiteSpace(_meiliKey))
-            http.DefaultRequestHeaders.Add("Authorization", $"Bearer {_meiliKey}");
+        var meiliUrl = _config["Meilisearch:Url"] ?? "http://127.0.0.1:7700";
+        var meiliKey = _config["Meilisearch:ApiKey"] ?? "";
+        http.BaseAddress = new Uri(meiliUrl);
+        if (!string.IsNullOrWhiteSpace(meiliKey))
+            http.DefaultRequestHeaders.Add("Authorization", $"Bearer {meiliKey}");
 
-        // Ensure index exists with correct settings
-        await EnsureIndexConfiguredAsync(http, ct);
+        await EnsureIndexSettingsAsync(http, ct);
 
-        // Phase 1: Bulk import if needed
-        var docCount = await GetDocCountAsync(http, ct);
-        _logger.LogInformation("Meilisearch index has {Count:N0} documents", docCount);
-
-        if (docCount < 500_000)
+        // Read durable watermark from PostgreSQL
+        var watermark = await GetWatermarkFromDbAsync(ct);
+        if (!watermark.BackfillCompleted)
         {
-            _logger.LogInformation("Starting bulk import from PostgreSQL → Meilisearch...");
-            await BulkImportAsync(http, ct);
-        }
-        else
-        {
-            _logger.LogInformation("Meilisearch index already populated — skipping bulk import");
+            _logger.LogInformation("Resuming tie-safe composite backfill from: {CursorTs:u} / {CursorHash}...", 
+                watermark.LastCursorTs, watermark.LastCursorHash);
+            await KeysetBackfillAsync(http, watermark.LastCursorTs, watermark.LastCursorHash, ct);
         }
 
-        IsReady = true;
-        _logger.LogInformation("Meilisearch sync service ready. Starting incremental sync every 60s.");
-
-        // Phase 2: Incremental sync
-        var lastSync = DateTime.UtcNow.AddMinutes(-2); // overlap to catch anything missed
+        _logger.LogInformation("Entering incremental sync mode (every 30s) with deletion tracking...");
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(60), ct);
-                var syncFrom = lastSync;
-                lastSync = DateTime.UtcNow;
-                await IncrementalSyncAsync(http, syncFrom, ct);
+                await Task.Delay(TimeSpan.FromSeconds(30), ct);
+                await SyncIncrementalWithDeletesAsync(http, DateTime.UtcNow.AddMinutes(-3), ct);
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Incremental Meilisearch sync failed — will retry in 60s");
+                _logger.LogError(ex, "Incremental sync error — retrying in 30s");
             }
         }
     }
 
-    private async Task EnsureIndexConfiguredAsync(HttpClient http, CancellationToken ct)
+    // Blocker 2 Fix: Composite Keyset Pagination
+    private async Task KeysetBackfillAsync(HttpClient http, DateTime? initialTs, string? initialHash, CancellationToken ct)
+    {
+        using var scope = _services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<DatabaseService>();
+
+        const int batchSize = 5000;
+        DateTime? cursorTs   = initialTs;
+        string?   cursorHash = initialHash;
+        long totalSent = 0;
+
+        const string sql = """
+            SELECT encode(infohash, 'hex') AS infohash, name, category, total_size, file_count,
+                   EXTRACT(EPOCH FROM verified_at)::bigint AS verified_at,
+                   health_score, popularity_score, swarm_peers, seed_confirmed, risk_tier,
+                   COALESCE(policy_action, 'ALLOW') AS policy_action,
+                   verified_at AS raw_ts,
+                   encode(infohash, 'hex') AS raw_hash
+            FROM torrents
+            WHERE (CAST(@cursorTs AS timestamptz) IS NULL OR (verified_at, infohash) < (CAST(@cursorTs AS timestamptz), decode(CAST(@cursorHash AS text), 'hex')))
+              AND (policy_action IS NULL OR policy_action != 'SUPPRESS')
+            ORDER BY verified_at DESC, infohash DESC
+            LIMIT @lim;
+        """;
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await using var conn = await db.OpenConnectionAsync(ct);
+                var batch = (await conn.QueryAsync(sql, new { lim = batchSize, cursorTs, cursorHash })).AsList();
+                if (batch.Count == 0)
+                {
+                    await SaveWatermarkToDbAsync(true, cursorTs, cursorHash, ct);
+                    break;
+                }
+
+                var lastRow = (IDictionary<string, object?>)batch.Last();
+                var nextCursorTs   = (DateTime)lastRow["raw_ts"]!;
+                var nextCursorHash = (string)lastRow["raw_hash"]!;
+
+                var docs = batch.Select(r => (IDictionary<string, object?>)r).ToList();
+                var resp = await http.PostAsJsonAsync("/indexes/torrents/documents", docs, ct);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    _logger.LogWarning("Meilisearch backfill push returned {Code}, retrying in 5s...", resp.StatusCode);
+                    await Task.Delay(5000, ct);
+                    continue;
+                }
+
+                cursorTs   = nextCursorTs;
+                cursorHash = nextCursorHash;
+                totalSent += batch.Count;
+
+                await SaveWatermarkToDbAsync(false, cursorTs, cursorHash, ct);
+                _logger.LogInformation("Backfill: {Count:N0} records sent (Cursor: {Cursor:u} / {Hash})", totalSent, cursorTs, cursorHash);
+
+                await Task.Delay(250, ct);
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Meilisearch backfill error (service temporarily unavailable?), retrying in 5s...");
+                await Task.Delay(5000, ct);
+            }
+        }
+
+        _logger.LogInformation("Composite keyset backfill complete: {Total:N0} total sent.", totalSent);
+    }
+
+    // Blocker 1 Fix: Two-phase incremental sync (Upsert live + Delete suppressed)
+    private async Task SyncIncrementalWithDeletesAsync(HttpClient http, DateTime since, CancellationToken ct)
+    {
+        using var scope = _services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<DatabaseService>();
+
+        await using var conn = await db.OpenConnectionAsync(ct);
+
+        // 1. Upsert live documents
+        const string upsertSql = """
+            SELECT encode(infohash, 'hex') AS infohash, name, category, total_size, file_count,
+                   EXTRACT(EPOCH FROM verified_at)::bigint AS verified_at,
+                   health_score, popularity_score, swarm_peers, seed_confirmed, risk_tier,
+                   COALESCE(policy_action, 'ALLOW') AS policy_action
+            FROM torrents
+            WHERE (verified_at >= CAST(@since AS timestamptz) OR scored_at >= CAST(@since AS timestamptz) OR last_health_check >= CAST(@since AS timestamptz))
+              AND (policy_action IS NULL OR policy_action != 'SUPPRESS')
+            LIMIT 50000;
+        """;
+
+        var liveRows = (await conn.QueryAsync(upsertSql, new { since })).AsList();
+        if (liveRows.Count > 0)
+        {
+            var docs = liveRows.Select(r => (IDictionary<string, object?>)r).ToList();
+            await http.PostAsJsonAsync("/indexes/torrents/documents", docs, ct);
+            _logger.LogInformation("Incremental upsert: {Count:N0} records pushed to Meilisearch", docs.Count);
+        }
+
+        // 2. Delete suppressed documents
+        const string deleteSql = """
+            SELECT encode(infohash, 'hex') AS infohash
+            FROM torrents
+            WHERE (scored_at >= CAST(@since AS timestamptz) OR verified_at >= CAST(@since AS timestamptz))
+              AND policy_action = 'SUPPRESS'
+            LIMIT 10000;
+        """;
+
+        var suppressedHashes = (await conn.QueryAsync<string>(deleteSql, new { since })).AsList();
+        if (suppressedHashes.Count > 0)
+        {
+            await http.PostAsJsonAsync("/indexes/torrents/documents/delete-batch", suppressedHashes, ct);
+            _logger.LogInformation("Incremental delete: {Count:N0} suppressed torrents removed from Meilisearch", suppressedHashes.Count);
+        }
+    }
+
+    private async Task EnsureIndexSettingsAsync(HttpClient http, CancellationToken ct)
     {
         try
         {
-            // Create index (idempotent — returns 202 if already exists)
             await http.PostAsJsonAsync("/indexes", new { uid = "torrents", primaryKey = "infohash" }, ct);
-            await Task.Delay(1000, ct); // let Meilisearch process
-
-            // Configure settings
             var settings = new
             {
                 searchableAttributes = new[] { "name", "infohash" },
@@ -100,126 +185,66 @@ public class MeilisearchSyncService : BackgroundService
                 typoTolerance = new
                 {
                     enabled = true,
-                    minWordSizeForTypos = new { oneTypo = 4, twoTypos = 8 }
+                    minWordSizeForTypos = new { oneTypo = 3, twoTypos = 7 }
                 },
                 pagination = new { maxTotalHits = 100000 }
             };
-
-            var resp = await http.PatchAsJsonAsync("/indexes/torrents/settings", settings, ct);
-            _logger.LogInformation("Meilisearch index settings applied: {Status}", resp.StatusCode);
+            await http.PatchAsJsonAsync("/indexes/torrents/settings", settings, ct);
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to configure Meilisearch index settings");
-        }
+        catch (Exception ex) { _logger.LogWarning(ex, "Index settings setup notice"); }
     }
 
-    private async Task<long> GetDocCountAsync(HttpClient http, CancellationToken ct)
+    private async Task<SyncWatermark> GetWatermarkFromDbAsync(CancellationToken ct)
     {
         try
         {
-            var resp = await http.GetFromJsonAsync<JsonDocument>("/indexes/torrents/stats", ct);
-            return resp?.RootElement.GetProperty("numberOfDocuments").GetInt64() ?? 0;
-        }
-        catch { return 0; }
-    }
-
-    private async Task BulkImportAsync(HttpClient http, CancellationToken ct)
-    {
-        using var scope = _services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<DatabaseService>();
-
-        const int batchSize = 10_000;
-        long offset = 0;
-        long total  = 0;
-
-        const string sql = """
-            SELECT
-                encode(infohash, 'hex')  AS infohash,
-                name,
-                category,
-                total_size,
-                file_count,
-                EXTRACT(EPOCH FROM verified_at)::bigint AS verified_at,
-                health_score,
-                popularity_score,
-                swarm_peers,
-                seed_confirmed,
-                risk_tier,
-                policy_action
-            FROM torrents
-            WHERE policy_action IS DISTINCT FROM 'SUPPRESS'
-            ORDER BY verified_at DESC
-            LIMIT @lim OFFSET @off
-        """;
-
-        while (!ct.IsCancellationRequested)
-        {
+            using var scope = _services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<DatabaseService>();
             await using var conn = await db.OpenConnectionAsync(ct);
-            var batch = (await conn.QueryAsync(sql, new { lim = batchSize, off = offset })).AsList();
-            if (batch.Count == 0) break;
 
-            var docs = batch.Select(r => (IDictionary<string, object?>)r).ToList();
-            await IndexDocumentsAsync(http, docs, ct);
+            await conn.ExecuteAsync("""
+                CREATE TABLE IF NOT EXISTS portal_sync_state (
+                    id INT PRIMARY KEY DEFAULT 1,
+                    backfill_completed BOOLEAN NOT NULL DEFAULT FALSE,
+                    last_cursor_ts TIMESTAMPTZ,
+                    last_cursor_hash VARCHAR(40),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+            """);
 
-            total  += batch.Count;
-            offset += batchSize;
-            _logger.LogInformation("Bulk import progress: {Total:N0} documents indexed", total);
-
-            // Small pause to avoid overwhelming Meilisearch during indexing
-            await Task.Delay(200, ct);
+            var row = await conn.QuerySingleOrDefaultAsync<SyncWatermark>(
+                "SELECT backfill_completed AS BackfillCompleted, last_cursor_ts AS LastCursorTs, last_cursor_hash AS LastCursorHash FROM portal_sync_state WHERE id = 1;"
+            );
+            return row ?? new SyncWatermark();
         }
-
-        _logger.LogInformation("Bulk import complete: {Total:N0} total documents", total);
+        catch { return new SyncWatermark(); }
     }
 
-    private async Task IncrementalSyncAsync(HttpClient http, DateTime since, CancellationToken ct)
+    private async Task SaveWatermarkToDbAsync(bool completed, DateTime? cursorTs, string? cursorHash, CancellationToken ct)
     {
-        using var scope = _services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<DatabaseService>();
-
-        const string sql = """
-            SELECT
-                encode(infohash, 'hex')  AS infohash,
-                name,
-                category,
-                total_size,
-                file_count,
-                EXTRACT(EPOCH FROM verified_at)::bigint AS verified_at,
-                health_score,
-                popularity_score,
-                swarm_peers,
-                seed_confirmed,
-                risk_tier,
-                policy_action
-            FROM torrents
-            WHERE verified_at >= @since
-              AND policy_action IS DISTINCT FROM 'SUPPRESS'
-            LIMIT 50000
-        """;
-
-        await using var conn = await db.OpenConnectionAsync(ct);
-        var rows = (await conn.QueryAsync(sql, new { since })).AsList();
-        if (rows.Count == 0) return;
-
-        var docs = rows.Select(r => (IDictionary<string, object?>)r).ToList();
-        await IndexDocumentsAsync(http, docs, ct);
-        _logger.LogInformation("Incremental sync: upserted {Count:N0} records", docs.Count);
-    }
-
-    private async Task IndexDocumentsAsync(HttpClient http, List<IDictionary<string, object?>> docs, CancellationToken ct)
-    {
-        // Batch into 5,000-doc chunks for Meilisearch's optimal ingestion
-        const int chunkSize = 5_000;
-        for (int i = 0; i < docs.Count; i += chunkSize)
+        try
         {
-            var chunk = docs.Skip(i).Take(chunkSize).ToList();
-            var resp  = await http.PostAsJsonAsync("/indexes/torrents/documents", chunk, ct);
-            if (!resp.IsSuccessStatusCode)
-            {
-                var err = await resp.Content.ReadAsStringAsync(ct);
-                _logger.LogWarning("Meilisearch index error: {Status} {Error}", resp.StatusCode, err[..Math.Min(200, err.Length)]);
-            }
+            using var scope = _services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<DatabaseService>();
+            await using var conn = await db.OpenConnectionAsync(ct);
+
+            await conn.ExecuteAsync("""
+                INSERT INTO portal_sync_state (id, backfill_completed, last_cursor_ts, last_cursor_hash, updated_at)
+                VALUES (1, @completed, @cursorTs, @cursorHash, NOW())
+                ON CONFLICT (id) DO UPDATE SET
+                    backfill_completed = EXCLUDED.backfill_completed,
+                    last_cursor_ts = EXCLUDED.last_cursor_ts,
+                    last_cursor_hash = EXCLUDED.last_cursor_hash,
+                    updated_at = NOW();
+            """, new { completed, cursorTs, cursorHash });
         }
+        catch { /* non-fatal */ }
     }
+}
+
+public class SyncWatermark
+{
+    public bool BackfillCompleted { get; set; }
+    public DateTime? LastCursorTs { get; set; }
+    public string? LastCursorHash { get; set; }
 }

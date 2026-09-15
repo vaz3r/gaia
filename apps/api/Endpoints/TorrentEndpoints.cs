@@ -19,7 +19,7 @@ public static class TorrentEndpoints
             [FromQuery] string? sort,
             [FromQuery] string? sort_by,
             [FromQuery] string? order,
-            MeilisearchClient meili,
+            ISearchProvider searchProvider,
             DatabaseService db,
             CancellationToken ct) =>
         {
@@ -51,54 +51,27 @@ public static class TorrentEndpoints
                 });
             }
 
-            // ── Search path ───────────────────────────────────────────────────
-            // Use Meilisearch when ready (5–20ms, BM25, typo-tolerant).
-            // Fall back to PostgreSQL trigram during the initial bulk import (~5-10 min after first deploy).
-            if (MeilisearchSyncService.IsReady)
+            // ── Search path (Meilisearch primary, PostgreSQL trigram fallback) ─
+            var results = await searchProvider.SearchAsync(
+                query:    effectiveQuery,
+                category: category,
+                page:     safePage,
+                limit:    safeLimit,
+                sortBy:   effectiveSort,
+                order:    order ?? "desc",
+                ct:       ct);
+
+            return Results.Ok(new
             {
-                var results = await meili.SearchAsync(
-                    query:    effectiveQuery,
-                    category: category,
-                    page:     safePage,
-                    limit:    safeLimit,
-                    sortBy:   effectiveSort,
-                    order:    order ?? "desc",
-                    ct:       ct);
-
-                return Results.Ok(new
-                {
-                    data      = results.Hits,
-                    page      = safePage,
-                    limit     = safeLimit,
-                    total     = results.Total,
-                    pages     = Math.Max(1, (int)Math.Ceiling((double)results.Total / safeLimit)),
-                    elapsed_ms = results.ElapsedMs,
-                    from_cache = results.FromCache,
-                    source    = results.FromCache ? "redis" : "meilisearch"
-                });
-            }
-
-            // ── Fallback: PostgreSQL trigram search (during Meilisearch index build) ──
-            {
-                var (items, total) = await db.SearchTorrentsAsync(
-                    query:    effectiveQuery,
-                    category: category,
-                    page:     safePage,
-                    limit:    safeLimit,
-                    sortBy:   effectiveSort,
-                    order:    order ?? "desc",
-                    ct:       ct);
-
-                return Results.Ok(new
-                {
-                    data      = items,
-                    page      = safePage,
-                    limit     = safeLimit,
-                    total,
-                    pages     = Math.Max(1, (int)Math.Ceiling((double)total / safeLimit)),
-                    source    = "postgresql-fallback"
-                });
-            }
+                data       = results.Items,
+                page       = safePage,
+                limit      = safeLimit,
+                total      = results.Total,
+                pages      = Math.Max(1, (int)Math.Ceiling((double)results.Total / safeLimit)),
+                elapsed_ms = results.ElapsedMs,
+                from_cache = results.FromCache,
+                source     = results.Provider
+            });
         });
 
         // 2. Single torrent details
