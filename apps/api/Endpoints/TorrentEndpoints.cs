@@ -11,6 +11,7 @@ public static class TorrentEndpoints
 
         // 1. List / Search endpoint
         group.MapGet("/", async (
+            HttpContext httpContext,
             [FromQuery] string? q,
             [FromQuery] string? search,
             [FromQuery] string? category,
@@ -38,6 +39,9 @@ public static class TorrentEndpoints
                 order:    order ?? "desc",
                 ct:       ct);
 
+            // Diagnostic observability headers
+            SetDiagnosticHeaders(httpContext, results);
+
             return Results.Ok(new
             {
                 data       = results.Items,
@@ -53,6 +57,7 @@ public static class TorrentEndpoints
 
         // 2. Single torrent details
         group.MapGet("/{infohash}", async (
+            HttpContext httpContext,
             string infohash,
             DatabaseService db,
             CancellationToken ct) =>
@@ -60,6 +65,11 @@ public static class TorrentEndpoints
             var torrent = await db.GetTorrentDetailsAsync(infohash, ct);
             if (torrent is null)
                 return Results.NotFound(new { error = "Torrent not found" });
+
+            if (ShouldEmitHeaders(httpContext))
+            {
+                httpContext.Response.Headers["X-Search-Source"] = "postgresql";
+            }
 
             return Results.Ok(torrent);
         });
@@ -101,5 +111,31 @@ public static class TorrentEndpoints
             };
             return Results.Ok(categories);
         }).WithTags("Categories");
+    }
+
+    private static void SetDiagnosticHeaders(HttpContext ctx, SearchResponse results)
+    {
+        if (ShouldEmitHeaders(ctx))
+        {
+            ctx.Response.Headers["X-Search-Source"] = results.Provider;
+            ctx.Response.Headers["X-Cache"] = results.FromCache ? "HIT" : "MISS";
+            ctx.Response.Headers["X-Cache-Tier"] = results.CacheTier;
+            ctx.Response.Headers["X-Elapsed-Ms"] = results.ElapsedMs.ToString();
+            ctx.Response.Headers["X-Total-Hits"] = results.Total.ToString();
+        }
+    }
+
+    private static bool ShouldEmitHeaders(HttpContext ctx)
+    {
+        // Emit if explicitly requested via X-Debug header
+        if (ctx.Request.Headers.ContainsKey("X-Debug")) return true;
+
+        // Emit if client is internal/Tailscale/LAN
+        var ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
+        return ip == "127.0.0.1" || ip == "::1" 
+            || ip.StartsWith("100.")    // Tailscale
+            || ip.StartsWith("192.168.") // Private LAN
+            || ip.StartsWith("10.") 
+            || ip.StartsWith("172.");
     }
 }

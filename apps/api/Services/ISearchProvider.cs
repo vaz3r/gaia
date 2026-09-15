@@ -24,7 +24,8 @@ public record SearchResponse(
     int Limit,
     long ElapsedMs,
     bool FromCache,
-    string Provider
+    string Provider,
+    string CacheTier = "none"
 );
 
 public interface ISearchProvider
