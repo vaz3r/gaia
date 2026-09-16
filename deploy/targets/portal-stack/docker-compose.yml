@@ -77,6 +77,11 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       Meilisearch__Url: http://meilisearch:7700
       Meilisearch__ApiKey: ${MEILI_MASTER_KEY:-meili_secure_master_key_v2_modern_scaling}
+      NTFY_TOPIC: ${NTFY_TOPIC:-}
+      NTFY_AUTH_TOKEN: ${NTFY_AUTH_TOKEN:-}
+      NTFY_SERVER: ${NTFY_SERVER:-https://ntfy.sh}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      HEALTHCHECKS_URL: ${HEALTHCHECKS_URL:-}
     depends_on:
       redis:
         condition: service_healthy

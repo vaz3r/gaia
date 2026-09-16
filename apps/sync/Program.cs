@@ -77,10 +77,6 @@ using var httpClient = new HttpClient();
 var meiliClientLogger = loggerFactory.CreateLogger<MeiliClient>();
 var meiliClient = new MeiliClient(httpClient, meiliUrl, meiliKey, meiliClientLogger);
 
-var stateRepo = new SyncStateRepository(pgConnStr);
-var syncEngineLogger = loggerFactory.CreateLogger<SyncEngine>();
-var engine = new SyncEngine(pgConnStr, meiliClient, stateRepo, redis, syncEngineLogger);
-
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>
 {
@@ -89,6 +85,37 @@ Console.CancelKeyPress += (_, e) =>
     cts.Cancel();
 };
 
+// 1. Reconciler CLI switches (isolated before constructing SyncEngine)
+if (args.Contains("--test-alert") || args.Contains("--reconcile-once") || args.Contains("--heartbeat"))
+{
+    var reconcilerLogger = loggerFactory.CreateLogger<SearchReconciler>();
+    var reconciler = new SearchReconciler(pgConnStr, meiliClient, redis, reconcilerLogger);
+
+    if (args.Contains("--test-alert"))
+    {
+        logger.LogInformation("CLI flag --test-alert detected. Executing alert test harness...");
+        await reconciler.RunTestAlertHarnessAsync(cts.Token);
+        return;
+    }
+
+    if (args.Contains("--heartbeat"))
+    {
+        logger.LogInformation("CLI flag --heartbeat detected. Running single check with forced heartbeat...");
+        var ok = await reconciler.ReconcileAsync(forceHeartbeat: true, updateHeartbeatSchedule: false, triggerAlert: true, ct: cts.Token);
+        Environment.ExitCode = ok ? 0 : 1;
+        return;
+    }
+
+    if (args.Contains("--reconcile-once"))
+    {
+        logger.LogInformation("CLI flag --reconcile-once detected. Running single reconciliation check...");
+        var ok = await reconciler.ReconcileAsync(forceHeartbeat: false, updateHeartbeatSchedule: false, triggerAlert: true, ct: cts.Token);
+        Environment.ExitCode = ok ? 0 : 1;
+        return;
+    }
+}
+
+// 2. Seeder / Swap CLI switches
 if (args.Contains("--seed-redis-health"))
 {
     logger.LogInformation("CLI flag --seed-redis-health detected. Executing Redis Health Seed into DB 1...");
@@ -113,6 +140,13 @@ if (args.Contains("--test-swap"))
     logger.LogInformation("Dry-run swap test passed completely.");
     return;
 }
+
+// 3. Continuous Sync Engine Execution
+var stateRepo = new SyncStateRepository(pgConnStr);
+var engineReconcilerLogger = loggerFactory.CreateLogger<SearchReconciler>();
+var engineReconciler = new SearchReconciler(pgConnStr, meiliClient, redis, engineReconcilerLogger);
+var syncEngineLogger = loggerFactory.CreateLogger<SyncEngine>();
+var engine = new SyncEngine(pgConnStr, meiliClient, stateRepo, redis, engineReconciler, syncEngineLogger);
 
 if (args.Contains("--rebuild-zero-downtime"))
 {

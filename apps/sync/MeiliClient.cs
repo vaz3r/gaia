@@ -219,6 +219,41 @@ public class MeiliClient
             if (task != null) await WaitForTaskAsync(task.TaskUid);
         }
     }
+
+    public async Task<Dictionary<string, JsonElement>?> GetStatsAsync(string indexUid)
+    {
+        try
+        {
+            var resp = await _httpClient.GetAsync($"/indexes/{indexUid}/stats");
+            if (resp.IsSuccessStatusCode)
+            {
+                return await resp.Content.ReadFromJsonAsync<Dictionary<string, JsonElement>>();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch stats for index {IndexUid}", indexUid);
+        }
+        return null;
+    }
+
+    public async Task<JsonElement?> GetDocumentAsync(string indexUid, string docId)
+    {
+        try
+        {
+            var resp = await _httpClient.GetAsync($"/indexes/{indexUid}/documents/{docId}");
+            if (resp.IsSuccessStatusCode)
+            {
+                using var doc = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+                return doc.RootElement.Clone();
+            }
+        }
+        catch
+        {
+            // not found or error
+        }
+        return null;
+    }
 }
 
 public class MeiliTaskResponse

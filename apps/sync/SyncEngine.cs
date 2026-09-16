@@ -12,6 +12,7 @@ public class SyncEngine
     private readonly MeiliClient _meili;
     private readonly SyncStateRepository _stateRepo;
     private readonly IConnectionMultiplexer _redis;
+    private readonly SearchReconciler _reconciler;
     private readonly ILogger<SyncEngine> _logger;
 
     private DateTime _lastGenBump = DateTime.MinValue;
@@ -24,12 +25,14 @@ public class SyncEngine
         MeiliClient meili,
         SyncStateRepository stateRepo,
         IConnectionMultiplexer redis,
+        SearchReconciler reconciler,
         ILogger<SyncEngine> logger)
     {
         _pgConnString = pgConnString;
         _meili = meili;
         _stateRepo = stateRepo;
         _redis = redis;
+        _reconciler = reconciler;
         _logger = logger;
     }
 
@@ -58,13 +61,14 @@ public class SyncEngine
             await DrainBackfillAsync(ct);
         }
 
-        // Start continuous decoupled loops (Fast Ingest, Suppression, Dictionary)
+        // Start continuous decoupled loops (Fast Ingest, Suppression, Dictionary, and Hourly Reconciler)
         // Note: Health Loop and Decay Sweep Loop are permanently deleted; volatile metrics reside in Redis DB 1.
         var tasks = new[]
         {
             RunFastLoopAsync(ct),
             RunSuppressionLoopAsync(ct),
-            RunDictionaryRefreshLoopAsync(ct)
+            RunDictionaryRefreshLoopAsync(ct),
+            _reconciler.RunHourlyLoopAsync(ct)
         };
 
         await Task.WhenAll(tasks);
