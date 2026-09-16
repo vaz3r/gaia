@@ -21,6 +21,11 @@ logger.LogInformation("Gaia.Sync worker initializing...");
 var pgConnStr = Environment.GetEnvironmentVariable("DATABASE_URL")
     ?? "Host=192.168.10.10;Port=5432;Database=craw;Username=crawler;Password=83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b;Pooling=false;";
 
+if (!pgConnStr.Contains("Command Timeout", StringComparison.OrdinalIgnoreCase))
+{
+    pgConnStr = pgConnStr.TrimEnd(';') + ";Command Timeout=180;Timeout=60;";
+}
+
 var meiliUrl = Environment.GetEnvironmentVariable("Meilisearch__Url")
     ?? "http://meilisearch:7700";
 
@@ -38,8 +43,25 @@ logger.LogInformation("Target Redis: {Url}", redisUrl);
 IConnectionMultiplexer redis;
 try
 {
-    var redisEndpoint = redisUrl.Replace("redis://", "").TrimEnd('/');
-    var redisConfig = ConfigurationOptions.Parse(redisEndpoint);
+    ConfigurationOptions redisConfig;
+    if (Uri.TryCreate(redisUrl, UriKind.Absolute, out var uri) && (uri.Scheme == "redis" || uri.Scheme == "rediss"))
+    {
+        var host = uri.Host;
+        var port = uri.Port > 0 ? uri.Port : 6379;
+        var userInfo = uri.UserInfo;
+        var password = userInfo.Contains(':') ? userInfo.Split(':')[1] : userInfo;
+        redisConfig = new ConfigurationOptions
+        {
+            EndPoints = { { host, port } },
+            Password = string.IsNullOrEmpty(password) ? null : password,
+            Ssl = uri.Scheme == "rediss"
+        };
+    }
+    else
+    {
+        redisConfig = ConfigurationOptions.Parse(redisUrl.Replace("redis://", "").TrimEnd('/'));
+    }
+
     redisConfig.AbortOnConnectFail = false;
     redisConfig.ConnectRetry = 5;
     redis = await ConnectionMultiplexer.ConnectAsync(redisConfig);
@@ -66,6 +88,39 @@ Console.CancelKeyPress += (_, e) =>
     logger.LogInformation("Shutdown signal received. Cancelling worker...");
     cts.Cancel();
 };
+
+if (args.Contains("--seed-redis-health"))
+{
+    logger.LogInformation("CLI flag --seed-redis-health detected. Executing Redis Health Seed into DB 1...");
+    var seederLogger = loggerFactory.CreateLogger<RedisHealthSeeder>();
+    var seeder = new RedisHealthSeeder(pgConnStr, redis, seederLogger);
+    await seeder.SeedAsync(cts.Token);
+    logger.LogInformation("Redis Health Seeding finished successfully.");
+    return;
+}
+
+if (args.Contains("--test-swap"))
+{
+    logger.LogInformation("CLI flag --test-swap detected. Executing test swap on test_a / test_b...");
+    await meiliClient.EnsureIndexAndSettingsAsync("test_a");
+    await meiliClient.EnsureIndexAndSettingsAsync("test_b");
+    await meiliClient.PushBatchToIndexAsync("test_a", new[] { new { infohash = "0000000000000000000000000000000000000001", name = "Test Index A" } }, waitForTask: true);
+    await meiliClient.PushBatchToIndexAsync("test_b", new[] { new { infohash = "0000000000000000000000000000000000000002", name = "Test Index B" } }, waitForTask: true);
+    await meiliClient.SwapIndexesAsync("test_a", "test_b", cts.Token);
+    logger.LogInformation("Test swap succeeded! Cleaning up test indexes...");
+    await meiliClient.DeleteIndexAsync("test_a");
+    await meiliClient.DeleteIndexAsync("test_b");
+    logger.LogInformation("Dry-run swap test passed completely.");
+    return;
+}
+
+if (args.Contains("--rebuild-zero-downtime"))
+{
+    logger.LogInformation("CLI flag --rebuild-zero-downtime detected. Executing zero-downtime rebuild into torrents_v2...");
+    await engine.RebuildTorrentsV2AndSwapAsync(cts.Token);
+    logger.LogInformation("Zero-downtime rebuild finished successfully.");
+    return;
+}
 
 try
 {

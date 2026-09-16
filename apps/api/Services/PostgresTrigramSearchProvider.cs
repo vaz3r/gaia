@@ -65,7 +65,8 @@ public class PostgresTrigramSearchProvider : ISearchProvider
         """;
 
         await using var conn = await _db.OpenConnectionAsync(ct);
-        var rows = (await conn.QueryAsync(sql, dynParams)).Select(MapRow).ToList();
+        var commandDefinition = new CommandDefinition(sql, dynParams, cancellationToken: ct, commandTimeout: 5);
+        var rows = (await conn.QueryAsync(commandDefinition)).Select(MapRow).ToList();
 
         long total = rows.Count < safeLimit ? offset + rows.Count : 50000;
         sw.Stop();
@@ -76,7 +77,7 @@ public class PostgresTrigramSearchProvider : ISearchProvider
 
     private static SearchResultItem MapRow(dynamic r) => new(
         r.infohash, r.name, r.category ?? "Other", (long)(r.total_size ?? 0), (int)(r.file_count ?? 0),
-        r.verified_at as DateTime?, (int)(r.health_score ?? 0), (int)(r.popularity_score ?? 0),
+        r.verified_at as DateTime?, (int?)r.health_score, (int)(r.popularity_score ?? 0),
         (int)(r.swarm_peers ?? 0), (bool)(r.seed_confirmed ?? false), r.risk_tier ?? "SAFE", r.policy_action ?? "ALLOW"
     );
 }

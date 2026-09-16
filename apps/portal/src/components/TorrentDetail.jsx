@@ -136,7 +136,7 @@ export default function TorrentDetail({ infohash, onClose }) {
                   <Attr label="File Count" value={tor.file_count} />
                   <Attr label="Piece Length" value={formatBytes(tor.piece_length)} />
                   <Attr label="Category" value={tor.category || 'Uncategorized'} highlight />
-                  <Attr label="Health Score" value={`${tor.health_score ?? 0} / 100`} highlight={tor.health_score >= 70} />
+                  <Attr label="Health Score" value={tor.health_score !== null && tor.health_score !== undefined ? `${tor.health_score} / 100` : '—'} highlight={tor.health_score >= 70} />
                   <Attr label="Active Swarm" value={`${tor.swarm_peers ?? 0} peers`} />
                   <Attr label="Seed Confirmed" value={tor.seed_confirmed ? 'YES' : 'NO'} />
                   <Attr label="Popularity" value={`${tor.popularity_score ?? 0} pts`} />

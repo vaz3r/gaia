@@ -17,8 +17,7 @@ public class MeilisearchSearchProvider : ISearchProvider
     private static readonly string[] RetrievalAttributes = new[]
     {
         "infohash", "name", "category", "total_size", "file_count",
-        "verified_at", "health_score", "popularity_score",
-        "swarm_peers", "seed_confirmed", "risk_tier", "policy_action"
+        "verified_at", "popularity_tier", "risk_tier", "policy_action"
     };
 
     public MeilisearchSearchProvider(
@@ -92,8 +91,7 @@ public class MeilisearchSearchProvider : ISearchProvider
         string[]? sort = sortBy?.ToLowerInvariant() switch
         {
             "size" or "total_size"             => new[] { $"total_size:{dir}" },
-            "health" or "health_score"         => new[] { $"health_score:{dir}" },
-            "popularity" or "popularity_score" => new[] { $"popularity_score:{dir}" },
+            "popularity" or "popularity_score" => new[] { $"popularity_tier:{dir}" },
             "date" or "verified_at"            => new[] { $"verified_at:{dir}" },
             _                                  => string.IsNullOrWhiteSpace(parsed.CleanQuery)
                                                     ? new[] { $"verified_at:{dir}" }
@@ -181,7 +179,9 @@ public class MeilisearchSearchProvider : ISearchProvider
                 }
             }
 
-            var hits = (raw?.Hits ?? new()).Select(MapHit).ToList();
+            var rawHits = raw?.Hits ?? new();
+            await HydrateVolatileMetricsAsync(rawHits, budgetCts.Token);
+            var hits = rawHits.Select(MapHit).ToList();
             _circuitBreaker.RecordSuccess();
 
             var response = new SearchResponse(
@@ -222,6 +222,7 @@ public class MeilisearchSearchProvider : ISearchProvider
                 var hit = await resp.Content.ReadFromJsonAsync<MeiliTorrentHit>(cancellationToken: cts.Token);
                 if (hit is not null)
                 {
+                    await HydrateVolatileMetricsAsync(new List<MeiliTorrentHit> { hit }, cts.Token);
                     var item = MapHit(hit);
                     var result = new SearchResponse(new List<SearchResultItem> { item }, 1, 1, 1, 1, false, "meilisearch", "none");
                     _memCache.Set(cacheKey, result, TimeSpan.FromSeconds(60));
@@ -236,6 +237,89 @@ public class MeilisearchSearchProvider : ISearchProvider
         }
 
         return await _fallback.SearchAsync(infohash, null, 1, 1, null, "desc", ct);
+    }
+
+    private async Task HydrateVolatileMetricsAsync(List<MeiliTorrentHit> hits, CancellationToken ct)
+    {
+        if (hits.Count == 0) return;
+
+        try
+        {
+            var db1 = _redis.GetDatabase(1);
+            if (db1 == null) return;
+
+            var batch = db1.CreateBatch();
+            var tasks = new Task<StackExchange.Redis.RedisValue[]>[hits.Count];
+            var hashFields = new StackExchange.Redis.RedisValue[] { "h", "p", "s", "c", "t" };
+
+            for (int i = 0; i < hits.Count; i++)
+            {
+                tasks[i] = batch.HashGetAsync($"gaia:health:{hits[i].Infohash}", hashFields);
+            }
+
+            batch.Execute();
+            await Task.WhenAll(tasks);
+
+            var nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+            for (int i = 0; i < hits.Count; i++)
+            {
+                var vals = tasks[i].Result;
+                if (vals == null || vals.Length < 5 || !vals[0].HasValue)
+                {
+                    hits[i].HealthScore = null;
+                    continue;
+                }
+
+                int rawH = vals[0].TryParse(out int parsedH) ? parsedH : 0;
+                int p = vals[1].TryParse(out int parsedP) ? parsedP : 0;
+                int s = vals[2].TryParse(out int parsedS) ? parsedS : 0;
+                bool c = vals[3].TryParse(out int parsedC) && parsedC == 1;
+                long? t = (vals[4].HasValue && vals[4].TryParse(out long parsedT)) ? parsedT : null;
+
+                hits[i].PopularityScore = p;
+                hits[i].SwarmPeers = s;
+
+                if (!t.HasValue)
+                {
+                    // Unprobed: never actively health-probed -> Unknown (no seeder claim)
+                    hits[i].HealthScore = null;
+                    hits[i].SeedConfirmed = false;
+                }
+                else
+                {
+                    hits[i].SeedConfirmed = c;
+                    var days = (nowUnix - t.Value) / 86400.0;
+                    int h = rawH;
+
+                    // 1. Linear age decay (> 7 days decays to 0 by day 30)
+                    if (days > 7.0)
+                    {
+                        if (days >= 30.0)
+                        {
+                            h = 0;
+                        }
+                        else
+                        {
+                            double ratio = 1.0 - ((days - 7.0) / 23.0);
+                            h = (int)Math.Max(0, Math.Round(rawH * ratio));
+                        }
+                    }
+
+                    // 2. Peer penalty composed after age: only floor to 0 if data is old enough (> 7 days) and peers == 0
+                    if (days > 7.0 && s == 0)
+                    {
+                        h = 0;
+                    }
+
+                    hits[i].HealthScore = h;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to hydrate volatile metrics from Redis DB 1; rendering default/cached metrics.");
+        }
     }
 
     private static SearchResultItem MapHit(MeiliTorrentHit h)
@@ -300,7 +384,7 @@ public class MeiliTorrentHit
     public JsonElement VerifiedAt { get; set; }
 
     [JsonPropertyName("health_score")]
-    public int HealthScore { get; set; }
+    public int? HealthScore { get; set; }
 
     [JsonPropertyName("popularity_score")]
     public int PopularityScore { get; set; }
@@ -310,6 +394,9 @@ public class MeiliTorrentHit
 
     [JsonPropertyName("seed_confirmed")]
     public bool SeedConfirmed { get; set; }
+
+    [JsonPropertyName("popularity_tier")]
+    public int PopularityTier { get; set; }
 
     [JsonPropertyName("risk_tier")]
     public string RiskTier { get; set; } = "SAFE";

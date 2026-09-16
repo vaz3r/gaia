@@ -35,12 +35,12 @@ public class SyncEngine
 
     public async Task RunAsync(CancellationToken ct)
     {
-        _logger.LogInformation("Starting Gaia.Sync Engine...");
+        _logger.LogInformation("Starting Gaia.Sync Engine (Decoupled Architecture)...");
 
-        // Ensure Meilisearch settings
+        // Ensure live Meilisearch settings
         try
         {
-            await _meili.EnsureIndexAndSettingsAsync();
+            await _meili.EnsureIndexAndSettingsAsync("torrents");
         }
         catch (Exception ex)
         {
@@ -50,7 +50,7 @@ public class SyncEngine
         // Generate initial dictionary in background
         _ = Task.Run(() => BuildCorpusDictionaryAsync(ct), ct);
 
-        // Check if backfill is pending
+        // Check if initial backfill is pending
         var backfillState = await _stateRepo.GetStateAsync("backfill");
         if (!backfillState.Completed)
         {
@@ -58,13 +58,12 @@ public class SyncEngine
             await DrainBackfillAsync(ct);
         }
 
-        // Start continuous loops
+        // Start continuous decoupled loops (Fast Ingest, Suppression, Dictionary)
+        // Note: Health Loop and Decay Sweep Loop are permanently deleted; volatile metrics reside in Redis DB 1.
         var tasks = new[]
         {
             RunFastLoopAsync(ct),
-            RunHealthLoopAsync(ct),
             RunSuppressionLoopAsync(ct),
-            RunDecaySweepLoopAsync(ct),
             RunDictionaryRefreshLoopAsync(ct)
         };
 
@@ -89,9 +88,12 @@ public class SyncEngine
             {
                 query = @"
                     SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
-                           t.verified_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
-                           t.risk_tier, t.policy_action, t.availability_state,
-                           COALESCE(t.last_health_attempt, t.last_health_check, t.verified_at) AS last_health_attempt
+                           t.verified_at, t.updated_at, t.risk_tier, t.policy_action, t.availability_state,
+                           (CASE WHEN COALESCE(t.popularity_score, 0) >= 75 THEN 4
+                                 WHEN COALESCE(t.popularity_score, 0) >= 50 THEN 3
+                                 WHEN COALESCE(t.popularity_score, 0) >= 25 THEN 2
+                                 WHEN COALESCE(t.popularity_score, 0) >= 5  THEN 1
+                                 ELSE 0 END) AS popularity_tier
                     FROM torrents t
                     WHERE t.policy_action IS DISTINCT FROM 'SUPPRESS'
                     ORDER BY t.verified_at ASC, t.infohash ASC
@@ -102,9 +104,12 @@ public class SyncEngine
             {
                 query = @"
                     SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
-                           t.verified_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
-                           t.risk_tier, t.policy_action, t.availability_state,
-                           COALESCE(t.last_health_attempt, t.last_health_check, t.verified_at) AS last_health_attempt
+                           t.verified_at, t.updated_at, t.risk_tier, t.policy_action, t.availability_state,
+                           (CASE WHEN COALESCE(t.popularity_score, 0) >= 75 THEN 4
+                                 WHEN COALESCE(t.popularity_score, 0) >= 50 THEN 3
+                                 WHEN COALESCE(t.popularity_score, 0) >= 25 THEN 2
+                                 WHEN COALESCE(t.popularity_score, 0) >= 5  THEN 1
+                                 ELSE 0 END) AS popularity_tier
                     FROM torrents t
                     WHERE (t.verified_at, t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
                       AND t.policy_action IS DISTINCT FROM 'SUPPRESS'
@@ -156,7 +161,7 @@ public class SyncEngine
                 await _stateRepo.RecordErrorAsync("fast", ex.Message);
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(60), ct);
+            await Task.Delay(TimeSpan.FromSeconds(30), ct);
         }
     }
 
@@ -173,9 +178,12 @@ public class SyncEngine
 
             var query = @"
                 SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
-                       t.verified_at, t.updated_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
-                       t.risk_tier, t.policy_action, t.availability_state,
-                       COALESCE(t.last_health_attempt, t.last_health_check, t.verified_at) AS last_health_attempt
+                       t.verified_at, t.updated_at, t.risk_tier, t.policy_action, t.availability_state,
+                       (CASE WHEN COALESCE(t.popularity_score, 0) >= 75 THEN 4
+                             WHEN COALESCE(t.popularity_score, 0) >= 50 THEN 3
+                             WHEN COALESCE(t.popularity_score, 0) >= 25 THEN 2
+                             WHEN COALESCE(t.popularity_score, 0) >= 5  THEN 1
+                             ELSE 0 END) AS popularity_tier
                 FROM torrents t
                 WHERE (t.updated_at, t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
                 ORDER BY t.updated_at ASC, t.infohash ASC
@@ -190,6 +198,12 @@ public class SyncEngine
             if (toDelete.Count > 0)
             {
                 await _meili.DeleteBatchAsync(toDelete);
+
+                // Purge suppressed from Redis DB 1
+                var redisDb1 = _redis.GetDatabase(1);
+                var redisBatch = redisDb1.CreateBatch();
+                foreach (var h in toDelete) { _ = redisBatch.KeyDeleteAsync($"gaia:health:{h}"); }
+                redisBatch.Execute();
             }
             if (toUpsert.Count > 0)
             {
@@ -197,68 +211,10 @@ public class SyncEngine
             }
 
             var last = rows.Last();
-            cursorTs = last.UpdatedAt ?? cursorTs;
+            cursorTs = last.UpdatedAt ?? cursorTs; // Strictly advances on updated_at
             cursorHash = last.Infohash;
 
             await _stateRepo.UpdateProgressAsync("fast", cursorTs, cursorHash, rows.Count);
-            BumpGenerationIfAllowed();
-
-            if (rows.Count < BatchSize) break;
-        }
-    }
-
-    private async Task RunHealthLoopAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await DrainHealthLoopAsync(ct);
-                await _stateRepo.TouchLoopAsync("health");
-            }
-            catch (Exception ex) when (!ct.IsCancellationRequested)
-            {
-                _logger.LogError(ex, "Error in Health loop");
-                await _stateRepo.RecordErrorAsync("health", ex.Message);
-            }
-
-            await Task.Delay(TimeSpan.FromMinutes(15), ct);
-        }
-    }
-
-    private async Task DrainHealthLoopAsync(CancellationToken ct)
-    {
-        var state = await _stateRepo.GetStateAsync("health");
-        var cursorTs = state.CursorTs ?? DateTime.UtcNow;
-        var cursorHash = state.CursorHash ?? string.Empty;
-
-        while (!ct.IsCancellationRequested)
-        {
-            await using var conn = new NpgsqlConnection(_pgConnString);
-            await conn.OpenAsync(ct);
-
-            var query = @"
-                SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
-                       t.verified_at, t.updated_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
-                       t.risk_tier, t.policy_action, t.availability_state,
-                       t.last_health_attempt
-                FROM torrents t
-                WHERE (t.last_health_attempt, t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
-                  AND t.policy_action IS DISTINCT FROM 'SUPPRESS'
-                ORDER BY t.last_health_attempt ASC, t.infohash ASC
-                LIMIT @limit";
-
-            var rows = (await conn.QueryAsync<TorrentDocRow>(query, new { cursorTs, cursorHash, limit = BatchSize })).ToList();
-            if (rows.Count == 0) break;
-
-            var docs = rows.Select(MapDocument).ToList();
-            await _meili.PushBatchAsync(docs);
-
-            var last = rows.Last();
-            cursorTs = last.LastHealthAttempt ?? cursorTs;
-            cursorHash = last.Infohash;
-
-            await _stateRepo.UpdateProgressAsync("health", cursorTs, cursorHash, rows.Count);
             BumpGenerationIfAllowed();
 
             if (rows.Count < BatchSize) break;
@@ -294,6 +250,12 @@ public class SyncEngine
                     var hashes = rows.Select(r => (string)r.infohash).ToList();
                     await _meili.DeleteBatchAsync(hashes);
 
+                    // Purge suppressed from Redis DB 1
+                    var redisDb1 = _redis.GetDatabase(1);
+                    var redisBatch = redisDb1.CreateBatch();
+                    foreach (var h in hashes) { _ = redisBatch.KeyDeleteAsync($"gaia:health:{h}"); }
+                    redisBatch.Execute();
+
                     var last = rows.Last();
                     cursorTs = (DateTime)last.updated_at;
                     cursorHash = (string)last.infohash;
@@ -311,34 +273,17 @@ public class SyncEngine
                 _logger.LogError(ex, "Error in Suppression loop");
             }
 
-            await Task.Delay(TimeSpan.FromMinutes(10), ct);
+            await Task.Delay(TimeSpan.FromSeconds(60), ct);
         }
     }
 
-    private async Task RunDecaySweepLoopAsync(CancellationToken ct)
+    public async Task CatchUpTorrentsV2Async(DateTime tStart, CancellationToken ct = default)
     {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await DrainDecaySweepAsync(ct);
-                await _stateRepo.TouchLoopAsync("decay");
-            }
-            catch (Exception ex) when (!ct.IsCancellationRequested)
-            {
-                _logger.LogError(ex, "Error in Decay sweep loop");
-                await _stateRepo.RecordErrorAsync("decay", ex.Message);
-            }
+        _logger.LogInformation("Starting pre-swap catch-up drain on torrents_v2 from {TStart}...", tStart);
 
-            await Task.Delay(TimeSpan.FromHours(6), ct);
-        }
-    }
-
-    private async Task DrainDecaySweepAsync(CancellationToken ct)
-    {
-        var state = await _stateRepo.GetStateAsync("decay");
-        var cursorTs = state.CursorTs ?? new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var cursorHash = state.CursorHash ?? string.Empty;
+        // 1. Keyset Upsert Drain against torrents_v2
+        var cursorTs = tStart;
+        var cursorHash = string.Empty;
 
         while (!ct.IsCancellationRequested)
         {
@@ -347,48 +292,176 @@ public class SyncEngine
 
             var query = @"
                 SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
-                       t.verified_at, t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
-                       t.risk_tier, t.policy_action, t.availability_state,
-                       COALESCE(t.last_health_attempt, t.last_health_check, t.verified_at) AS last_health_attempt,
-                       t.last_decay_sweep
+                       t.verified_at, t.updated_at, t.risk_tier, t.policy_action, t.availability_state,
+                       (CASE WHEN COALESCE(t.popularity_score, 0) >= 75 THEN 4
+                             WHEN COALESCE(t.popularity_score, 0) >= 50 THEN 3
+                             WHEN COALESCE(t.popularity_score, 0) >= 25 THEN 2
+                             WHEN COALESCE(t.popularity_score, 0) >= 5  THEN 1
+                             ELSE 0 END) AS popularity_tier
                 FROM torrents t
-                WHERE (COALESCE(t.last_decay_sweep, '1970-01-01 00:00:00+00'::timestamptz), t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
-                  AND COALESCE(t.last_health_attempt, t.last_health_check, t.verified_at) < now() - interval '7 days'
-                  AND t.health_score > 0
+                WHERE (t.updated_at, t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
+                  AND t.updated_at >= @tStart
                   AND t.policy_action IS DISTINCT FROM 'SUPPRESS'
-                ORDER BY COALESCE(t.last_decay_sweep, '1970-01-01 00:00:00+00'::timestamptz) ASC, t.infohash ASC
-                LIMIT @limit";
+                ORDER BY t.updated_at ASC, t.infohash ASC
+                LIMIT @limit;";
 
-            var rows = (await conn.QueryAsync<TorrentDocRow>(query, new { cursorTs, cursorHash, limit = BatchSize })).ToList();
-            if (rows.Count == 0)
-            {
-                // Reset cursor for next 6-hour cycle
-                await _stateRepo.UpdateProgressAsync("decay", new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc), string.Empty, 0);
-                break;
-            }
+            var rows = (await conn.QueryAsync<TorrentDocRow>(query, new { cursorTs, cursorHash, tStart, limit = BatchSize })).ToList();
+            if (rows.Count == 0) break;
 
             var docs = rows.Select(MapDocument).ToList();
-            await _meili.PushBatchAsync(docs);
-
-            // Stamp last_decay_sweep in Postgres
-            var hexHashes = rows.Select(r => $"\\x{r.Infohash}").ToArray();
-            await conn.ExecuteAsync(
-                "UPDATE torrents SET last_decay_sweep = now() WHERE infohash = ANY(@hexHashes::bytea[])",
-                new { hexHashes }, commandTimeout: 120);
+            await _meili.PushBatchToIndexAsync("torrents_v2", docs, waitForTask: true);
 
             var last = rows.Last();
-            cursorTs = last.LastDecaySweep ?? new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            cursorTs = last.UpdatedAt ?? cursorTs; // Strictly advances on updated_at
             cursorHash = last.Infohash;
 
-            await _stateRepo.UpdateProgressAsync("decay", cursorTs, cursorHash, rows.Count);
-            BumpGenerationIfAllowed();
-
-            if (rows.Count < BatchSize)
-            {
-                await _stateRepo.UpdateProgressAsync("decay", new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc), string.Empty, 0);
-                break;
-            }
+            if (rows.Count < BatchSize) break;
         }
+
+        // 2. Keyset Suppression Drain against torrents_v2 (Purges resurrected suppressions)
+        cursorTs = tStart;
+        cursorHash = string.Empty;
+
+        while (!ct.IsCancellationRequested)
+        {
+            await using var conn = new NpgsqlConnection(_pgConnString);
+            await conn.OpenAsync(ct);
+
+            var suppQuery = @"
+                SELECT encode(t.infohash, 'hex') AS infohash, t.updated_at
+                FROM torrents t
+                WHERE (t.updated_at, t.infohash) > (@cursorTs, decode(@cursorHash, 'hex'))
+                  AND t.updated_at >= @tStart
+                  AND t.policy_action = 'SUPPRESS'
+                ORDER BY t.updated_at ASC, t.infohash ASC
+                LIMIT @limit;";
+
+            var suppRows = (await conn.QueryAsync<dynamic>(suppQuery, new { cursorTs, cursorHash, tStart, limit = BatchSize })).ToList();
+            if (suppRows.Count == 0) break;
+
+            var hashes = suppRows.Select(r => (string)r.infohash).ToList();
+            await _meili.DeleteBatchFromIndexAsync("torrents_v2", hashes, waitForTask: true);
+
+            // Delete from Redis DB 1
+            var redisDb1 = _redis.GetDatabase(1);
+            var redisBatch = redisDb1.CreateBatch();
+            foreach (var h in hashes) { _ = redisBatch.KeyDeleteAsync($"gaia:health:{h}"); }
+            redisBatch.Execute();
+
+            var last = suppRows.Last();
+            cursorTs = (DateTime)last.updated_at;
+            cursorHash = (string)last.infohash;
+
+            if (suppRows.Count < BatchSize) break;
+        }
+
+        // 3. Verify queue is fully drained
+        await _meili.WaitForIndexIdleAsync("torrents_v2");
+        _logger.LogInformation("Pre-swap catch-up drain complete. Task queue for torrents_v2 is idle.");
+    }
+
+    public async Task RebuildTorrentsV2AndSwapAsync(CancellationToken ct = default)
+    {
+        _logger.LogInformation("===============================================================");
+        _logger.LogInformation("STARTING ZERO-DOWNTIME REBUILD INTO torrents_v2");
+        _logger.LogInformation("===============================================================");
+
+        // 1. Clock T_start from PostgreSQL
+        DateTime tStart;
+        await using (var conn = new NpgsqlConnection(_pgConnString))
+        {
+            await conn.OpenAsync(ct);
+            tStart = await conn.ExecuteScalarAsync<DateTime>("SELECT now() - interval '1 minute'");
+        }
+        _logger.LogInformation("Recorded T_start watermark from PostgreSQL: {TStart}", tStart);
+
+        // 2. Prepare torrents_v2 index and settings
+        await _meili.DeleteIndexAsync("torrents_v2");
+        await _meili.EnsureIndexAndSettingsAsync("torrents_v2");
+
+        // 3. Stream all active rows from PostgreSQL into torrents_v2
+        var cursorHash = string.Empty;
+        int totalIngested = 0;
+        const int bulkBatchSize = 10000;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        while (!ct.IsCancellationRequested)
+        {
+            await using var conn = new NpgsqlConnection(_pgConnString);
+            await conn.OpenAsync(ct);
+
+            var query = string.IsNullOrEmpty(cursorHash)
+                ? @"
+                    SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
+                           t.verified_at, t.updated_at, t.risk_tier, t.policy_action, t.availability_state,
+                           (CASE WHEN COALESCE(t.popularity_score, 0) >= 75 THEN 4
+                                 WHEN COALESCE(t.popularity_score, 0) >= 50 THEN 3
+                                 WHEN COALESCE(t.popularity_score, 0) >= 25 THEN 2
+                                 WHEN COALESCE(t.popularity_score, 0) >= 5  THEN 1
+                                 ELSE 0 END) AS popularity_tier
+                    FROM torrents t
+                    WHERE t.policy_action IS DISTINCT FROM 'SUPPRESS'
+                    ORDER BY t.infohash ASC
+                    LIMIT @limit;"
+                : @"
+                    SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
+                           t.verified_at, t.updated_at, t.risk_tier, t.policy_action, t.availability_state,
+                           (CASE WHEN COALESCE(t.popularity_score, 0) >= 75 THEN 4
+                                 WHEN COALESCE(t.popularity_score, 0) >= 50 THEN 3
+                                 WHEN COALESCE(t.popularity_score, 0) >= 25 THEN 2
+                                 WHEN COALESCE(t.popularity_score, 0) >= 5  THEN 1
+                                 ELSE 0 END) AS popularity_tier
+                    FROM torrents t
+                    WHERE t.infohash > decode(@cursorHash, 'hex')
+                      AND t.policy_action IS DISTINCT FROM 'SUPPRESS'
+                    ORDER BY t.infohash ASC
+                    LIMIT @limit;";
+
+            var rows = (await conn.QueryAsync<TorrentDocRow>(query, new { cursorHash, limit = bulkBatchSize })).ToList();
+            if (rows.Count == 0) break;
+
+            var docs = rows.Select(MapDocument).ToList();
+            await _meili.PushBatchToIndexAsync("torrents_v2", docs, waitForTask: false);
+
+            var last = rows.Last();
+            cursorHash = last.Infohash;
+            totalIngested += rows.Count;
+
+            // Bounded queue backpressure: if Meilisearch has >= 3 tasks pending, wait a moment
+            while (await _meili.GetPendingTaskCountAsync("torrents_v2") >= 3 && !ct.IsCancellationRequested)
+            {
+                await Task.Delay(500, ct);
+            }
+
+            if (totalIngested % 100000 == 0)
+            {
+                var rate = totalIngested / sw.Elapsed.TotalSeconds;
+                _logger.LogInformation("Ingested {Count} records into torrents_v2 ({Rate:F0} docs/sec)...", totalIngested, rate);
+            }
+
+            if (rows.Count < bulkBatchSize) break;
+        }
+
+        // Wait for bulk ingestion tasks to settle in Meilisearch
+        _logger.LogInformation("Bulk stream complete ({Count} records). Waiting for indexing tasks to settle...", totalIngested);
+        await _meili.WaitForIndexIdleAsync("torrents_v2");
+
+        // 4. Full Keyset Pre-Swap Catch-Up Drain
+        _logger.LogInformation("Executing Pre-Swap Keyset Catch-Up Drain...");
+        await CatchUpTorrentsV2Async(tStart, ct);
+
+        // 5. Atomic Index Swap
+        _logger.LogInformation("Executing atomic pointer swap POST /swap-indexes ['torrents', 'torrents_v2']...");
+        await _meili.SwapIndexesAsync("torrents", "torrents_v2", ct);
+
+        sw.Stop();
+        _logger.LogInformation("===============================================================");
+        _logger.LogInformation("ZERO-DOWNTIME SWAP COMPLETE in {Elapsed:F1}s!", sw.Elapsed.TotalSeconds);
+        _logger.LogInformation("'torrents' is now serving the newly rebuilt decoupled index.");
+        _logger.LogInformation("'torrents_v2' contains the previous index and is retained for 1-hour rollback safety.");
+        _logger.LogInformation("===============================================================");
+
+        BumpGenerationIfAllowed();
     }
 
     private async Task RunDictionaryRefreshLoopAsync(CancellationToken ct)
@@ -430,7 +503,7 @@ public class SyncEngine
                 return;
             }
 
-            var db = _redis.GetDatabase();
+            var db = _redis.GetDatabase(0);
             var key = "gaia:vocab:titles";
             var tempKey = "gaia:vocab:titles:temp";
 
@@ -464,7 +537,7 @@ public class SyncEngine
 
         try
         {
-            var db = _redis.GetDatabase();
+            var db = _redis.GetDatabase(0);
             db.StringIncrement("gaia:search:gen");
         }
         catch (Exception ex)
@@ -476,8 +549,6 @@ public class SyncEngine
     private static object MapDocument(TorrentDocRow r)
     {
         var cleanName = NameCleaner.Clean(r.Name);
-        var decayedHealth = ScoreDecay.ComputeDecayedHealth(r.HealthScore, r.LastHealthAttempt, r.SwarmPeers, r.SeedConfirmed);
-
         long? verifiedUnix = r.VerifiedAt.HasValue ? new DateTimeOffset(r.VerifiedAt.Value).ToUnixTimeSeconds() : null;
 
         return new
@@ -489,10 +560,7 @@ public class SyncEngine
             total_size = r.TotalSize,
             file_count = r.FileCount,
             verified_at = verifiedUnix,
-            health_score = decayedHealth,
-            popularity_score = r.PopularityScore,
-            swarm_peers = r.SwarmPeers,
-            seed_confirmed = r.SeedConfirmed,
+            popularity_tier = r.PopularityTier,
             risk_tier = r.RiskTier ?? "SAFE",
             policy_action = r.PolicyAction ?? "ALLOW",
             availability_state = r.AvailabilityState ?? "ACTIVE"
@@ -509,13 +577,8 @@ public class TorrentDocRow
     public int FileCount { get; set; }
     public DateTime? VerifiedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
-    public short HealthScore { get; set; }
-    public short PopularityScore { get; set; }
-    public int SwarmPeers { get; set; }
-    public bool SeedConfirmed { get; set; }
+    public int PopularityTier { get; set; }
     public string? RiskTier { get; set; }
     public string? PolicyAction { get; set; }
     public string? AvailabilityState { get; set; }
-    public DateTime? LastHealthAttempt { get; set; }
-    public DateTime? LastDecaySweep { get; set; }
 }

@@ -29,12 +29,12 @@ public class MeiliClient
         _logger = logger;
     }
 
-    public async Task EnsureIndexAndSettingsAsync()
+    public async Task EnsureIndexAndSettingsAsync(string indexUid = "torrents")
     {
-        _logger.LogInformation("Ensuring Meilisearch index 'torrents' exists and configuring canonical settings...");
+        _logger.LogInformation("Ensuring Meilisearch index '{IndexUid}' exists and configuring canonical settings...", indexUid);
 
         // Create index if not exists
-        var createPayload = new { uid = "torrents", primaryKey = "infohash" };
+        var createPayload = new { uid = indexUid, primaryKey = "infohash" };
         using var createContent = new StringContent(JsonSerializer.Serialize(createPayload), Encoding.UTF8, "application/json");
         var createResp = await _httpClient.PostAsync("/indexes", createContent);
         if (createResp.IsSuccessStatusCode)
@@ -43,13 +43,13 @@ public class MeiliClient
             if (task != null) await WaitForTaskAsync(task.TaskUid);
         }
 
-        // Apply settings
+        // Apply decoupled canonical settings
         var settings = new
         {
             searchableAttributes = new[] { "name_clean", "name" },
-            filterableAttributes = new[] { "category", "risk_tier", "policy_action", "availability_state", "seed_confirmed", "verified_at" },
-            sortableAttributes = new[] { "popularity_score", "health_score", "verified_at", "total_size", "swarm_peers" },
-            rankingRules = new[] { "words", "typo", "proximity", "attribute", "sort", "exactness" },
+            filterableAttributes = new[] { "category", "risk_tier", "policy_action", "availability_state", "verified_at", "popularity_tier" },
+            sortableAttributes = new[] { "total_size", "verified_at", "popularity_tier" },
+            rankingRules = new[] { "words", "typo", "proximity", "attribute", "exactness", "popularity_tier:desc", "verified_at:desc" },
             distinctAttribute = (string?)null,
             typoTolerance = new
             {
@@ -61,7 +61,7 @@ public class MeiliClient
         };
 
         using var settingsContent = new StringContent(JsonSerializer.Serialize(settings, JsonOpts), Encoding.UTF8, "application/json");
-        var settingsResp = await _httpClient.PatchAsync("/indexes/torrents/settings", settingsContent);
+        var settingsResp = await _httpClient.PatchAsync($"/indexes/{indexUid}/settings", settingsContent);
         if (settingsResp.IsSuccessStatusCode)
         {
             var task = await settingsResp.Content.ReadFromJsonAsync<MeiliTaskResponse>();
@@ -70,20 +70,25 @@ public class MeiliClient
         else
         {
             var err = await settingsResp.Content.ReadAsStringAsync();
-            _logger.LogWarning("Failed to update index settings: {Error}", err);
+            _logger.LogWarning("Failed to update index settings for {IndexUid}: {Error}", indexUid, err);
         }
     }
 
     public async Task<int> PushBatchAsync(IReadOnlyList<object> documents, bool waitForTask = false)
     {
+        return await PushBatchToIndexAsync("torrents", documents, waitForTask);
+    }
+
+    public async Task<int> PushBatchToIndexAsync(string indexUid, IReadOnlyList<object> documents, bool waitForTask = false)
+    {
         if (documents.Count == 0) return 0;
 
         using var content = new StringContent(JsonSerializer.Serialize(documents, JsonOpts), Encoding.UTF8, "application/json");
-        var resp = await _httpClient.PostAsync("/indexes/torrents/documents?primaryKey=infohash", content);
+        var resp = await _httpClient.PostAsync($"/indexes/{indexUid}/documents?primaryKey=infohash", content);
         if (!resp.IsSuccessStatusCode)
         {
             var err = await resp.Content.ReadAsStringAsync();
-            throw new InvalidOperationException($"Failed to push batch to Meilisearch ({resp.StatusCode}): {err}");
+            throw new InvalidOperationException($"Failed to push batch to Meilisearch index {indexUid} ({resp.StatusCode}): {err}");
         }
 
         var task = await resp.Content.ReadFromJsonAsync<MeiliTaskResponse>();
@@ -97,14 +102,19 @@ public class MeiliClient
 
     public async Task<int> DeleteBatchAsync(IReadOnlyList<string> infohashes, bool waitForTask = false)
     {
+        return await DeleteBatchFromIndexAsync("torrents", infohashes, waitForTask);
+    }
+
+    public async Task<int> DeleteBatchFromIndexAsync(string indexUid, IReadOnlyList<string> infohashes, bool waitForTask = false)
+    {
         if (infohashes.Count == 0) return 0;
 
         using var content = new StringContent(JsonSerializer.Serialize(infohashes), Encoding.UTF8, "application/json");
-        var resp = await _httpClient.PostAsync("/indexes/torrents/documents/delete-batch", content);
+        var resp = await _httpClient.PostAsync($"/indexes/{indexUid}/documents/delete-batch", content);
         if (!resp.IsSuccessStatusCode)
         {
             var err = await resp.Content.ReadAsStringAsync();
-            throw new InvalidOperationException($"Failed to delete batch from Meilisearch ({resp.StatusCode}): {err}");
+            throw new InvalidOperationException($"Failed to delete batch from Meilisearch index {indexUid} ({resp.StatusCode}): {err}");
         }
 
         var task = await resp.Content.ReadFromJsonAsync<MeiliTaskResponse>();
@@ -116,7 +126,66 @@ public class MeiliClient
         return infohashes.Count;
     }
 
-    public async Task<bool> WaitForTaskAsync(long taskUid, int maxWaitSeconds = 60)
+    public async Task SwapIndexesAsync(string indexA, string indexB, CancellationToken ct = default)
+    {
+        _logger.LogInformation("Executing atomic index swap between '{IndexA}' and '{IndexB}'...", indexA, indexB);
+        var payload = new[] { new { indexes = new[] { indexA, indexB } } };
+        var resp = await _httpClient.PostAsJsonAsync("/swap-indexes", payload, ct);
+        if (!resp.IsSuccessStatusCode)
+        {
+            var err = await resp.Content.ReadAsStringAsync(ct);
+            throw new InvalidOperationException($"Failed to swap indexes ({resp.StatusCode}): {err}");
+        }
+
+        var task = await resp.Content.ReadFromJsonAsync<MeiliTaskResponse>(cancellationToken: ct);
+        if (task != null)
+        {
+            var ok = await WaitForTaskAsync(task.TaskUid);
+            if (!ok) throw new InvalidOperationException($"Swap task {task.TaskUid} failed or timed out.");
+        }
+    }
+
+    public async Task<int> GetPendingTaskCountAsync(string indexUid)
+    {
+        try
+        {
+            var resp = await _httpClient.GetAsync($"/tasks?statuses=enqueued,processing&indexUids={indexUid}&limit=1");
+            if (resp.IsSuccessStatusCode)
+            {
+                using var doc = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+                if (doc.RootElement.TryGetProperty("total", out var totalEl))
+                {
+                    return totalEl.GetInt32();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error fetching pending task count for {IndexUid}", indexUid);
+        }
+        return 0;
+    }
+
+    public async Task WaitForIndexIdleAsync(string indexUid, int maxWaitSeconds = 600)
+    {
+        var start = DateTime.UtcNow;
+        while ((DateTime.UtcNow - start).TotalSeconds < maxWaitSeconds)
+        {
+            var resp = await _httpClient.GetAsync($"/tasks?statuses=enqueued,processing&indexUids={indexUid}");
+            if (resp.IsSuccessStatusCode)
+            {
+                using var doc = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+                if (doc.RootElement.TryGetProperty("results", out var results) && results.GetArrayLength() == 0)
+                {
+                    return;
+                }
+            }
+            await Task.Delay(1000);
+        }
+        _logger.LogWarning("Timed out waiting for index {IndexUid} queue to become idle", indexUid);
+    }
+
+    public async Task<bool> WaitForTaskAsync(long taskUid, int maxWaitSeconds = 600)
     {
         var start = DateTime.UtcNow;
         while ((DateTime.UtcNow - start).TotalSeconds < maxWaitSeconds)
@@ -135,15 +204,15 @@ public class MeiliClient
                     }
                 }
             }
-            await Task.Delay(300);
+            await Task.Delay(1000);
         }
         _logger.LogWarning("Meilisearch task {Uid} timed out after {Sec}s", taskUid, maxWaitSeconds);
         return false;
     }
 
-    public async Task DeleteIndexAsync()
+    public async Task DeleteIndexAsync(string indexUid = "torrents")
     {
-        var resp = await _httpClient.DeleteAsync("/indexes/torrents");
+        var resp = await _httpClient.DeleteAsync($"/indexes/{indexUid}");
         if (resp.IsSuccessStatusCode)
         {
             var task = await resp.Content.ReadFromJsonAsync<MeiliTaskResponse>();

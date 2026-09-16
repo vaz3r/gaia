@@ -13,6 +13,7 @@ namespace Gaia.Api.Services;
 /// </summary>
 public class CacheService
 {
+    private readonly IConnectionMultiplexer? _redis;
     private readonly IDatabase? _db;
     private readonly ILogger<CacheService> _logger;
     private readonly bool _enabled;
@@ -28,16 +29,19 @@ public class CacheService
     public CacheService(IConnectionMultiplexer? redis, ILogger<CacheService> logger)
     {
         _logger = logger;
+        _redis = redis;
         if (redis is null || !redis.IsConnected)
         {
             _logger.LogWarning("Redis not available — caching disabled.");
             _enabled = false;
             return;
         }
-        _db = redis.GetDatabase();
+        _db = redis.GetDatabase(0);
         _enabled = true;
         _logger.LogInformation("Redis cache enabled.");
     }
+
+    public IDatabase? GetDatabase(int db = 0) => _redis?.IsConnected == true ? _redis.GetDatabase(db) : null;
 
     public async Task<string> GetGenerationAsync(CancellationToken ct = default)
     {

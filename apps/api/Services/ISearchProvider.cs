@@ -9,7 +9,7 @@ public record SearchResultItem(
     [property: JsonPropertyName("total_size")] long TotalSize,
     [property: JsonPropertyName("file_count")] int FileCount,
     [property: JsonPropertyName("verified_at")] DateTime? VerifiedAt,
-    [property: JsonPropertyName("health_score")] int HealthScore,
+    [property: JsonPropertyName("health_score")] int? HealthScore,
     [property: JsonPropertyName("popularity_score")] int PopularityScore,
     [property: JsonPropertyName("swarm_peers")] int SwarmPeers,
     [property: JsonPropertyName("seed_confirmed")] bool SeedConfirmed,

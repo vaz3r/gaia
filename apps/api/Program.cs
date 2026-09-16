@@ -17,7 +17,6 @@ builder.Services.AddCors(options =>
 var redisUrl  = builder.Configuration["REDIS_URL"]
     ?? Environment.GetEnvironmentVariable("REDIS_URL")
     ?? "redis://127.0.0.1:6379";
-var redisHost = redisUrl.Replace("redis://", "").TrimEnd('/');
 
 builder.Services.AddSingleton<CacheService>(sp =>
 {
@@ -25,7 +24,25 @@ builder.Services.AddSingleton<CacheService>(sp =>
     IConnectionMultiplexer? muxer = null;
     try
     {
-        var opts = ConfigurationOptions.Parse(redisHost);
+        ConfigurationOptions opts;
+        if (Uri.TryCreate(redisUrl, UriKind.Absolute, out var uri) && (uri.Scheme == "redis" || uri.Scheme == "rediss"))
+        {
+            var host = uri.Host;
+            var port = uri.Port > 0 ? uri.Port : 6379;
+            var userInfo = uri.UserInfo;
+            var password = userInfo.Contains(':') ? userInfo.Split(':')[1] : userInfo;
+            opts = new ConfigurationOptions
+            {
+                EndPoints = { { host, port } },
+                Password = string.IsNullOrEmpty(password) ? null : password,
+                Ssl = uri.Scheme == "rediss"
+            };
+        }
+        else
+        {
+            opts = ConfigurationOptions.Parse(redisUrl.Replace("redis://", "").TrimEnd('/'));
+        }
+
         opts.AbortOnConnectFail   = false;
         opts.ConnectRetry         = 3;
         opts.ConnectTimeout       = 2000;
@@ -36,7 +53,7 @@ builder.Services.AddSingleton<CacheService>(sp =>
     }
     catch (Exception ex)
     {
-        logger.LogWarning(ex, "Failed to initialize Redis connection multiplexer for {Host}", redisHost);
+        logger.LogWarning(ex, "Failed to initialize Redis connection multiplexer for {Url}", redisUrl);
     }
     return new CacheService(muxer, logger);
 });

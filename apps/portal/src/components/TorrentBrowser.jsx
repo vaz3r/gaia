@@ -467,29 +467,35 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
 
                     <td className="py-3 px-4 whitespace-nowrap">
                       <div className="flex items-center gap-2">
-                        <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${
-                              (t.health_score ?? 0) >= 70
-                                ? 'bg-emerald-400'
-                                : (t.health_score ?? 0) >= 40
-                                ? 'bg-amber-400'
-                                : 'bg-rose-500'
-                            }`}
-                            style={{ width: `${Math.min(100, Math.max(0, t.health_score ?? 0))}%` }}
-                          />
-                        </div>
-                        <span
-                          className={`text-[11px] font-mono font-semibold ${
-                            (t.health_score ?? 0) >= 70
-                              ? 'text-emerald-400'
-                              : (t.health_score ?? 0) >= 40
-                              ? 'text-amber-400'
-                              : 'text-rose-400'
-                          }`}
-                        >
-                          {t.health_score ?? 0}%
-                        </span>
+                        {t.health_score !== null && t.health_score !== undefined ? (
+                          <>
+                            <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${
+                                  t.health_score >= 70
+                                    ? 'bg-emerald-400'
+                                    : t.health_score >= 40
+                                    ? 'bg-amber-400'
+                                    : 'bg-rose-500'
+                                }`}
+                                style={{ width: `${Math.min(100, Math.max(0, t.health_score))}%` }}
+                              />
+                            </div>
+                            <span
+                              className={`text-[11px] font-mono font-semibold ${
+                                t.health_score >= 70
+                                  ? 'text-emerald-400'
+                                  : t.health_score >= 40
+                                  ? 'text-amber-400'
+                                  : 'text-rose-400'
+                              }`}
+                            >
+                              {t.health_score}%
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-[11px] font-mono text-zinc-500" title="Unprobed">—</span>
+                        )}
                       </div>
                     </td>
 
@@ -744,23 +750,29 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                   </span>
                   <span
                     className={`font-bold ${
-                      (selectedTorrent.health_score ?? 0) >= 70
+                      selectedTorrent.health_score === null || selectedTorrent.health_score === undefined
+                        ? 'text-zinc-500'
+                        : selectedTorrent.health_score >= 70
                         ? 'text-emerald-400'
-                        : (selectedTorrent.health_score ?? 0) >= 40
+                        : selectedTorrent.health_score >= 40
                         ? 'text-amber-400'
                         : 'text-rose-400'
                     }`}
                   >
-                    {selectedTorrent.health_score ?? 0}% ({selectedTorrent.availability_state || 'ACTIVE'})
+                    {selectedTorrent.health_score !== null && selectedTorrent.health_score !== undefined
+                      ? `${selectedTorrent.health_score}% (${selectedTorrent.availability_state || 'ACTIVE'})`
+                      : `— (${selectedTorrent.availability_state || 'UNPROBED'})`}
                   </span>
                 </div>
 
                 <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
                   <div
                     className={`h-full rounded-full transition-all ${
-                      (selectedTorrent.health_score ?? 0) >= 70
+                      selectedTorrent.health_score === null || selectedTorrent.health_score === undefined
+                        ? 'bg-zinc-700'
+                        : selectedTorrent.health_score >= 70
                         ? 'bg-emerald-400'
-                        : (selectedTorrent.health_score ?? 0) >= 40
+                        : selectedTorrent.health_score >= 40
                         ? 'bg-amber-400'
                         : 'bg-rose-500'
                     }`}
