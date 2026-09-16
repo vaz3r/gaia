@@ -9,7 +9,7 @@ public static class TorrentEndpoints
     {
         var group = app.MapGroup("/api/torrents").WithTags("Torrents");
 
-        // 1. List / Search endpoint
+        // 1. List / Search endpoint (Public Portal)
         group.MapGet("/", async (
             HttpContext httpContext,
             [FromQuery] string? q,
@@ -29,7 +29,7 @@ public static class TorrentEndpoints
             var safeLimit      = Math.Clamp(limit ?? 25, 1, 100);
             var safePage       = Math.Max(1, page ?? 1);
 
-            // ── Search & Browse path (Meilisearch primary, PostgreSQL trigram fallback) ─
+            // Search & Browse path (Meilisearch primary, PostgreSQL fallback)
             var results = await searchProvider.SearchAsync(
                 query:    effectiveQuery ?? "",
                 category: category,
@@ -87,18 +87,54 @@ public static class TorrentEndpoints
             return Results.Ok(new { infohash, name, magnetUri });
         });
 
-        // 4. Direct .torrent download
+        // 4. Direct .torrent download (BEP-9 Wire Metadata Fetcher with Fallback Magnet)
         group.MapGet("/{infohash}/torrent", async (
             string infohash,
-            DatabaseService db,
+            DashboardRepository repo,
+            WireMetadataFetcher wireFetcher,
             CancellationToken ct) =>
         {
-            var torrent      = await db.GetTorrentDetailsAsync(infohash, ct);
-            var name         = torrent?.TryGetValue("name", out var n) == true && n != null ? n.ToString() : infohash;
-            var torrentBytes = TorrentBuilder.BuildWrapperTorrent(infohash, name ?? infohash);
-            var safeFilename = Uri.EscapeDataString((name ?? infohash).Replace("/", "_").Replace("\\", "_")) + ".torrent";
+            var cleanIh = (infohash ?? "").Trim().ToLowerInvariant();
+            if (cleanIh.Length != 40 || !cleanIh.All(Uri.IsHexDigit))
+            {
+                return Results.BadRequest(new { error = "infohash must be 40 hex chars" });
+            }
 
-            return Results.File(torrentBytes, "application/x-bittorrent", safeFilename);
+            var torrent = await repo.GetTorrentDetailsAsync(cleanIh, ct);
+            if (torrent == null)
+            {
+                return Results.NotFound(new { error = "Torrent not found" });
+            }
+
+            var name = (string?)torrent.name ?? $"payload-{cleanIh[..8]}";
+            var candidatePeers = await repo.GetCandidatePeersAsync(cleanIh, ct);
+            var turboMagnet = TorrentBuilder.BuildMagnetUri(cleanIh, name);
+
+            if (candidatePeers.Count == 0)
+            {
+                return Results.Json(new
+                {
+                    error = "No active seeders recorded to assemble metadata on the fly",
+                    magnet = turboMagnet
+                }, statusCode: StatusCodes.Status504GatewayTimeout);
+            }
+
+            // Race candidate peers with 3.5s timeout over BEP-9
+            var rawInfoBytes = await wireFetcher.FetchMetadataOnTheFlyAsync(cleanIh, candidatePeers, 3500, ct);
+            if (rawInfoBytes == null || rawInfoBytes.Length == 0)
+            {
+                return Results.Json(new
+                {
+                    error = "Could not reach live seeders in time to assemble metadata on the fly",
+                    magnet = turboMagnet
+                }, statusCode: StatusCodes.Status504GatewayTimeout);
+            }
+
+            // Wrap verified raw info dict into full .torrent bytes
+            var torrentBytes = WireMetadataFetcher.BuildTorrentBuffer(rawInfoBytes);
+            var cleanFilename = Uri.EscapeDataString(name.Replace("/", "_").Replace("\\", "_").Trim()) + ".torrent";
+
+            return Results.File(torrentBytes, "application/x-bittorrent", cleanFilename);
         });
 
         // 5. Category list

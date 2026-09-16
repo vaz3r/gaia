@@ -1,5 +1,7 @@
 using Gaia.Api.Endpoints;
+using Gaia.Api.Infrastructure;
 using Gaia.Api.Services;
+using Npgsql;
 using StackExchange.Redis;
 
 Dapper.DefaultTypeMap.MatchNamesWithUnderscores = true;
@@ -59,6 +61,10 @@ builder.Services.AddSingleton<CacheService>(sp =>
 });
 
 // ── Search Providers ──────────────────────────────────────────────────────────
+var searchProviderSetting = builder.Configuration["SEARCH_PROVIDER"]
+    ?? Environment.GetEnvironmentVariable("SEARCH_PROVIDER")
+    ?? "Meilisearch";
+
 var meiliUrl = builder.Configuration["Meilisearch:Url"]
     ?? Environment.GetEnvironmentVariable("MEILI_URL")
     ?? "http://127.0.0.1:7700";
@@ -68,23 +74,35 @@ var meiliKey = builder.Configuration["Meilisearch:ApiKey"]
 
 builder.Services.AddSingleton<PostgresTrigramSearchProvider>();
 builder.Services.AddSingleton<CircuitBreaker>();
-builder.Services.AddHttpClient<ISearchProvider, MeilisearchSearchProvider>(client =>
-{
-    client.BaseAddress = new Uri(meiliUrl);
-    client.Timeout     = TimeSpan.FromSeconds(5);
-    if (!string.IsNullOrWhiteSpace(meiliKey))
-        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {meiliKey}");
-}).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
-{
-    PooledConnectionLifetime    = TimeSpan.FromMinutes(10),
-    PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
-    MaxConnectionsPerServer     = 20,
-});
 
+if (string.Equals(searchProviderSetting, "PostgreSQL", StringComparison.OrdinalIgnoreCase))
+{
+    // Dedicated Operator Dashboard instance: direct Postgres search provider only, zero Meilisearch
+    builder.Services.AddSingleton<ISearchProvider>(sp => sp.GetRequiredService<PostgresTrigramSearchProvider>());
+}
+else
+{
+    builder.Services.AddHttpClient<ISearchProvider, MeilisearchSearchProvider>(client =>
+    {
+        client.BaseAddress = new Uri(meiliUrl);
+        client.Timeout     = TimeSpan.FromSeconds(5);
+        if (!string.IsNullOrWhiteSpace(meiliKey))
+            client.DefaultRequestHeaders.Add("Authorization", $"Bearer {meiliKey}");
+    }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        PooledConnectionLifetime    = TimeSpan.FromMinutes(10),
+        PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
+        MaxConnectionsPerServer     = 20,
+    });
+}
 
-// ── Core Services ─────────────────────────────────────────────────────────────
+// ── Core Services & Repositories ──────────────────────────────────────────────
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<DatabaseService>();
+builder.Services.AddSingleton<NpgsqlDataSource>(sp => sp.GetRequiredService<DatabaseService>().DataSource);
+builder.Services.AddSingleton<DashboardRepository>();
+builder.Services.AddSingleton<WireMetadataFetcher>();
+builder.Services.AddSingleton<AdminAuthFilter>();
 
 // ── Output Cache (in-process, protects against spike traffic) ─────────────────
 builder.Services.AddOutputCache(opts =>
@@ -106,15 +124,34 @@ _ = Task.Run(async () =>
 app.UseCors("AllowAll");
 app.UseOutputCache();
 
-// ── Routes ────────────────────────────────────────────────────────────────────
+// ── Static Files (Serves Dashboard SPA if wwwroot exists) ─────────────────────
+var wwwrootPath = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+if (Directory.Exists(wwwrootPath))
+{
+    app.UseDefaultFiles();
+    app.UseStaticFiles();
+}
+
+// ── Route Groups ──────────────────────────────────────────────────────────────
 app.MapTorrentEndpoints();
 app.MapDashboardEndpoints();
+app.MapDashboardTorrentEndpoints();
+app.MapPeersEndpoints();
+app.MapMetricsEndpoints();
+app.MapSurveillanceEndpoints();
+app.MapAlertsEndpoints();
+app.MapScoringEndpoints();
+
+if (Directory.Exists(wwwrootPath))
+{
+    app.MapFallbackToFile("index.html");
+}
 
 app.MapGet("/health", () => Results.Ok(new
 {
     status          = "healthy",
     runtime         = ".NET 10.0",
-    search_provider = "meilisearch-primary"
+    search_provider = searchProviderSetting
 }));
 
 app.MapGet("/", () => Results.Ok(new
@@ -122,7 +159,7 @@ app.MapGet("/", () => Results.Ok(new
     service = "GAIA V2 Core API",
     version = "2.0.0",
     runtime = ".NET 10.0",
-    search  = "meilisearch",
+    search  = searchProviderSetting,
     docs    = "/api/torrents"
 }));
 

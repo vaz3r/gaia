@@ -26,6 +26,8 @@ public class DatabaseService
         _dataSource = builder.Build();
     }
 
+    public NpgsqlDataSource DataSource => _dataSource;
+
     /// <summary>Pre-warms Npgsql connection pool to eliminate cold-start P99 latency spikes.</summary>
     public async Task WarmUpAsync()
     {

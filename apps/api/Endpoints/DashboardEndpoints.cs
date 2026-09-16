@@ -1,5 +1,5 @@
+using System.Text.Json;
 using Gaia.Api.Services;
-using Microsoft.AspNetCore.Mvc;
 
 namespace Gaia.Api.Endpoints;
 
@@ -25,32 +25,47 @@ public static class DashboardEndpoints
             return Results.Ok(stats);
         });
 
-        // Server-Sent Events (SSE) live telemetry stream for dashboard & portal clients
+        // Server-Sent Events (SSE) live telemetry stream broadcasting full operational state
         var sseHandler = async (
             HttpContext ctx,
             DatabaseService db,
+            DashboardRepository repo,
             CancellationToken ct) =>
         {
             ctx.Response.Headers.Append("Content-Type", "text/event-stream");
-            ctx.Response.Headers.Append("Cache-Control", "no-cache");
+            ctx.Response.Headers.Append("Cache-Control", "no-cache, no-transform");
             ctx.Response.Headers.Append("Connection", "keep-alive");
             ctx.Response.Headers.Append("X-Accel-Buffering", "no");
 
             while (!ct.IsCancellationRequested)
             {
-                var stats = await db.GetDashboardStatsAsync(ct);
-                var payload = System.Text.Json.JsonSerializer.Serialize(new
+                try
                 {
-                    timestamp = DateTime.UtcNow.ToString("o"),
-                    torrents = stats.TryGetValue("total_torrents", out var t) ? t : 0,
-                    verified24h = stats.TryGetValue("verified_last_24h", out var v) ? v : 0,
-                    healthy = stats.TryGetValue("healthy_count", out var h) ? h : 0
-                });
+                    var stats = await db.GetDashboardStatsAsync(ct);
+                    var metrics = await repo.GetMetricsCurrentAsync(ct);
+                    var scoringStats = await repo.GetScoringStatsAsync(ct);
+                    var alerts = await repo.GetAlertsAsync("all", 1, ct);
 
-                await ctx.Response.WriteAsync($"data: {payload}\n\n", ct);
-                await ctx.Response.Body.FlushAsync(ct);
+                    var payload = JsonSerializer.Serialize(new
+                    {
+                        type = "tick",
+                        serverStats = stats,
+                        serverMetrics = metrics,
+                        scoringStats,
+                        alertsSummary = alerts,
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                    });
 
-                await Task.Delay(3000, ct);
+                    await ctx.Response.WriteAsync($"data: {payload}\n\n", ct);
+                    await ctx.Response.Body.FlushAsync(ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // If client disconnected, break
+                    break;
+                }
+
+                await Task.Delay(2500, ct);
             }
         };
 

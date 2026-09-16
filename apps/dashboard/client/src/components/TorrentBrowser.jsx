@@ -60,7 +60,7 @@ export default function TorrentBrowser() {
     if (search) params.set('search', search)
     if (sort) params.set('sort', sort)
     params.set('order', order)
-    api(`/api/torrents?${params}`)
+    api(`/api/dashboard/torrents?${params}`)
       .then(setData)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))

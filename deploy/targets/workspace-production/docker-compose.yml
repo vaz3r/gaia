@@ -3,19 +3,19 @@ name: gaia-production
 services:
   dashboard:
     build:
-      context: ../../../apps/dashboard
-      dockerfile: Dockerfile
+      context: ../../..
+      dockerfile: apps/dashboard/Dockerfile
     image: gaia-dashboard:${GIT_COMMIT:-latest}
     container_name: gaia-dashboard
     init: true
     restart: unless-stopped
     network_mode: host
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@${DB_HOST}:${PG_PORT:-5432}/${POSTGRES_DB:-craw}?sslmode=disable
+      DATABASE_URL: Host=localhost;Port=6432;Database=craw;Username=${POSTGRES_USER:-crawler};Password=${PG_PASSWORD};Pooling=true;Maximum Pool Size=50;Minimum Pool Size=5;Max Auto Prepare=0;No Reset On Close=true;
+      SEARCH_PROVIDER: PostgreSQL
+      ASPNETCORE_URLS: http://0.0.0.0:${DASH_PORT:-3000}
       PORT: ${DASH_PORT:-3000}
-      LOGS_DIR: /mnt/gaia/logs/crawler
-    volumes:
-      - /mnt/gaia/logs/crawler:/mnt/gaia/logs/crawler:ro
+      GAIA_ADMIN_TOKEN: ${GAIA_ADMIN_TOKEN:-}
 
   log-receiver:
     build:
