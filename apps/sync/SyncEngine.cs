@@ -126,7 +126,8 @@ public class SyncEngine
             var rows = (await conn.QueryAsync<TorrentDocRow>(query, parameters)).ToList();
             if (rows.Count == 0)
             {
-                _logger.LogInformation("Backfill finished completely! Marking completed.");
+                _logger.LogInformation("Backfill finished completely! Waiting for indexing tasks to settle...");
+                await _meili.WaitForIndexIdleAsync("torrents");
                 await _stateRepo.MarkCompletedAsync("backfill");
                 BumpGenerationIfAllowed();
                 break;
@@ -144,7 +145,8 @@ public class SyncEngine
 
             if (rows.Count < BatchSize)
             {
-                _logger.LogInformation("Backfill drained to the end. Marking completed.");
+                _logger.LogInformation("Backfill drained to the end. Waiting for indexing tasks to settle...");
+                await _meili.WaitForIndexIdleAsync("torrents");
                 await _stateRepo.MarkCompletedAsync("backfill");
                 break;
             }

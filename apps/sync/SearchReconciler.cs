@@ -327,7 +327,7 @@ public class SearchReconciler
                 SELECT encode(infohash, 'hex') 
                 FROM torrents 
                 WHERE policy_action IS DISTINCT FROM 'SUPPRESS' 
-                  AND verified_at < NOW() - INTERVAL '1 minute'
+                  AND verified_at < NOW() - INTERVAL '5 minutes'
                 ORDER BY verified_at DESC LIMIT 100;")).ToList();
 
             var meiliMissing = 0;
