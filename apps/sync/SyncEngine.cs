@@ -207,8 +207,10 @@ public class SyncEngine
                 // Purge suppressed from Redis DB 1
                 var redisDb1 = _redis.GetDatabase(1);
                 var redisBatch = redisDb1.CreateBatch();
-                foreach (var h in toDelete) { _ = redisBatch.KeyDeleteAsync($"gaia:health:{h}"); }
+                var delTasks = new List<Task>(toDelete.Count);
+                foreach (var h in toDelete) { delTasks.Add(redisBatch.KeyDeleteAsync($"gaia:health:{h}")); }
                 redisBatch.Execute();
+                await Task.WhenAll(delTasks);
             }
             if (toUpsert.Count > 0)
             {
@@ -218,15 +220,17 @@ public class SyncEngine
                 // Uses When.NotExists (HSETNX) so existing probed metrics and 't' are never overwritten
                 var redisDb1 = _redis.GetDatabase(1);
                 var redisBatch = redisDb1.CreateBatch();
+                var setTasks = new List<Task>();
                 foreach (var row in rows.Where(r => r.PolicyAction != "SUPPRESS"))
                 {
                     var key = $"gaia:health:{row.Infohash}";
-                    _ = redisBatch.HashSetAsync(key, "h", 0, When.NotExists);
-                    _ = redisBatch.HashSetAsync(key, "p", 0, When.NotExists);
-                    _ = redisBatch.HashSetAsync(key, "s", 0, When.NotExists);
-                    _ = redisBatch.HashSetAsync(key, "c", 0, When.NotExists);
+                    setTasks.Add(redisBatch.HashSetAsync(key, "h", 0, When.NotExists));
+                    setTasks.Add(redisBatch.HashSetAsync(key, "p", 0, When.NotExists));
+                    setTasks.Add(redisBatch.HashSetAsync(key, "s", 0, When.NotExists));
+                    setTasks.Add(redisBatch.HashSetAsync(key, "c", 0, When.NotExists));
                 }
                 redisBatch.Execute();
+                await Task.WhenAll(setTasks);
             }
 
             var last = rows.Last();
@@ -247,7 +251,7 @@ public class SyncEngine
             try
             {
                 var state = await _stateRepo.GetStateAsync("suppression");
-                var cursorTs = state.CursorTs ?? DateTime.UtcNow;
+                var cursorTs = state.CursorTs ?? DateTime.MinValue;
                 var cursorHash = state.CursorHash ?? string.Empty;
 
                 while (!ct.IsCancellationRequested)
@@ -272,8 +276,10 @@ public class SyncEngine
                     // Purge suppressed from Redis DB 1
                     var redisDb1 = _redis.GetDatabase(1);
                     var redisBatch = redisDb1.CreateBatch();
-                    foreach (var h in hashes) { _ = redisBatch.KeyDeleteAsync($"gaia:health:{h}"); }
+                    var delTasks = new List<Task>(hashes.Count);
+                    foreach (var h in hashes) { delTasks.Add(redisBatch.KeyDeleteAsync($"gaia:health:{h}")); }
                     redisBatch.Execute();
+                    await Task.WhenAll(delTasks);
 
                     var last = rows.Last();
                     cursorTs = (DateTime)last.updated_at;
