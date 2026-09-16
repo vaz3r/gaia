@@ -61,13 +61,14 @@ public class SyncEngine
             await DrainBackfillAsync(ct);
         }
 
-        // Start continuous decoupled loops (Fast Ingest, Suppression, Dictionary, and Hourly Reconciler)
+        // Start continuous decoupled loops (Fast Ingest, Suppression, Dictionary, Nightly Drift Repair, and Hourly Reconciler)
         // Note: Health Loop and Decay Sweep Loop are permanently deleted; volatile metrics reside in Redis DB 1.
         var tasks = new[]
         {
             RunFastLoopAsync(ct),
             RunSuppressionLoopAsync(ct),
             RunDictionaryRefreshLoopAsync(ct),
+            RunNightlyDriftRepairLoopAsync(ct),
             _reconciler.RunHourlyLoopAsync(ct)
         };
 
@@ -212,6 +213,20 @@ public class SyncEngine
             if (toUpsert.Count > 0)
             {
                 await _meili.PushBatchAsync(toUpsert);
+
+                // Seed unprobed stub in Redis DB 1 for newly discovered torrents
+                // Uses When.NotExists (HSETNX) so existing probed metrics and 't' are never overwritten
+                var redisDb1 = _redis.GetDatabase(1);
+                var redisBatch = redisDb1.CreateBatch();
+                foreach (var row in rows.Where(r => r.PolicyAction != "SUPPRESS"))
+                {
+                    var key = $"gaia:health:{row.Infohash}";
+                    _ = redisBatch.HashSetAsync(key, "h", 0, When.NotExists);
+                    _ = redisBatch.HashSetAsync(key, "p", 0, When.NotExists);
+                    _ = redisBatch.HashSetAsync(key, "s", 0, When.NotExists);
+                    _ = redisBatch.HashSetAsync(key, "c", 0, When.NotExists);
+                }
+                redisBatch.Execute();
             }
 
             var last = rows.Last();
@@ -569,6 +584,50 @@ public class SyncEngine
             policy_action = r.PolicyAction ?? "ALLOW",
             availability_state = r.AvailabilityState ?? "ACTIVE"
         };
+    }
+
+    private async Task RunNightlyDriftRepairLoopAsync(CancellationToken ct)
+    {
+        _logger.LogInformation("Starting scheduled daily Redis drift repair loop...");
+        // Wait 1 hour after startup before first scheduled self-healing pass
+        try
+        {
+            await Task.Delay(TimeSpan.FromHours(1), ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                _logger.LogInformation("Executing scheduled daily Redis health drift repair...");
+                using var lf = LoggerFactory.Create(b => b.AddSimpleConsole());
+                var seederLogger = lf.CreateLogger<RedisHealthSeeder>();
+                var seeder = new RedisHealthSeeder(_pgConnString, _redis, seederLogger);
+                var seeded = await seeder.SeedAsync(ct);
+                _logger.LogInformation("Daily Redis health drift repair completed: {Count:N0} records synced.", seeded);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unexpected error during daily Redis health drift repair.");
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromHours(24), ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
     }
 }
 

@@ -45,7 +45,7 @@ public class SearchReconciler
         _healthchecksUrl = Environment.GetEnvironmentVariable("HEALTHCHECKS_URL");
 
         _meiliParityThreshold = double.TryParse(Environment.GetEnvironmentVariable("MEILI_PARITY_THRESHOLD"), out var mt) ? mt : 0.001;
-        _redisParityThreshold = double.TryParse(Environment.GetEnvironmentVariable("REDIS_PARITY_THRESHOLD"), out var rt) ? rt : 0.005;
+        _redisParityThreshold = double.TryParse(Environment.GetEnvironmentVariable("REDIS_PARITY_THRESHOLD"), out var rt) ? rt : 0.001;
 
         if (string.IsNullOrEmpty(_healthchecksUrl))
         {
@@ -129,6 +129,7 @@ public class SearchReconciler
         bool forceHeartbeat = false,
         bool updateHeartbeatSchedule = true,
         bool triggerAlert = true,
+        bool suppressHeartbeat = false,
         CancellationToken ct = default)
     {
         await EnsureSchemaAsync(ct);
@@ -364,8 +365,8 @@ public class SearchReconciler
         }
 
         // 8. Determine if Heartbeat is Due
-        var isHeartbeatDue = forceHeartbeat;
-        if (!isHeartbeatDue)
+        var isHeartbeatDue = !suppressHeartbeat && forceHeartbeat;
+        if (!suppressHeartbeat && !isHeartbeatDue)
         {
             var lastHeartbeat = await conn.ExecuteScalarAsync<DateTime?>(
                 "SELECT MAX(checked_at) FROM search_reconcile_history WHERE is_heartbeat = true;");
@@ -388,7 +389,8 @@ public class SearchReconciler
                     (@now, @pgActive, @meiliDocs, @redisDocs, @meiliDelta, @redisDelta, @divPct, @isHeartbeat);
                 
                 DELETE FROM search_reconcile_history 
-                WHERE checked_at < NOW() - INTERVAL '90 days';",
+                WHERE checked_at < NOW() - INTERVAL '90 days'
+                  AND id != COALESCE((SELECT id FROM search_reconcile_history WHERE is_heartbeat = true ORDER BY checked_at DESC LIMIT 1), 0);",
                 new
                 {
                     now,
@@ -543,7 +545,7 @@ public class SearchReconciler
 
         // Step 5: Run check — MUST FAIL
         _logger.LogInformation("[Step 4/6] Running reconciliation check (Expecting Failure)...");
-        var passedDuringPerturbation = await ReconcileAsync(forceHeartbeat: false, updateHeartbeatSchedule: false, triggerAlert: false, ct: ct);
+        var passedDuringPerturbation = await ReconcileAsync(forceHeartbeat: false, updateHeartbeatSchedule: false, triggerAlert: false, suppressHeartbeat: true, ct: ct);
 
         if (passedDuringPerturbation)
         {
@@ -569,7 +571,7 @@ public class SearchReconciler
 
         // Step 7: Run check again — MUST PASS
         _logger.LogInformation("[Step 6/6] Running reconciliation check (Expecting 100% Clean Pass)...");
-        var recovered = await ReconcileAsync(forceHeartbeat: false, updateHeartbeatSchedule: false, triggerAlert: true, ct: ct);
+        var recovered = await ReconcileAsync(forceHeartbeat: false, updateHeartbeatSchedule: false, triggerAlert: true, suppressHeartbeat: true, ct: ct);
         if (!recovered)
         {
             throw new InvalidOperationException("Reconciler did not return to clean pass after restoration!");
