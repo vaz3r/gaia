@@ -85,35 +85,7 @@ Console.CancelKeyPress += (_, e) =>
     cts.Cancel();
 };
 
-// 1. Reconciler CLI switches (isolated before constructing SyncEngine)
-if (args.Contains("--test-alert") || args.Contains("--reconcile-once") || args.Contains("--heartbeat"))
-{
-    var reconcilerLogger = loggerFactory.CreateLogger<SearchReconciler>();
-    var reconciler = new SearchReconciler(pgConnStr, meiliClient, redis, reconcilerLogger);
 
-    if (args.Contains("--test-alert"))
-    {
-        logger.LogInformation("CLI flag --test-alert detected. Executing alert test harness...");
-        await reconciler.RunTestAlertHarnessAsync(cts.Token);
-        return;
-    }
-
-    if (args.Contains("--heartbeat"))
-    {
-        logger.LogInformation("CLI flag --heartbeat detected. Running single check with forced heartbeat...");
-        var ok = await reconciler.ReconcileAsync(forceHeartbeat: true, updateHeartbeatSchedule: false, triggerAlert: true, ct: cts.Token);
-        Environment.ExitCode = ok ? 0 : 1;
-        return;
-    }
-
-    if (args.Contains("--reconcile-once"))
-    {
-        logger.LogInformation("CLI flag --reconcile-once detected. Running single reconciliation check...");
-        var ok = await reconciler.ReconcileAsync(forceHeartbeat: false, updateHeartbeatSchedule: false, triggerAlert: true, ct: cts.Token);
-        Environment.ExitCode = ok ? 0 : 1;
-        return;
-    }
-}
 
 // 2. Seeder / Swap CLI switches
 if (args.Contains("--seed-redis-health"))
@@ -141,18 +113,15 @@ if (args.Contains("--test-swap"))
     return;
 }
 
-// 3. Continuous Sync Engine Execution
-var stateRepo = new SyncStateRepository(pgConnStr);
-var engineReconcilerLogger = loggerFactory.CreateLogger<SearchReconciler>();
-var engineReconciler = new SearchReconciler(pgConnStr, meiliClient, redis, engineReconcilerLogger);
+// 3. Stateless Periodic Rebuild Engine Execution
 var syncEngineLogger = loggerFactory.CreateLogger<SyncEngine>();
-var engine = new SyncEngine(pgConnStr, meiliClient, stateRepo, redis, engineReconciler, syncEngineLogger);
+var engine = new SyncEngine(pgConnStr, meiliClient, redis, syncEngineLogger);
 
-if (args.Contains("--rebuild-zero-downtime"))
+if (args.Contains("--rebuild-now") || args.Contains("--rebuild-once") || args.Contains("--rebuild-zero-downtime"))
 {
-    logger.LogInformation("CLI flag --rebuild-zero-downtime detected. Executing zero-downtime rebuild into torrents_v2...");
-    await engine.RebuildTorrentsV2AndSwapAsync(cts.Token);
-    logger.LogInformation("Zero-downtime rebuild finished successfully.");
+    logger.LogInformation("CLI rebuild flag detected. Executing single rebuild and atomic swap...");
+    await engine.ExecuteRebuildAndSwapAsync(cts.Token);
+    logger.LogInformation("Rebuild and atomic swap finished successfully.");
     return;
 }
 

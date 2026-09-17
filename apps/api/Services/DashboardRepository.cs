@@ -9,11 +9,19 @@ namespace Gaia.Api.Services;
 public class DashboardRepository
 {
     private readonly NpgsqlDataSource _dataSource;
+    private readonly CacheService _cache;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<DashboardRepository> _logger;
 
-    public DashboardRepository(NpgsqlDataSource dataSource, ILogger<DashboardRepository> logger)
+    public DashboardRepository(
+        NpgsqlDataSource dataSource,
+        CacheService cache,
+        IHttpClientFactory httpClientFactory,
+        ILogger<DashboardRepository> logger)
     {
         _dataSource = dataSource;
+        _cache = cache;
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
 
@@ -852,6 +860,48 @@ public class DashboardRepository
             reasons = JsonSerializer.Serialize(reasonCodes)
         });
 
+        if (normAction == "SUPPRESS")
+        {
+            var db0 = _cache.GetDatabase(0);
+            var db1 = _cache.GetDatabase(1);
+
+            // 1. Race-free individual TTL suppression key (4 hours = covers this cycle + next full rebuild with 120m cadence)
+            if (db0 != null)
+            {
+                await db0.StringSetAsync($"gaia:suppressed:{ih}", "1", TimeSpan.FromHours(4));
+                await db0.StringIncrementAsync("gaia:search:gen");
+            }
+
+            // 2. Purge volatile health metrics from DB 1
+            if (db1 != null)
+            {
+                await db1.KeyDeleteAsync($"gaia:health:{ih}");
+            }
+
+            // 3. Best-effort direct delete from Meilisearch
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var client = _httpClientFactory.CreateClient("Meilisearch");
+                    await client.DeleteAsync($"/indexes/torrents/documents/{ih}");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Best-effort delete of {Ih} from Meilisearch failed (will be purged on next rebuild)", ih);
+                }
+            });
+        }
+        else
+        {
+            var db0 = _cache.GetDatabase(0);
+            if (db0 != null)
+            {
+                await db0.KeyDeleteAsync($"gaia:suppressed:{ih}");
+                await db0.StringIncrementAsync("gaia:search:gen");
+            }
+        }
+
         return updated;
     }
 
@@ -988,6 +1038,21 @@ public class DashboardRepository
                     normAction,
                     reasons = JsonSerializer.Serialize(reasonCodes)
                 });
+            }
+        }
+
+        if (cleanHashes.Count > 0)
+        {
+            var db0 = _cache.GetDatabase(0);
+            if (db0 != null)
+            {
+                var batch = db0.CreateBatch();
+                foreach (var ih in cleanHashes)
+                {
+                    _ = batch.KeyDeleteAsync($"gaia:suppressed:{ih}");
+                }
+                _ = batch.StringIncrementAsync("gaia:search:gen");
+                batch.Execute();
             }
         }
 

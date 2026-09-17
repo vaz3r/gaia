@@ -94,6 +94,14 @@ else
         PooledConnectionIdleTimeout = TimeSpan.FromMinutes(5),
         MaxConnectionsPerServer     = 20,
     });
+
+    builder.Services.AddHttpClient("Meilisearch", client =>
+    {
+        client.BaseAddress = new Uri(meiliUrl);
+        client.Timeout     = TimeSpan.FromSeconds(5);
+        if (!string.IsNullOrWhiteSpace(meiliKey))
+            client.DefaultRequestHeaders.Add("Authorization", $"Bearer {meiliKey}");
+    });
 }
 
 // ── Core Services & Repositories ──────────────────────────────────────────────

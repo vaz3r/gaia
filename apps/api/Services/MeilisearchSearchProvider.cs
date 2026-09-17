@@ -91,7 +91,7 @@ public class MeilisearchSearchProvider : ISearchProvider
         string[]? sort = sortBy?.ToLowerInvariant() switch
         {
             "size" or "total_size"             => new[] { $"total_size:{dir}" },
-            "popularity" or "popularity_score" => new[] { $"popularity_tier:{dir}" },
+            "popularity" or "popularity_score" => new[] { $"verified_at:{dir}" },
             "date" or "verified_at"            => new[] { $"verified_at:{dir}" },
             _                                  => string.IsNullOrWhiteSpace(parsed.CleanQuery)
                                                     ? new[] { $"verified_at:{dir}" }
@@ -180,6 +180,28 @@ public class MeilisearchSearchProvider : ISearchProvider
             }
 
             var rawHits = raw?.Hits ?? new();
+
+            // Double-Lock / Race-Free TTL Suppression Filter: Check Redis DB 0 for any suppressed items
+            if (rawHits.Count > 0)
+            {
+                var db0 = _redis.GetDatabase(0);
+                if (db0 != null)
+                {
+                    var batch = db0.CreateBatch();
+                    var suppressionTasks = rawHits.Select(h => batch.KeyExistsAsync($"gaia:suppressed:{h.Infohash.ToLowerInvariant()}")).ToList();
+                    batch.Execute();
+                    var suppressionResults = await Task.WhenAll(suppressionTasks);
+
+                    for (int i = rawHits.Count - 1; i >= 0; i--)
+                    {
+                        if (suppressionResults[i])
+                        {
+                            rawHits.RemoveAt(i);
+                        }
+                    }
+                }
+            }
+
             await HydrateVolatileMetricsAsync(rawHits, budgetCts.Token);
             var hits = rawHits.Select(MapHit).ToList();
             _circuitBreaker.RecordSuccess();
@@ -213,6 +235,12 @@ public class MeilisearchSearchProvider : ISearchProvider
     {
         try
         {
+            var db0 = _redis.GetDatabase(0);
+            if (db0 != null && await db0.KeyExistsAsync($"gaia:suppressed:{infohash.ToLowerInvariant()}"))
+            {
+                return new SearchResponse(new List<SearchResultItem>(), 0, 1, 1, 0, false, "meilisearch", "suppressed");
+            }
+
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromMilliseconds(500));
 

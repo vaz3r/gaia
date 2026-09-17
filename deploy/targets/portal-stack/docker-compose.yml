@@ -35,7 +35,7 @@ services:
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-meili_secure_master_key_v2_modern_scaling}
       MEILI_NO_ANALYTICS: "true"
       MEILI_MAX_INDEXING_MEMORY: 16Gb
-      MEILI_MAX_INDEXING_THREADS: 4
+      MEILI_MAX_INDEXING_THREADS: 6
       MEILI_HTTP_ADDR: 0.0.0.0:7700
     volumes:
       - /var/lib/meilisearch/data:/meili_data
@@ -77,6 +77,8 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       Meilisearch__Url: http://meilisearch:7700
       Meilisearch__ApiKey: ${MEILI_MASTER_KEY:-meili_secure_master_key_v2_modern_scaling}
+      REBUILD_CADENCE_MINUTES: ${REBUILD_CADENCE_MINUTES:-120}
+      INITIAL_REBUILD_ON_STARTUP: ${INITIAL_REBUILD_ON_STARTUP:-false}
       NTFY_TOPIC: ${NTFY_TOPIC:-}
       NTFY_AUTH_TOKEN: ${NTFY_AUTH_TOKEN:-}
       NTFY_SERVER: ${NTFY_SERVER:-https://ntfy.sh}

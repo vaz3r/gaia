@@ -47,9 +47,9 @@ public class MeiliClient
         var settings = new
         {
             searchableAttributes = new[] { "name_clean", "name" },
-            filterableAttributes = new[] { "category", "risk_tier", "policy_action", "availability_state", "verified_at", "popularity_tier" },
-            sortableAttributes = new[] { "total_size", "verified_at", "popularity_tier" },
-            rankingRules = new[] { "words", "typo", "proximity", "attribute", "exactness", "popularity_tier:desc", "verified_at:desc" },
+            filterableAttributes = new[] { "category", "risk_tier", "policy_action", "availability_state", "verified_at" },
+            sortableAttributes = new[] { "total_size", "verified_at" },
+            rankingRules = new[] { "words", "typo", "proximity", "attribute", "exactness", "verified_at:desc" },
             distinctAttribute = (string?)null,
             typoTolerance = new
             {
@@ -166,7 +166,44 @@ public class MeiliClient
         return 0;
     }
 
-    public async Task WaitForIndexIdleAsync(string indexUid, int maxWaitSeconds = 600)
+    public async Task<List<string>> GetFailedTasksAsync(string indexUid)
+    {
+        var errors = new List<string>();
+        try
+        {
+            var resp = await _httpClient.GetAsync($"/tasks?statuses=failed&indexUids={indexUid}&limit=20");
+            if (resp.IsSuccessStatusCode)
+            {
+                using var doc = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+                if (doc.RootElement.TryGetProperty("results", out var resultsEl))
+                {
+                    foreach (var taskEl in resultsEl.EnumerateArray())
+                    {
+                        var taskType = taskEl.TryGetProperty("type", out var t) ? t.GetString() : string.Empty;
+                        var errCode = taskEl.TryGetProperty("error", out var errObj) && errObj.TryGetProperty("code", out var c) ? c.GetString() : string.Empty;
+
+                        // Benign: deleting a non-existent index before recreation is expected
+                        if (taskType == "indexDeletion" && errCode == "index_not_found")
+                        {
+                            continue;
+                        }
+
+                        var uid = taskEl.TryGetProperty("uid", out var u) ? u.GetInt64() : 0;
+                        var msg = errObj.ValueKind != JsonValueKind.Undefined && errObj.TryGetProperty("message", out var m) ? m.GetString() : "Unknown error";
+                        errors.Add($"Task {uid} ({taskType}): {msg}");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to inspect task failure list for {IndexUid}", indexUid);
+            errors.Add($"Error checking tasks: {ex.Message}");
+        }
+        return errors;
+    }
+
+    public async Task WaitForIndexIdleAsync(string indexUid, int maxWaitSeconds = 900)
     {
         var start = DateTime.UtcNow;
         while ((DateTime.UtcNow - start).TotalSeconds < maxWaitSeconds)
@@ -212,6 +249,12 @@ public class MeiliClient
 
     public async Task DeleteIndexAsync(string indexUid = "torrents")
     {
+        var checkResp = await _httpClient.GetAsync($"/indexes/{indexUid}");
+        if (checkResp.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return;
+        }
+
         var resp = await _httpClient.DeleteAsync($"/indexes/{indexUid}");
         if (resp.IsSuccessStatusCode)
         {
