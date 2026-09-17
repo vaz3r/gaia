@@ -12,8 +12,9 @@ services:
       - ./nginx/custom_error.json:/var/www/html/custom_error.json:ro
       - /etc/ssl/certs/gateway.crt:/etc/ssl/certs/gateway.crt:ro
       - /etc/ssl/private/gateway.key:/etc/ssl/private/gateway.key:ro
+      - /etc/ssl/gaia-ca/ca.crt:/etc/ssl/certs/gaia-internal-ca.crt:ro
     healthcheck:
-      test: ["CMD-SHELL", "curl -k -s -f https://127.0.0.1/api/stats >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl --cacert /etc/ssl/certs/gaia-internal-ca.crt -s -f https://127.0.0.1/api/stats >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -64,7 +65,7 @@ services:
       - ./wireguard/wg0.conf:/etc/wireguard/wg0.conf:ro
     command: ["wireguard", "/etc/wireguard/wg0.conf"]
     healthcheck:
-      test: ["CMD-SHELL", "ip link show wg0 && ip addr show wg0 | grep 10.99.0.1 && ( [ $$(wg show wg0 latest-handshakes | awk '{print $$2}') -eq 0 ] || [ $$(($$(date +%s) - $$(wg show wg0 latest-handshakes | awk '{print $$2}'))) -le 180 ] ) || exit 1"]
+      test: ["CMD-SHELL", "ip link show wg0 >/dev/null 2>&1 && ip addr show wg0 | grep -q 10.99.0.1 && hs=$$(wg show wg0 latest-handshakes | awk '{print $$2}') && case \"$$hs\" in ''|*[!0-9]*) exit 1;; esac && ( [ \"$$hs\" -eq 0 ] || ( now=$$(date +%s) && [ $$((now - hs)) -ge 0 ] && [ $$((now - hs)) -le 180 ] ) ) || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
