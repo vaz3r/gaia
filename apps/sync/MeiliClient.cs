@@ -34,13 +34,17 @@ public class MeiliClient
         _logger.LogInformation("Ensuring Meilisearch index '{IndexUid}' exists and configuring canonical settings...", indexUid);
 
         // Create index if not exists
-        var createPayload = new { uid = indexUid, primaryKey = "infohash" };
-        using var createContent = new StringContent(JsonSerializer.Serialize(createPayload), Encoding.UTF8, "application/json");
-        var createResp = await _httpClient.PostAsync("/indexes", createContent);
-        if (createResp.IsSuccessStatusCode)
+        var checkResp = await _httpClient.GetAsync($"/indexes/{indexUid}");
+        if (checkResp.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
-            var task = await createResp.Content.ReadFromJsonAsync<MeiliTaskResponse>();
-            if (task != null) await WaitForTaskAsync(task.TaskUid);
+            var createPayload = new { uid = indexUid, primaryKey = "infohash" };
+            using var createContent = new StringContent(JsonSerializer.Serialize(createPayload), Encoding.UTF8, "application/json");
+            var createResp = await _httpClient.PostAsync("/indexes", createContent);
+            if (createResp.IsSuccessStatusCode)
+            {
+                var task = await createResp.Content.ReadFromJsonAsync<MeiliTaskResponse>();
+                if (task != null) await WaitForTaskAsync(task.TaskUid);
+            }
         }
 
         // Apply decoupled canonical settings
