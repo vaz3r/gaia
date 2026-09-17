@@ -33,7 +33,7 @@ Gaia operates on a **120-minute (2-hour)** stateless index rebuild cadence. Supp
 $$ \text{Suppression TTL} = 2 \times \text{Cadence} = 2 \times 120\text{ min} = 240\text{ min} = 14,400\text{ sec} $$
 
 > **Bounded Guarantee Policy**:  
-> **Redis provides a 14,400-second immediate masking window designed to cover one delayed or failed 120-minute rebuild cycle; an extended rebuild outage can require operator intervention or a successful replacement rebuild before the old Meilisearch document is guaranteed absent.**
+> **Redis provides a 14,400-second immediate masking window intended to tolerate one missed or delayed 120-minute rebuild interval. It is not a durable authorization control for an extended multi-cycle rebuild outage. If the best-effort Meilisearch deletion fails and no successful replacement rebuild completes before the TTL expires, an old Meilisearch document can temporarily reappear until operator intervention or the next successful rebuild.**
 
 ### Defense-in-Depth Suppression Layers
 1. **PostgreSQL (Permanent Source of Truth)**:
@@ -121,3 +121,20 @@ This command stops host systemd units and deploys declarative Docker Compose sta
 ./deploy/scripts/gateway-rollback.sh status
 ```
 Displays systemd and Docker container status across both nodes simultaneously.
+
+---
+
+## 5. Reliability Backlog Item: Durable Suppression Enforcement for Meilisearch Serving During Extended Rebuild Outages
+
+### Problem Statement
+Redis provides a 14,400-second immediate masking window intended to tolerate one missed or delayed 120-minute rebuild interval. It is not a durable authorization control for an extended multi-cycle rebuild outage. If the best-effort Meilisearch deletion fails and no successful replacement rebuild completes before the TTL expires, an old Meilisearch document can temporarily reappear until operator intervention or the next successful rebuild.
+
+### Architectural Options for Evaluation
+1. **Batched Durable-Policy Verification**:
+   - Query PostgreSQL for the candidate infohashes returned by Meilisearch within the search provider pipeline.
+   - Must be strictly batched and bounded (e.g., `WHERE infohash = ANY(@hashes) AND policy_action = 'SUPPRESS'`) to avoid N+1 queries.
+2. **Durable Suppression Materialization / Read Model**:
+   - Maintain a local SQLite/RocksDB or persistent Redis AOF set of all active suppressed hashes replicated independently of ephemeral cache keys.
+3. **Longer-Lived Suppression Record with Reconciliation & Alerts**:
+   - Decouple suppression keys from short TTLs, paired with a dedicated health probe that alerts on rebuild lags exceeding 120 minutes.
+
