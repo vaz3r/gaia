@@ -12,6 +12,12 @@ services:
       - ./nginx/custom_error.json:/var/www/html/custom_error.json:ro
       - /etc/ssl/certs/gateway.crt:/etc/ssl/certs/gateway.crt:ro
       - /etc/ssl/private/gateway.key:/etc/ssl/private/gateway.key:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -k -s -f https://127.0.0.1/api/stats >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     depends_on:
       wireguard:
         condition: service_healthy
@@ -36,6 +42,12 @@ services:
     volumes:
       - /etc/wireguard/wstunnel.crt:/etc/wireguard/wstunnel.crt:ro
       - /etc/wireguard/wstunnel.key:/etc/wireguard/wstunnel.key:ro
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 ${WSTUNNEL_PORT:-8443} || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   wireguard:
     build:
@@ -49,12 +61,14 @@ services:
       - NET_ADMIN
     volumes:
       - /dev/net/tun:/dev/net/tun
-      - /etc/wireguard/wg0.conf:/etc/wireguard/wg0.conf:ro
+      - ./wireguard/wg0.conf:/etc/wireguard/wg0.conf:ro
     command: ["wireguard", "/etc/wireguard/wg0.conf"]
     healthcheck:
-      test: ["CMD-SHELL", "ip link show wg0 && ip addr show wg0 | grep 10.99.0.1 || exit 1"]
+      test: ["CMD-SHELL", "ip link show wg0 && ip addr show wg0 | grep 10.99.0.1 && ( [ $$(wg show wg0 latest-handshakes | awk '{print $$2}') -eq 0 ] || [ $$(($$(date +%s) - $$(wg show wg0 latest-handshakes | awk '{print $$2}'))) -le 180 ] ) && curl -s -f --max-time 2 http://10.99.0.2:3000/api/stats >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 10s
     depends_on:
-      - wstunnel
+      wstunnel:
+        condition: service_healthy
