@@ -47,3 +47,7 @@ apps/classifier/data/production_pool/pooled_labeled.jsonl
 apps/classifier/data/production_pool/pooled_unlabeled.jsonl
 apps/classifier/deepseek/sha3_wasm_bg.7b9ca65ddd.wasm
 apps/dashboard/logs/
+
+# Batch A cleanup: narrow entries for deleted artifacts
+/apps/crawler/.env
+/benchmark_results.json

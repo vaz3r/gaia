@@ -177,7 +177,6 @@ gantt
 1. Create and switch to git branch `arch/v2-modern-scaling`.
 2. Configure `apps/quickwit/config/quickwit.yaml` and `apps/quickwit/schemas/torrents-schema.yaml`.
 3. Add `quickwit` container (port 7280) to `deploy/targets/workspace-production/docker-compose.yml`.
-4. Run sync script (`deploy/scripts/sync_pg_to_quickwit.py`) to stream existing 2.1M records into Quickwit in the background.
 * **Crawler Status**: Crawling and writing to PostgreSQL uninterrupted.
 
 #### Phase 2: Core .NET 10 API (`apps/api`)
