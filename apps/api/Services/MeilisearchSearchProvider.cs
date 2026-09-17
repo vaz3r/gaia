@@ -125,7 +125,10 @@ public class MeilisearchSearchProvider : ISearchProvider
                 var multiResp = await _http.PostAsJsonAsync("/multi-search", multiSearchPayload, budgetCts.Token);
                 if (!multiResp.IsSuccessStatusCode)
                 {
-                    _circuitBreaker.RecordFailure();
+                    if (_circuitBreaker.RecordFailure())
+                    {
+                        TriggerAutoCacheInvalidation("Multi-search failure tripped circuit OPEN");
+                    }
                     return await _fallback.SearchAsync(parsed.CleanQuery, category, safePage, safeLimit, sortBy, order, ct);
                 }
 
@@ -148,7 +151,10 @@ public class MeilisearchSearchProvider : ISearchProvider
                 var resp = await _http.PostAsJsonAsync("/indexes/torrents/search", requestBody, budgetCts.Token);
                 if (!resp.IsSuccessStatusCode)
                 {
-                    _circuitBreaker.RecordFailure();
+                    if (_circuitBreaker.RecordFailure())
+                    {
+                        TriggerAutoCacheInvalidation("Search HTTP failure (" + resp.StatusCode + ") tripped circuit OPEN");
+                    }
                     return await _fallback.SearchAsync(parsed.CleanQuery, category, safePage, safeLimit, sortBy, order, ct);
                 }
 
@@ -158,7 +164,7 @@ public class MeilisearchSearchProvider : ISearchProvider
                 if ((raw?.Hits == null || raw.Hits.Count == 0) &&
                     !string.IsNullOrWhiteSpace(parsed.CleanQuery) &&
                     parsed.CleanQuery.Split(' ').Length >= 2 &&
-                    !budgetCts.IsCancellationRequested)
+                    !parsed.CleanQuery.Contains("\""))
                 {
                     var relaxedBody = new
                     {
@@ -204,7 +210,10 @@ public class MeilisearchSearchProvider : ISearchProvider
 
             await HydrateVolatileMetricsAsync(rawHits, budgetCts.Token);
             var hits = rawHits.Select(MapHit).ToList();
-            _circuitBreaker.RecordSuccess();
+            if (_circuitBreaker.RecordSuccess())
+            {
+                TriggerAutoCacheInvalidation("Circuit breaker recovered to CLOSED");
+            }
 
             var response = new SearchResponse(
                 hits,
@@ -225,10 +234,33 @@ public class MeilisearchSearchProvider : ISearchProvider
         }
         catch (Exception ex)
         {
-            _circuitBreaker.RecordFailure();
+            if (_circuitBreaker.RecordFailure())
+            {
+                TriggerAutoCacheInvalidation("Circuit breaker opened on exception: " + ex.Message);
+            }
             _logger.LogWarning(ex, "Meilisearch execution failed or timed out. Falling back to PostgreSQL.");
             return await _fallback.SearchAsync(parsed.CleanQuery, category, safePage, safeLimit, sortBy, order, ct);
         }
+    }
+
+    private void TriggerAutoCacheInvalidation(string reason)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var db0 = _redis.GetDatabase(0);
+                if (db0 != null)
+                {
+                    var newGen = await db0.StringIncrementAsync("gaia:search:gen");
+                    _logger.LogWarning("⚡ AUTOMATIC CACHE INVALIDATION: {Reason}. Incremented gaia:search:gen to {Gen}.", reason, newGen);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to auto-increment gaia:search:gen during circuit state transition.");
+            }
+        });
     }
 
     private async Task<SearchResponse> FetchByInfohashDirectAsync(string infohash, string cacheKey, CancellationToken ct)

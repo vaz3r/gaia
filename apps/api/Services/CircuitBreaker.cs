@@ -56,25 +56,29 @@ public class CircuitBreaker
         }
     }
 
-    public void RecordSuccess()
+    public bool RecordSuccess()
     {
         lock (_lock)
         {
+            var transitioned = _state != CircuitState.Closed;
             _consecutiveFailures = 0;
             _state = CircuitState.Closed;
+            return transitioned;
         }
     }
 
-    public void RecordFailure()
+    public bool RecordFailure()
     {
         lock (_lock)
         {
             _consecutiveFailures++;
-            if (_consecutiveFailures >= _failureThreshold || _state == CircuitState.HalfOpen)
+            if ((_consecutiveFailures >= _failureThreshold || _state == CircuitState.HalfOpen) && _state != CircuitState.Open)
             {
                 _state = CircuitState.Open;
                 _openedAt = DateTime.UtcNow;
+                return true;
             }
+            return false;
         }
     }
 }
