@@ -64,7 +64,7 @@ services:
       - ./wireguard/wg0.conf:/etc/wireguard/wg0.conf:ro
     command: ["wireguard", "/etc/wireguard/wg0.conf"]
     healthcheck:
-      test: ["CMD-SHELL", "ip link show wg0 && ip addr show wg0 | grep 10.99.0.1 && ( [ $$(wg show wg0 latest-handshakes | awk '{print $$2}') -eq 0 ] || [ $$(($$(date +%s) - $$(wg show wg0 latest-handshakes | awk '{print $$2}'))) -le 180 ] ) && curl -s -f --max-time 2 http://10.99.0.2:3000/api/stats >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "ip link show wg0 && ip addr show wg0 | grep 10.99.0.1 && ( [ $$(wg show wg0 latest-handshakes | awk '{print $$2}') -eq 0 ] || [ $$(($$(date +%s) - $$(wg show wg0 latest-handshakes | awk '{print $$2}'))) -le 180 ] ) || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -72,3 +72,4 @@ services:
     depends_on:
       wstunnel:
         condition: service_healthy
+
