@@ -74,6 +74,7 @@ var meiliKey = builder.Configuration["Meilisearch:ApiKey"]
 
 builder.Services.AddSingleton<PostgresTrigramSearchProvider>();
 builder.Services.AddSingleton<CircuitBreaker>();
+builder.Services.AddHttpClient();
 
 if (string.Equals(searchProviderSetting, "PostgreSQL", StringComparison.OrdinalIgnoreCase))
 {
