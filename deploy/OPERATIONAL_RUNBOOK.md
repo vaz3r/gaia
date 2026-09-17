@@ -28,9 +28,12 @@ When an operator accesses the dashboard or gateway ingress via a standard web br
 ## 2. Content Suppression Safety Policy & TTL Invariant
 
 ### 14,400s (4-Hour) TTL Rationale
-Gaia operates on a **120-minute (2-hour)** stateless index rebuild cadence. To guarantee that suppressed content cannot prematurely reappear under any failure mode, suppression keys in Redis DB 0 use a **14,400-second (4-hour)** TTL:
+Gaia operates on a **120-minute (2-hour)** stateless index rebuild cadence. Suppression keys in Redis DB 0 use a **14,400-second (4-hour)** TTL:
 
 $$ \text{Suppression TTL} = 2 \times \text{Cadence} = 2 \times 120\text{ min} = 240\text{ min} = 14,400\text{ sec} $$
+
+> **Bounded Guarantee Policy**:  
+> **Redis provides a 14,400-second immediate masking window designed to cover one delayed or failed 120-minute rebuild cycle; an extended rebuild outage can require operator intervention or a successful replacement rebuild before the old Meilisearch document is guaranteed absent.**
 
 ### Defense-in-Depth Suppression Layers
 1. **PostgreSQL (Permanent Source of Truth)**:
@@ -55,10 +58,10 @@ $$ \text{Suppression TTL} = 2 \times \text{Cadence} = 2 \times 120\text{ min} = 
      await db0.StringIncrementAsync("gaia:search:gen");
      ```
    - Every search query hits Redis DB 0 to verify candidate hits against active suppressions in $< 1\text{ms}$.
-4. **Why Suppressed Content Cannot Reappear on Rebuild Delay**:
-   - If an entire scheduled rebuild cycle fails, times out, or is delayed by up to 2 hours, the Redis suppression key remains fully active for the full 4 hours.
-   - When the next rebuild cycle executes, it reads from PostgreSQL where `policy_action = 'SUPPRESS'` is permanent, constructing a shadow index that contains zero occurrences of the suppressed item.
-   - Upon atomic swap, the item is permanently gone from Meilisearch.
+4. **Failure Boundary & Rebuild Outage Scenarios**:
+   - If a single rebuild at $+120$ minutes fails or is delayed, the 14,400-second Redis suppression key remains active to mask the document throughout the failure window.
+   - However, if an extended outage occurs (e.g., rebuild at $+120$m fails and rebuild at $+240$m is delayed or takes 35+ minutes), the Redis key can expire before the atomic swap at minute ~275. If the initial best-effort Meilisearch deletion also failed, the document could reappear until the replacement rebuild completes.
+   - When the next rebuild cycle completes, it reads from PostgreSQL where `policy_action = 'SUPPRESS'` is permanent, constructing a shadow index that contains zero occurrences of the suppressed item, and atomically swaps it in.
    - If un-suppressed, `KeyDeleteAsync("gaia:suppressed:{ih}")` instantly restores visibility alongside a cache generation bump (`INCR gaia:search:gen`).
 
 ---
