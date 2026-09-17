@@ -1,3 +1,17 @@
+-- ============================================================================
+-- WARNING: HISTORICAL / UNAPPLIED ARTIFACT — DO NOT RUN
+-- ============================================================================
+-- This migration is a historical record from the v2-scaling architecture branch.
+-- It must NOT be applied to current or future environments.
+--
+-- It creates objects that have been explicitly retired:
+--   - torrents.updated_at trigger (touch_updated_at) — not used by current apps
+--   - portal_sync_state table — superseded by direct Meilisearch sync in apps/sync
+--
+-- This file is retained for audit trail purposes only.
+-- Pending archival/removal after the dedicated bootstrap/migration audit.
+-- ============================================================================
+
 SET lock_timeout = '5s';
 
 -- 1. Universal change-detection column
