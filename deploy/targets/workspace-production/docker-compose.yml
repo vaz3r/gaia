@@ -202,3 +202,40 @@ services:
     command: ["redis-server", "--appendonly", "yes", "--maxmemory", "1024mb", "--maxmemory-policy", "volatile-lru"]
     volumes:
       - /home/${DEPLOY_USER:-core}/gaia-data/redis:/data
+
+  wstunnel-client:
+    build:
+      context: ../../..
+      dockerfile: apps/tunnel/Dockerfile
+    image: gaia-tunnel:${GIT_COMMIT:-latest}
+    container_name: gaia-wstunnel-client
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - "wstunnel-client"
+      - "-L"
+      - "udp://127.0.0.1:51820:127.0.0.1:51820?timeout_sec=0"
+      - "${GATEWAY_WSTUNNEL_URL:-wss://192.168.10.111:8443}"
+
+  wireguard-client:
+    build:
+      context: ../../..
+      dockerfile: apps/tunnel/Dockerfile
+    image: gaia-tunnel:${GIT_COMMIT:-latest}
+    container_name: gaia-wireguard-client
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - /dev/net/tun:/dev/net/tun
+      - /etc/wireguard/wg0.conf:/etc/wireguard/wg0.conf:ro
+    command: ["wireguard", "/etc/wireguard/wg0.conf"]
+    healthcheck:
+      test: ["CMD-SHELL", "ping -c 1 10.99.0.1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      - wstunnel-client
+

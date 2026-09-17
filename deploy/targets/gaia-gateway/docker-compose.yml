@@ -1,0 +1,60 @@
+name: gaia-gateway
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: gaia-gateway-nginx
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/custom_error.json:/var/www/html/custom_error.json:ro
+      - /etc/ssl/certs/gateway.crt:/etc/ssl/certs/gateway.crt:ro
+      - /etc/ssl/private/gateway.key:/etc/ssl/private/gateway.key:ro
+    depends_on:
+      wireguard:
+        condition: service_healthy
+
+  wstunnel:
+    build:
+      context: ../../../apps/tunnel
+      dockerfile: Dockerfile
+    image: gaia-tunnel:${GIT_COMMIT:-latest}
+    container_name: gaia-gateway-wstunnel
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - "wstunnel-server"
+      - "--restrict-to"
+      - "127.0.0.1:51820"
+      - "--tls-certificate"
+      - "/etc/wireguard/wstunnel.crt"
+      - "--tls-private-key"
+      - "/etc/wireguard/wstunnel.key"
+      - "wss://0.0.0.0:${WSTUNNEL_PORT:-8443}"
+    volumes:
+      - /etc/wireguard/wstunnel.crt:/etc/wireguard/wstunnel.crt:ro
+      - /etc/wireguard/wstunnel.key:/etc/wireguard/wstunnel.key:ro
+
+  wireguard:
+    build:
+      context: ../../../apps/tunnel
+      dockerfile: Dockerfile
+    image: gaia-tunnel:${GIT_COMMIT:-latest}
+    container_name: gaia-gateway-wireguard
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - /dev/net/tun:/dev/net/tun
+      - /etc/wireguard/wg0.conf:/etc/wireguard/wg0.conf:ro
+    command: ["wireguard", "/etc/wireguard/wg0.conf"]
+    healthcheck:
+      test: ["CMD-SHELL", "ip link show wg0 && ip addr show wg0 | grep 10.99.0.1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      - wstunnel
