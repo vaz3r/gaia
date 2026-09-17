@@ -150,11 +150,6 @@ app.MapSurveillanceEndpoints();
 app.MapAlertsEndpoints();
 app.MapScoringEndpoints();
 
-if (Directory.Exists(wwwrootPath))
-{
-    app.MapFallbackToFile("index.html");
-}
-
 app.MapGet("/health", () => Results.Ok(new
 {
     status          = "healthy",
@@ -162,7 +157,7 @@ app.MapGet("/health", () => Results.Ok(new
     search_provider = searchProviderSetting
 }));
 
-app.MapGet("/", () => Results.Ok(new
+app.MapGet("/api/info", () => Results.Ok(new
 {
     service = "GAIA V2 Core API",
     version = "2.0.0",
@@ -170,5 +165,21 @@ app.MapGet("/", () => Results.Ok(new
     search  = searchProviderSetting,
     docs    = "/api/torrents"
 }));
+
+if (Directory.Exists(wwwrootPath))
+{
+    app.MapFallbackToFile("index.html");
+}
+else
+{
+    app.MapGet("/", () => Results.Ok(new
+    {
+        service = "GAIA V2 Core API",
+        version = "2.0.0",
+        runtime = ".NET 10.0",
+        search  = searchProviderSetting,
+        docs    = "/api/torrents"
+    }));
+}
 
 app.Run();

@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
     network_mode: host
     environment:
-      DATABASE_URL: Host=localhost;Port=6432;Database=craw;Username=${POSTGRES_USER:-crawler};Password=${PG_PASSWORD};Pooling=true;Maximum Pool Size=50;Minimum Pool Size=5;Max Auto Prepare=0;No Reset On Close=true;
+      DATABASE_URL: Host=localhost;Port=6432;Database=craw;Username=${POSTGRES_USER:-crawler};Password=${PG_PASSWORD};Pooling=true;Maximum Pool Size=10;Minimum Pool Size=2;Command Timeout=10;Timeout=5;Max Auto Prepare=0;No Reset On Close=true;
       SEARCH_PROVIDER: PostgreSQL
       ASPNETCORE_URLS: http://0.0.0.0:${DASH_PORT:-3000}
       PORT: ${DASH_PORT:-3000}
@@ -173,32 +173,6 @@ services:
       - /home/${DEPLOY_USER:-core}/gaia-data/scoring/models:/app/model_registry
       - /home/${DEPLOY_USER:-core}/gaia-data/scoring/reports:/app/reports
 
-  quickwit:
-    image: quickwit/quickwit:0.8.2
-    container_name: gaia-quickwit
-    restart: unless-stopped
-    ports:
-      - "7280:7280"
-    environment:
-      NO_COLOR: "true"
-    volumes:
-      - /home/${DEPLOY_USER:-core}/gaia-data/quickwit:/quickwit/qwdata
-      - ../../../apps/quickwit/config:/quickwit/config:ro
-    command: ["run"]
-
-  meilisearch:
-    image: getmeili/meilisearch:v1.12
-    container_name: gaia-meilisearch
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      MEILI_MASTER_KEY: "${MEILI_MASTER_KEY:-7aee1af6e9ca00e20cc6562efaa8edbc3d65ac3d93f872f0519f1a89ac122748}"
-      MEILI_ENV: production
-      MEILI_DB_PATH: /meili_data
-      MEILI_HTTP_ADDR: "127.0.0.1:7700"
-      MEILI_MAX_INDEXING_MEMORY: "2Gb"
-    volumes:
-      - /home/${DEPLOY_USER:-core}/gaia-data/meilisearch:/meili_data
 
   pgbouncer:
     image: bitnami/pgbouncer:latest
