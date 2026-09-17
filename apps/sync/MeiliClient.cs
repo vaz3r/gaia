@@ -170,12 +170,17 @@ public class MeiliClient
         return 0;
     }
 
-    public async Task<List<string>> GetFailedTasksAsync(string indexUid)
+    public async Task<List<string>> GetFailedTasksAsync(string indexUid, DateTime? since = null)
     {
         var errors = new List<string>();
         try
         {
-            var resp = await _httpClient.GetAsync($"/tasks?statuses=failed&indexUids={indexUid}&limit=20");
+            var url = $"/tasks?statuses=failed&indexUids={indexUid}&limit=50";
+            if (since.HasValue)
+            {
+                url += $"&afterEnqueuedAt={Uri.EscapeDataString(since.Value.ToString("yyyy-MM-ddTHH:mm:ssZ"))}";
+            }
+            var resp = await _httpClient.GetAsync(url);
             if (resp.IsSuccessStatusCode)
             {
                 using var doc = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());

@@ -93,6 +93,7 @@ public class SyncEngine
         {
             _logger.LogInformation("=== STARTING PERIODIC FULL REBUILD INTO {Shadow} ===", shadowIndex);
             var sw = Stopwatch.StartNew();
+            var rebuildStart = DateTime.UtcNow.AddMinutes(-1); // 1-minute buffer for clock skew
 
             // 1. Fetch baseline active count from PostgreSQL for Low-Watermark Guard
             long baselineCount;
@@ -162,8 +163,8 @@ public class SyncEngine
             _logger.LogInformation("Extracted {Count:N0} records. Waiting for {Shadow} to finish indexing...", totalIngested, shadowIndex);
             await _meili.WaitForIndexIdleAsync(shadowIndex);
 
-            // Guard 2: Task-Failure Check (Zero failed tasks in Meilisearch)
-            var failedTasks = await _meili.GetFailedTasksAsync(shadowIndex);
+            // Guard 2: Task-Failure Check (Zero failed tasks in Meilisearch during this rebuild)
+            var failedTasks = await _meili.GetFailedTasksAsync(shadowIndex, rebuildStart);
             if (failedTasks.Count > 0)
             {
                 _logger.LogCritical("❌ ABORTING SWAP: Detected {Count} failed tasks in {Shadow}! Errors: {Errors}",
