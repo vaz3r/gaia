@@ -6,7 +6,8 @@ set -euo pipefail
 
 ACTION="${1:-status}"
 RANCH_PASS="rosrtdz@1995"
-SSH_RANCH="sshpass -p '$RANCH_PASS' ssh -o StrictHostKeyChecking=no root@ranch"
+SSH_RANCH="sshpass -p ${RANCH_PASS} ssh -o StrictHostKeyChecking=no root@ranch"
+
 
 case "$ACTION" in
     to-systemd)
