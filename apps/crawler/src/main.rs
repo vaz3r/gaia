@@ -416,6 +416,33 @@ async fn main() {
         Duration::from_secs(config.cache.peer_cache_cleanup_interval_secs),
     );
 
+    let redis_conn = match std::env::var("REDIS_URL") {
+        Ok(url) if !url.is_empty() => {
+            let db1_url = if url.ends_with("/1") {
+                url
+            } else {
+                format!("{}/1", url.trim_end_matches('/'))
+            };
+            match redis::Client::open(db1_url) {
+                Ok(client) => match client.get_connection_manager().await {
+                    Ok(cm) => {
+                        tracing::info!("Connected to Redis DB 1 for crawler health dual-writes");
+                        Some(cm)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to initialize Redis ConnectionManager: {}", e);
+                        None
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!("Failed to parse Redis URL: {}", e);
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+
     let health_prober = Arc::new(crate::verify::health_prober::HealthProber::new(
         pool.clone(),
         node_routers[0].clone(),
@@ -423,6 +450,7 @@ async fn main() {
         peer_cache.clone(),
         ip_cooldown.clone(),
         crate::verify::health_prober::HealthProberConfig::default(),
+        redis_conn,
     ));
     let health_prober_run = health_prober.run();
 

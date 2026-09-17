@@ -103,7 +103,7 @@ pub async fn source_peers(
                                         continue;
                                     }
                                     let ip_addr = std::net::IpAddr::V4(ip);
-                                    if ip_cooldown.is_quarantined(&ip_addr) {
+                                    if ip_cooldown.is_blacklisted(&ip_addr) {
                                         continue;
                                     }
                                     // Strict per-IP deduplication: at most 1 port per IP for this infohash

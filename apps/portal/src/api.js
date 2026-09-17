@@ -1,11 +1,8 @@
 export async function api(path, options = {}) {
   const fetchOptions = { ...options };
-  fetchOptions.headers = { ...(fetchOptions.headers || {}) };
-  const adminToken = typeof window !== 'undefined' ? (localStorage.getItem('gaia_admin_token') || window.__GAIA_ADMIN_TOKEN__) : null;
-  if (adminToken) {
-    fetchOptions.headers['X-Gaia-Admin-Token'] = adminToken;
-  }
-  if (fetchOptions.body && typeof fetchOptions.body === 'string' && !fetchOptions.headers['Content-Type']) {
+  if (fetchOptions.body && typeof fetchOptions.body === 'string' && !fetchOptions.headers) {
+    fetchOptions.headers = { 'Content-Type': 'application/json' };
+  } else if (fetchOptions.body && typeof fetchOptions.body === 'string' && fetchOptions.headers && !fetchOptions.headers['Content-Type']) {
     fetchOptions.headers['Content-Type'] = 'application/json';
   }
   const r = await fetch(path, fetchOptions);
@@ -70,4 +67,3 @@ export async function downloadTorrent(infohash, name) {
   a.remove();
   window.URL.revokeObjectURL(url);
 }
-

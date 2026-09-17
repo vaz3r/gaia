@@ -120,7 +120,7 @@ impl SurveillanceRecorder {
                     tracing::info!(loaded = count, "surveillance: loaded manually-blocked IPs (operator-controlled)");
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "surveillance: failed to preload blocked IPs");
+                    tracing::warn!(error = %e, "surveillance: failed to load manually-blocked IPs");
                 }
             }
         }
@@ -397,7 +397,7 @@ impl SurveillanceRecorder {
                     .bind(entry.bep42_valid as i32)
                     .bind(suspected)
                     .bind(&sample_hashes)
-                    .bind(false)
+                    .bind(false) // new rows: never auto-blocked; operator sets is_blocked via dashboard
                     .bind(entry.first_seen)
                     .bind(entry.last_seen)
                     .bind(entry.find_node_count as i64)
@@ -731,32 +731,35 @@ pub fn calculate_universal_threat_score(
         score = score.saturating_sub(announce_discount);
     }
 
-    let final_score = score.clamp(0, 100);
+    // Absolute guardrail for standard BitTorrent clients & seedboxes:
+    // Any node querying swarms (get_peers > 0) that does NOT belong to a confirmed
+    // copyright surveillance operator (Selectel/IKWYD, DataCamp, M247, Cogent)
+    // and uses <= 4 node IDs is a standard BitTorrent peer or seedbox.
+    // It can NEVER exceed score 45 and can NEVER be blocked.
+    let final_score = if !is_known_spy && entry.get_peers_count > 0 && entry.total_node_ids_seen <= 4 && total_queries < 300 {
+        score.clamp(0, 45)
+    } else {
+        score.clamp(0, 100)
+    };
 
     // Dynamic categorization
-    let (category, suspected) = if entry.total_node_ids_seen >= 3 {
+    let (category, suspected) = if entry.total_node_ids_seen >= 5 {
         (
             AbuseCategory::SybilRotator,
             format!("Sybil Node Rotator ({} distinct Node IDs)", entry.total_node_ids_seen),
         )
-    } else if entry.find_node_count >= 50 && entry.announce_peer_count == 0 {
+    } else if is_known_spy {
+        let h = asn_hint.as_ref().unwrap();
+        (
+            AbuseCategory::PassiveMonitor,
+            format!("{} ({})", h.hint_name, h.org),
+        )
+    } else if entry.find_node_count >= 100 && entry.get_peers_count == 0 && entry.announce_peer_count == 0 {
         (
             AbuseCategory::RoutingScraper,
             format!("DHT Table Scraper ({} find_node probes)", entry.find_node_count),
         )
-    } else if entry.get_peers_count >= 20 && entry.announce_peer_count == 0 {
-        if let Some(h) = &asn_hint {
-            (
-                AbuseCategory::PassiveMonitor,
-                format!("{} ({})", h.hint_name, h.org),
-            )
-        } else {
-            (
-                AbuseCategory::PassiveMonitor,
-                format!("Passive Swarm Monitor ({} queries / 0 announces)", entry.get_peers_count),
-            )
-        }
-    } else if total_queries >= 100 && entry.announce_peer_count == 0 {
+    } else if final_score >= 70 && total_queries >= 300 && entry.announce_peer_count == 0 {
         (
             AbuseCategory::QueryFlooder,
             format!("High-Rate Query Flooder ({} total queries)", total_queries),
@@ -765,11 +768,6 @@ pub fn calculate_universal_threat_score(
         (
             AbuseCategory::UnreciprocatingLeecher,
             "Unreciprocating DHT Leecher (0 Swarm Contribution)".to_string(),
-        )
-    } else if entry.bep42_violations > 0 && entry.bep42_valid == 0 && final_score >= 50 {
-        (
-            AbuseCategory::CryptoSpoofer,
-            "Cryptographic Spoofing Node (BEP 42 Failed)".to_string(),
         )
     } else {
         (

@@ -1,0 +1,639 @@
+{
+  "timestamp": "2026-09-16T05:39:03Z",
+  "targets": {
+    "dashboard": "http://workspace-production:3000",
+    "portal": "http://gaia-portal:3005"
+  },
+  "performance": [
+    {
+      "scenario": "Browse Page 1 (Default)",
+      "path": "/api/torrents?page=1&limit=25",
+      "dashboard": {
+        "cold_ms": 419.09009707160294,
+        "warm_ms": 157.73056501833102,
+        "status": 200
+      },
+      "portal": {
+        "cold_ms": 161.10403183847666,
+        "warm_ms": 70.00992470420897,
+        "status": 200
+      }
+    },
+    {
+      "scenario": "Browse Page 10 (Pagination)",
+      "path": "/api/torrents?page=10&limit=25",
+      "dashboard": {
+        "cold_ms": 67.76118814013898,
+        "warm_ms": 70.18109263541798,
+        "status": 200
+      },
+      "portal": {
+        "cold_ms": 383.8881920091808,
+        "warm_ms": 43.30610693432391,
+        "status": 200
+      }
+    },
+    {
+      "scenario": "Browse Page 50 (Deep Page)",
+      "path": "/api/torrents?page=50&limit=25",
+      "dashboard": {
+        "cold_ms": 101.88194504007697,
+        "warm_ms": 94.30393467967708,
+        "status": 200
+      },
+      "portal": {
+        "cold_ms": 357.5598238967359,
+        "warm_ms": 17.71825396766265,
+        "status": 200
+      }
+    },
+    {
+      "scenario": "Sort: verified_at DESC",
+      "path": "/api/torrents?page=1&limit=25&sort=verified_at&order=desc",
+      "dashboard": {
+        "cold_ms": 32.704772893339396,
+        "warm_ms": 30.206788253660005,
+        "status": 200
+      },
+      "portal": {
+        "cold_ms": 158.4217818453908,
+        "warm_ms": 7.779375339547793,
+        "status": 200
+      }
+    },
+    {
+      "scenario": "Sort: verified_at ASC",
+      "path": "/api/torrents?page=1&limit=25&sort=verified_at&order=asc",
+      "dashboard": {
+        "cold_ms": 26.00804902613163,
+        "warm_ms": 87.77780497136216,
+        "status": 200
+      },
+      "portal": {
+        "cold_ms": 200.16330084763467,
+        "warm_ms": 43.20461101209124,
+        "status": 200
+      }
+    },
+    {
+      "scenario": "Sort: size DESC",
+      "path": "/api/torrents?page=1&limit=25&sort=size&order=desc",
+      "dashboard": {
+        "cold_ms": 49.62419695220888,
+        "warm_ms": 36.15082101896405,
+        "status": 200
+      },
+      "portal": {
+        "cold_ms": 434.63439610786736,
+        "warm_ms": 39.52321798230211,
+        "status": 200
+      }
+    },
+    {
+      "scenario": "Sort: popularity DESC",
+      "path": "/api/torrents?page=1&limit=25&sort=popularity&order=desc",
+      "dashboard": {
+        "cold_ms": 17.27059204131365,
+        "warm_ms": 43.95256067315737,
+        "status": 200
+      },
+      "portal": {
+        "cold_ms": 177.3561609443277,
+        "warm_ms": 21.880285038302343,
+        "status": 200
+      }
+    },
+    {
+      "scenario": "Sort: health DESC",
+      "path": "/api/torrents?page=1&limit=25&sort=health&order=desc",
+      "dashboard": {
+        "cold_ms": 34.53863691538572,
+        "warm_ms": 42.227366318305336,
+        "status": 200
+      },
+      "portal": {
+        "cold_ms": 125.2729631960392,
+        "warm_ms": 10.3808653075248,
+        "status": 200
+      }
+    },
+    {
+      "scenario": "Filter: Movies",
+      "path": "/api/torrents?page=1&limit=25&category=Movies",
+      "dashboard": {
+        "cold_ms": 87.55421102978289,
+        "warm_ms": 1351.0637114134927,
+        "status": 200
+      },
+      "portal": {
+        "cold_ms": 244.99229597859085,
+        "warm_ms": 13.716977710525194,
+        "status": 200
+      }
+    },
+    {
+      "scenario": "Filter: Television",
+      "path": "/api/torrents?page=1&limit=25&category=Television",
+      "dashboard": {
+        "cold_ms": 1151.3278030324727,
+        "warm_ms": 1315.9495213379462,
+        "status": 200
+      },
+      "portal": {
+        "cold_ms": 151.80506883189082,
+        "warm_ms": 26.542857056483626,
+        "status": 200
+      }
+    },
+    {
+      "scenario": "Filter: Games",
+      "path": "/api/torrents?page=1&limit=25&category=Games",
+      "dashboard": {
+        "cold_ms": 1201.9787810277194,
+        "warm_ms": 215.56171565316617,
+        "status": 200
+      },
+      "portal": {
+        "cold_ms": 142.67023489810526,
+        "warm_ms": 13.36663526793321,
+        "status": 200
+      }
+    },
+    {
+      "scenario": "Filter: Books & Learning",
+      "path": "/api/torrents?page=1&limit=25&category=Books%20%26%20Learning",
+      "dashboard": {
+        "cold_ms": 15.28373104520142,
+        "warm_ms": 14.17214097455144,
+        "status": 200
+      },
+      "portal": {
+        "cold_ms": 58.844732120633125,
+        "warm_ms": 23.961100727319717,
+        "status": 200
+      }
+    },
+    {
+      "scenario": "Combined: Movies + size DESC",
+      "path": "/api/torrents?page=1&limit=25&category=Movies&sort=size&order=desc",
+      "dashboard": {
+        "cold_ms": 87.35255687497556,
+        "warm_ms": 26.605308055877686,
+        "status": 200
+      },
+      "portal": {
+        "cold_ms": 14.766420004889369,
+        "warm_ms": 29.910467332229018,
+        "status": 200
+      }
+    },
+    {
+      "scenario": "Combined: TV + pop DESC",
+      "path": "/api/torrents?page=1&limit=25&category=Television&sort=popularity&order=desc",
+      "dashboard": {
+        "cold_ms": 23.57004303485155,
+        "warm_ms": 45.63870537094772,
+        "status": 200
+      },
+      "portal": {
+        "cold_ms": 155.61214205808938,
+        "warm_ms": 18.031497408325475,
+        "status": 200
+      }
+    }
+  ],
+  "accuracy": [
+    {
+      "query": "The Matrix",
+      "category": "",
+      "targets": [
+        "matrix"
+      ],
+      "description": "Exact Clean Title",
+      "dashboard": {
+        "hits": 572,
+        "found_in_top3": true,
+        "top_title": "The Matrix Resurrections (2021) BDRemux 1080p.mkv",
+        "ms": 133.07668804191053
+      },
+      "portal": {
+        "hits": 50000,
+        "found_in_top3": true,
+        "top_title": "The Matrix Resurrections (2021) [1080p] [WEBRip] [5.1] [YTS.MX]",
+        "ms": 469.0987740177661
+      }
+    },
+    {
+      "query": "Ubuntu",
+      "category": "",
+      "targets": [
+        "ubuntu"
+      ],
+      "description": "Exact Linux Distro",
+      "dashboard": {
+        "hits": 793,
+        "found_in_top3": true,
+        "top_title": "Ubuntu 11.10",
+        "ms": 258.118093945086
+      },
+      "portal": {
+        "hits": 50000,
+        "found_in_top3": true,
+        "top_title": "ubuntu-14.04-desktop-amd64+mac.iso",
+        "ms": 224.1337930317968
+      }
+    },
+    {
+      "query": "Cyberpunk 2077",
+      "category": "",
+      "targets": [
+        "cyberpunk"
+      ],
+      "description": "Exact Multi-Word",
+      "dashboard": {
+        "hits": 278,
+        "found_in_top3": true,
+        "top_title": "[dixen18] Cyberpunk 2077",
+        "ms": 68.93859687261283
+      },
+      "portal": {
+        "hits": 50000,
+        "found_in_top3": true,
+        "top_title": "[dixen18] Cyberpunk 2077",
+        "ms": 128.22520197369158
+      }
+    },
+    {
+      "query": "thmatrix",
+      "category": "",
+      "targets": [
+        "matrix"
+      ],
+      "description": "Typo: Transposition",
+      "dashboard": {
+        "hits": 49,
+        "found_in_top3": true,
+        "top_title": "THE_MATRIX",
+        "ms": 2715.234959963709
+      },
+      "portal": {
+        "hits": 1185,
+        "found_in_top3": true,
+        "top_title": "The Matrix (1999)",
+        "ms": 99.22847989946604
+      }
+    },
+    {
+      "query": "metrix",
+      "category": "",
+      "targets": [
+        "matrix"
+      ],
+      "description": "Typo: Phonetic",
+      "dashboard": {
+        "hits": 45,
+        "found_in_top3": false,
+        "top_title": "asymetrix-web-3d",
+        "ms": 1116.7316031642258
+      },
+      "portal": {
+        "hits": 1013,
+        "found_in_top3": true,
+        "top_title": "Metric.Halo.Make.Believe.Howies.179.v4.1.17-R2R",
+        "ms": 76.36254606768489
+      }
+    },
+    {
+      "query": "ubunut",
+      "category": "",
+      "targets": [
+        "ubuntu"
+      ],
+      "description": "Typo: Vowel/Consonant",
+      "dashboard": {
+        "hits": 6,
+        "found_in_top3": false,
+        "top_title": "UBUCA",
+        "ms": 47.96469095163047
+      },
+      "portal": {
+        "hits": 604,
+        "found_in_top3": true,
+        "top_title": "ubuntu-24.04.3-desktop-amd64.iso",
+        "ms": 95.30516294762492
+      }
+    },
+    {
+      "query": "cbyerpunk",
+      "category": "",
+      "targets": [
+        "cyberpunk"
+      ],
+      "description": "Typo: Transposition",
+      "dashboard": {
+        "hits": 33,
+        "found_in_top3": true,
+        "top_title": "Cyberpunk",
+        "ms": 333.6769400630146
+      },
+      "portal": {
+        "hits": 527,
+        "found_in_top3": true,
+        "top_title": "Cyberpunk.Edgerunners.S01.COMPLETE.DUBBED.720p.NF.WEBRip.x264-GalaxyTV[TGx]",
+        "ms": 149.97798204421997
+      }
+    },
+    {
+      "query": "interstelar",
+      "category": "",
+      "targets": [
+        "interstellar",
+        "interstelar"
+      ],
+      "description": "Typo: Missing 'l' (Alt Release)",
+      "dashboard": {
+        "hits": 65,
+        "found_in_top3": true,
+        "top_title": "Interstelar 2014 4K Dual \u00c1udio 5.1 WWW.BLUDV.COM",
+        "ms": 3906.4361380878836
+      },
+      "portal": {
+        "hits": 373,
+        "found_in_top3": true,
+        "top_title": "Interstelar 2014 4K Dual \u00c1udio 5.1 WWW.BLUDV.COM",
+        "ms": 216.80617611855268
+      }
+    },
+    {
+      "query": "matrix1999",
+      "category": "",
+      "targets": [
+        "matrix"
+      ],
+      "description": "Glued: Word + Year",
+      "dashboard": {
+        "hits": 47,
+        "found_in_top3": true,
+        "top_title": "MATRIX",
+        "ms": 900.1736540812999
+      },
+      "portal": {
+        "hits": 116,
+        "found_in_top3": true,
+        "top_title": "Matrix (1999) HybridRip Open Matte.mkv",
+        "ms": 111.59099102951586
+      }
+    },
+    {
+      "query": "the.matrix.reloaded",
+      "category": "",
+      "targets": [
+        "matrix"
+      ],
+      "description": "Delimited: Dots",
+      "dashboard": {
+        "hits": 84,
+        "found_in_top3": true,
+        "top_title": "The.Matrix.Reloaded.2003.Multi.UHD.2160p.Bluray.Remux.HEVC.HDR.Atmos.7.1-DTOne",
+        "ms": 104.1835939977318
+      },
+      "portal": {
+        "hits": 100,
+        "found_in_top3": true,
+        "top_title": "The Matrix Reloaded (2003) [1080p]",
+        "ms": 63.618356827646494
+      }
+    },
+    {
+      "query": "thmatrix 99",
+      "category": "Movies",
+      "targets": [
+        "matrix"
+      ],
+      "description": "Complex: Typo + Shorthand Year",
+      "dashboard": {
+        "hits": 0,
+        "found_in_top3": false,
+        "top_title": "None",
+        "ms": 15.80132101662457
+      },
+      "portal": {
+        "hits": 527,
+        "found_in_top3": true,
+        "top_title": "The.Matrix.1999.1080p.BluRay.DDP5.1.x265.10bit-GalaxyRG265[TGx]",
+        "ms": 268.36179196834564
+      }
+    },
+    {
+      "query": "cyberpunk 2.0",
+      "category": "",
+      "targets": [
+        "cyberpunk"
+      ],
+      "description": "Version Shorthand",
+      "dashboard": {
+        "hits": 369,
+        "found_in_top3": true,
+        "top_title": "HEALTH - CYBERPUNK 2.0.2.6 (DJ Mix) (2026)",
+        "ms": 58.27402090653777
+      },
+      "portal": {
+        "hits": 632,
+        "found_in_top3": true,
+        "top_title": "HEALTH - CYBERPUNK 2.0.2.6 (DJ Mix) (2026)",
+        "ms": 92.81256585381925
+      }
+    },
+    {
+      "query": "gta v",
+      "category": "",
+      "targets": [
+        "gta"
+      ],
+      "description": "Acronym Title",
+      "dashboard": {
+        "hits": 106,
+        "found_in_top3": true,
+        "top_title": "GTA Vice City - Definitive Edition [Repack] by Wanterlude",
+        "ms": 91.05219808407128
+      },
+      "portal": {
+        "hits": 273,
+        "found_in_top3": true,
+        "top_title": "GTA V",
+        "ms": 78.69277405552566
+      }
+    },
+    {
+      "query": "lotr 4k",
+      "category": "",
+      "targets": [
+        "lotr",
+        "lord of the rings"
+      ],
+      "description": "Acronym + Resolution",
+      "dashboard": {
+        "hits": 1,
+        "found_in_top3": true,
+        "top_title": "2001 - LOTR - The Fellowship of the Ring.(Extended)_4K-Atmos_A(Chi.5Eng.Fre.Ger.Hin.Ita.Jap.Pol.Por.11Rus.2Spa.Tam.Tha.5Ukr)_S(Multi)+Bso.3h48.18.mkv",
+        "ms": 13.883128063753247
+      },
+      "portal": {
+        "hits": 8,
+        "found_in_top3": true,
+        "top_title": "LOTR.The.Two.Towers.2002.Extended.Edition.BDRip.2160p.UHD.HDR.Eng.TrueHD.DD5.1",
+        "ms": 206.4455458894372
+      }
+    },
+    {
+      "query": "\u041c\u043e\u0440\u0442\u0430\u043b \u041a\u043e\u043c\u0431\u0430\u0442",
+      "category": "",
+      "targets": [
+        "\u043a\u043e\u043c\u0431\u0430\u0442"
+      ],
+      "description": "Cyrillic: Movie Title",
+      "dashboard": {
+        "hits": 46,
+        "found_in_top3": true,
+        "top_title": "\u041c\u043e\u0440\u0442\u0430\u043b \u041a\u043e\u043c\u0431\u0430\u0442.2021.WEB-DL.2160p.mkv",
+        "ms": 35.73005204088986
+      },
+      "portal": {
+        "hits": 47,
+        "found_in_top3": true,
+        "top_title": "\u041c\u043e\u0440\u0442\u0430\u043b \u041a\u043e\u043c\u0431\u0430\u0442 2_2026_WEBRip.avi",
+        "ms": 199.23635385930538
+      }
+    },
+    {
+      "query": "\u041c\u0430\u0442\u0440\u0438\u0446\u0430",
+      "category": "",
+      "targets": [
+        "\u043c\u0430\u0442\u0440\u0438\u0446\u0430"
+      ],
+      "description": "Cyrillic: The Matrix",
+      "dashboard": {
+        "hits": 101,
+        "found_in_top3": true,
+        "top_title": "\u041c\u0430\u0442\u0440\u0438\u0446\u0430",
+        "ms": 923.3542308211327
+      },
+      "portal": {
+        "hits": 1155,
+        "found_in_top3": true,
+        "top_title": "\u041c\u0430\u0442\u0440\u0438\u0446\u0430",
+        "ms": 242.5680928863585
+      }
+    }
+  ],
+  "concurrency_rps": [
+    {
+      "concurrency": 5,
+      "target": "Dashboard",
+      "duration_sec": 13.07,
+      "total_requests": 97,
+      "total_errors": 0,
+      "rps": 7.4,
+      "percentiles": {
+        "min": 6.97,
+        "p50": 77.58,
+        "p90": 3350.9,
+        "p95": 4602.14,
+        "p99": 6119.2,
+        "max": 6119.2,
+        "mean": 618.62,
+        "std": 1374.78
+      }
+    },
+    {
+      "concurrency": 5,
+      "target": "Portal",
+      "duration_sec": 10.02,
+      "total_requests": 1153,
+      "total_errors": 0,
+      "rps": 115.1,
+      "percentiles": {
+        "min": 2.85,
+        "p50": 9.97,
+        "p90": 40.2,
+        "p95": 70.38,
+        "p99": 1329.91,
+        "max": 2890.78,
+        "mean": 42.95,
+        "std": 229.94
+      }
+    },
+    {
+      "concurrency": 15,
+      "target": "Dashboard",
+      "duration_sec": 12.03,
+      "total_requests": 75,
+      "total_errors": 1,
+      "rps": 6.2,
+      "percentiles": {
+        "min": 58.76,
+        "p50": 535.03,
+        "p90": 9769.75,
+        "p95": 9848.04,
+        "p99": 10003.59,
+        "max": 10003.59,
+        "mean": 2330.95,
+        "std": 3724.84
+      }
+    },
+    {
+      "concurrency": 15,
+      "target": "Portal",
+      "duration_sec": 10.02,
+      "total_requests": 1151,
+      "total_errors": 0,
+      "rps": 114.9,
+      "percentiles": {
+        "min": 6.45,
+        "p50": 21.89,
+        "p90": 44.45,
+        "p95": 58.3,
+        "p99": 7866.95,
+        "max": 8038.89,
+        "mean": 130.03,
+        "std": 895.09
+      }
+    },
+    {
+      "concurrency": 30,
+      "target": "Dashboard",
+      "duration_sec": 13.54,
+      "total_requests": 150,
+      "total_errors": 30,
+      "rps": 11.1,
+      "percentiles": {
+        "min": 23.61,
+        "p50": 809.51,
+        "p90": 10010.97,
+        "p95": 10011.73,
+        "p99": 10013.25,
+        "max": 10015.27,
+        "mean": 2588.96,
+        "std": 3735.3
+      }
+    },
+    {
+      "concurrency": 30,
+      "target": "Portal",
+      "duration_sec": 10.02,
+      "total_requests": 9762,
+      "total_errors": 0,
+      "rps": 973.9,
+      "percentiles": {
+        "min": 4.13,
+        "p50": 28.47,
+        "p90": 45.41,
+        "p95": 52.79,
+        "p99": 73.51,
+        "max": 135.72,
+        "mean": 30.49,
+        "std": 12.78
+      }
+    }
+  ]
+}

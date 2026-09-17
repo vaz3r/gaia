@@ -475,7 +475,7 @@ export default function App() {
     if (categoryFilter) params.set('category', categoryFilter);
     if (riskFilter) params.set('risk', riskFilter);
 
-    api(`/api/torrents?${params.toString()}`)
+    api(`/api/dashboard/torrents?${params.toString()}`)
       .then((res) => {
         if (!active) return;
         setTorrentsData(res);

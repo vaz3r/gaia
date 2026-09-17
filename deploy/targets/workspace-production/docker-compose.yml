@@ -3,19 +3,19 @@ name: gaia-production
 services:
   dashboard:
     build:
-      context: ../../../apps/dashboard
-      dockerfile: Dockerfile
+      context: ../../..
+      dockerfile: apps/dashboard/Dockerfile
     image: gaia-dashboard:${GIT_COMMIT:-latest}
     container_name: gaia-dashboard
     init: true
     restart: unless-stopped
     network_mode: host
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-crawler}:${PG_PASSWORD}@${DB_HOST}:${PG_PORT:-5432}/${POSTGRES_DB:-craw}?sslmode=disable
+      DATABASE_URL: Host=localhost;Port=6432;Database=craw;Username=${POSTGRES_USER:-crawler};Password=${PG_PASSWORD};Pooling=true;Maximum Pool Size=10;Minimum Pool Size=2;Command Timeout=10;Timeout=5;Max Auto Prepare=0;No Reset On Close=true;
+      SEARCH_PROVIDER: PostgreSQL
+      ASPNETCORE_URLS: http://0.0.0.0:${DASH_PORT:-3000}
       PORT: ${DASH_PORT:-3000}
-      LOGS_DIR: /mnt/gaia/logs/crawler
-    volumes:
-      - /mnt/gaia/logs/crawler:/mnt/gaia/logs/crawler:ro
+      GAIA_ADMIN_TOKEN: ${GAIA_ADMIN_TOKEN:-}
 
   log-receiver:
     build:
@@ -173,3 +173,32 @@ services:
       - /home/${DEPLOY_USER:-core}/gaia-data/scoring/models:/app/model_registry
       - /home/${DEPLOY_USER:-core}/gaia-data/scoring/reports:/app/reports
 
+
+  pgbouncer:
+    image: bitnami/pgbouncer:latest
+    container_name: gaia-pgbouncer
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      POSTGRESQL_HOST: "127.0.0.1"
+      POSTGRESQL_PORT: "5432"
+      POSTGRESQL_DATABASE: "${POSTGRES_DB:-craw}"
+      POSTGRESQL_USERNAME: "${POSTGRES_USER:-crawler}"
+      POSTGRESQL_PASSWORD: "${PG_PASSWORD}"
+      PGBOUNCER_PORT: "6432"
+      PGBOUNCER_POOL_MODE: "transaction"
+      PGBOUNCER_MAX_CLIENT_CONN: "500"
+      PGBOUNCER_DEFAULT_POOL_SIZE: "25"
+      PGBOUNCER_MIN_POOL_SIZE: "5"
+      PGBOUNCER_RESERVE_POOL_SIZE: "5"
+      PGBOUNCER_RESERVE_POOL_TIMEOUT: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: gaia-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "1024mb", "--maxmemory-policy", "volatile-lru"]
+    volumes:
+      - /home/${DEPLOY_USER:-core}/gaia-data/redis:/data

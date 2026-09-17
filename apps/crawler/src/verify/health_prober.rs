@@ -34,6 +34,8 @@ pub struct HealthProber {
     cache: Arc<PeerCache>,
     ip_cooldown: Arc<crate::net::ip_cooldown::IpCooldownCache>,
     config: HealthProberConfig,
+    redis_conn: Option<redis::aio::ConnectionManager>,
+    redis_sem: Arc<tokio::sync::Semaphore>,
 }
 
 #[derive(Clone)]
@@ -52,6 +54,7 @@ impl HealthProber {
         cache: Arc<PeerCache>,
         ip_cooldown: Arc<crate::net::ip_cooldown::IpCooldownCache>,
         config: HealthProberConfig,
+        redis_conn: Option<redis::aio::ConnectionManager>,
     ) -> Self {
         HealthProber {
             pool,
@@ -60,6 +63,8 @@ impl HealthProber {
             cache,
             ip_cooldown,
             config,
+            redis_conn,
+            redis_sem: Arc::new(tokio::sync::Semaphore::new(100)),
         }
     }
 
@@ -79,6 +84,7 @@ impl HealthProber {
             "SELECT infohash, total_seen, last_seen \
              FROM torrents \
              WHERE last_seen > now() - interval '7 days' \
+               AND policy_action IS DISTINCT FROM 'SUPPRESS' \
              ORDER BY last_health_check ASC NULLS FIRST \
              LIMIT $1",
         )
@@ -91,6 +97,7 @@ impl HealthProber {
             rows = sqlx::query_as::<_, (Vec<u8>, i64, chrono::DateTime<chrono::Utc>)>(
                 "SELECT infohash, total_seen, last_seen \
                  FROM torrents \
+                 WHERE policy_action IS DISTINCT FROM 'SUPPRESS' \
                  ORDER BY last_health_check ASC NULLS FIRST \
                  LIMIT $1",
             )
@@ -207,7 +214,7 @@ impl HealthProber {
             if let Ok((ih_bytes, peers_count, health_score, pop_score, seed_confirmed)) = res {
                 let _ = sqlx::query(
                     "UPDATE torrents \
-                     SET swarm_peers = $2, health_score = $3, popularity_score = $4, seed_confirmed = $5, last_health_check = now() \
+                     SET swarm_peers = $2, health_score = $3, popularity_score = $4, seed_confirmed = $5, last_health_check = now(), last_health_attempt = now() \
                      WHERE infohash = $1",
                 )
                 .bind(&ih_bytes)
@@ -217,6 +224,26 @@ impl HealthProber {
                 .bind(seed_confirmed)
                 .execute(&self.pool)
                 .await;
+
+                if let (Some(mut conn), sem) = (self.redis_conn.clone(), self.redis_sem.clone()) {
+                    if let Ok(permit) = sem.try_acquire_owned() {
+                        let hex_hash = hex::encode(&ih_bytes);
+                        tokio::spawn(async move {
+                            let _permit = permit;
+                            let _ = redis::pipe()
+                                .hset(&format!("gaia:health:{}", hex_hash), "h", health_score)
+                                .hset(&format!("gaia:health:{}", hex_hash), "p", pop_score)
+                                .hset(&format!("gaia:health:{}", hex_hash), "s", peers_count as i32)
+                                .hset(&format!("gaia:health:{}", hex_hash), "c", seed_confirmed as i32)
+                                .hset(&format!("gaia:health:{}", hex_hash), "t", chrono::Utc::now().timestamp())
+                                .ignore()
+                                .query_async::<()>(&mut conn)
+                                .await;
+                        });
+                    } else {
+                        tracing::debug!("Redis dual-write queue full (100 permits); dropping ping.");
+                    }
+                }
             }
         }
 
