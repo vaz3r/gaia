@@ -421,79 +421,104 @@ public class DashboardRepository
 
     #region 3. Metrics & Analytics (Postgres-Native)
 
+    private static (object Data, DateTime ExpiresAt)? _metricsCurrentCache;
+    private static readonly SemaphoreSlim _metricsCurrentLock = new(1, 1);
+
     public async Task<object> GetMetricsCurrentAsync(CancellationToken ct)
     {
-        await using var conn = await OpenConnectionAsync(ct);
-        const string sql = @"
-            WITH session_start AS (
-                SELECT ts FROM metrics WHERE metric_name = '_session_start'
-                ORDER BY ts DESC LIMIT 1
-            ),
-            cur AS (
-                SELECT DISTINCT ON (metric_name) metric_name, metric_value, ts
-                FROM metrics
-                WHERE metric_name != '_session_start'
-                  AND ts >= (SELECT ts FROM session_start)
-                ORDER BY metric_name, ts DESC
-            )
-            SELECT c.metric_name,
-                   c.metric_value AS current_value,
-                   c.ts,
-                   COALESCE(prev.metric_value, 0) AS value_1h_ago,
-                   EXTRACT(EPOCH FROM (c.ts - prev.ts)) / 3600.0 AS hours_elapsed,
-                   COALESCE(session_val.metric_value, 0) AS value_at_session_start,
-                   (SELECT ts FROM session_start) AS session_start_ts
-            FROM cur c
-            LEFT JOIN LATERAL (
-                SELECT metric_value, ts FROM metrics m
-                WHERE m.metric_name = c.metric_name
-                  AND m.ts <= c.ts - interval '1 hour'
-                  AND m.ts >= (SELECT ts FROM session_start)
-                ORDER BY m.ts DESC LIMIT 1
-            ) prev ON true
-            LEFT JOIN LATERAL (
-                SELECT metric_value FROM metrics m
-                WHERE m.metric_name = c.metric_name
-                  AND m.ts >= (SELECT ts FROM session_start)
-                ORDER BY m.ts ASC LIMIT 1
-            ) session_val ON true
-            ORDER BY c.metric_name";
-
-        var rows = (await conn.QueryAsync(sql)).ToList();
-        var snapshot = new Dictionary<string, double>();
-        var rates = new Dictionary<string, double?>();
-        DateTime? sessionStart = rows.FirstOrDefault()?.session_start_ts;
-        var sessionHours = sessionStart.HasValue ? (DateTime.UtcNow - sessionStart.Value).TotalHours : 0;
-
-        foreach (var r in rows)
+        var now = DateTime.UtcNow;
+        if (_metricsCurrentCache.HasValue && _metricsCurrentCache.Value.ExpiresAt > now)
         {
-            string name = r.metric_name;
-            double curVal = Convert.ToDouble(r.current_value);
-            double val1h = Convert.ToDouble(r.value_1h_ago);
-            double valSession = Convert.ToDouble(r.value_at_session_start);
-            double hoursElapsed = r.hours_elapsed != null ? Convert.ToDouble(r.hours_elapsed) : 0;
-
-            snapshot[name] = curVal;
-            if (hoursElapsed > 0 && curVal >= val1h)
-            {
-                rates[name] = (curVal - val1h) / hoursElapsed;
-            }
-            else if (sessionHours > 0 && curVal >= valSession)
-            {
-                rates[name] = (curVal - valSession) / sessionHours;
-            }
-            else
-            {
-                rates[name] = null;
-            }
+            return _metricsCurrentCache.Value.Data;
         }
 
-        return new
+        await _metricsCurrentLock.WaitAsync(ct);
+        try
         {
-            ts = rows.FirstOrDefault()?.ts,
-            snapshot,
-            rates
-        };
+            if (_metricsCurrentCache.HasValue && _metricsCurrentCache.Value.ExpiresAt > DateTime.UtcNow)
+            {
+                return _metricsCurrentCache.Value.Data;
+            }
+
+            await using var conn = await OpenConnectionAsync(ct);
+            const string sql = @"
+                WITH session_start AS (
+                    SELECT ts FROM metrics WHERE metric_name = '_session_start'
+                    ORDER BY ts DESC LIMIT 1
+                ),
+                cur AS (
+                    SELECT DISTINCT ON (metric_name) metric_name, metric_value, ts
+                    FROM metrics
+                    WHERE metric_name != '_session_start'
+                      AND ts >= NOW() - interval '2 hours'
+                    ORDER BY metric_name, ts DESC
+                )
+                SELECT c.metric_name,
+                       c.metric_value AS current_value,
+                       c.ts,
+                       COALESCE(prev.metric_value, 0) AS value_1h_ago,
+                       EXTRACT(EPOCH FROM (c.ts - prev.ts)) / 3600.0 AS hours_elapsed,
+                       COALESCE(session_val.metric_value, 0) AS value_at_session_start,
+                       (SELECT ts FROM session_start) AS session_start_ts
+                FROM cur c
+                LEFT JOIN LATERAL (
+                    SELECT metric_value, ts FROM metrics m
+                    WHERE m.metric_name = c.metric_name
+                      AND m.ts <= c.ts - interval '1 hour'
+                      AND m.ts >= NOW() - interval '3 hours'
+                    ORDER BY m.ts DESC LIMIT 1
+                ) prev ON true
+                LEFT JOIN LATERAL (
+                    SELECT metric_value FROM metrics m
+                    WHERE m.metric_name = c.metric_name
+                      AND m.ts >= (SELECT ts FROM session_start)
+                    ORDER BY m.ts ASC LIMIT 1
+                ) session_val ON true
+                ORDER BY c.metric_name";
+
+            var rows = (await conn.QueryAsync(sql)).ToList();
+            var snapshot = new Dictionary<string, double>();
+            var rates = new Dictionary<string, double?>();
+            DateTime? sessionStart = rows.FirstOrDefault()?.session_start_ts;
+            var sessionHours = sessionStart.HasValue ? (DateTime.UtcNow - sessionStart.Value).TotalHours : 0;
+
+            foreach (var r in rows)
+            {
+                string name = r.metric_name;
+                double curVal = Convert.ToDouble(r.current_value);
+                double val1h = Convert.ToDouble(r.value_1h_ago);
+                double valSession = Convert.ToDouble(r.value_at_session_start);
+                double hoursElapsed = r.hours_elapsed != null ? Convert.ToDouble(r.hours_elapsed) : 0;
+
+                snapshot[name] = curVal;
+                if (hoursElapsed > 0 && curVal >= val1h)
+                {
+                    rates[name] = (curVal - val1h) / hoursElapsed;
+                }
+                else if (sessionHours > 0 && curVal >= valSession)
+                {
+                    rates[name] = (curVal - valSession) / sessionHours;
+                }
+                else
+                {
+                    rates[name] = null;
+                }
+            }
+
+            var result = new
+            {
+                ts = rows.FirstOrDefault()?.ts,
+                snapshot,
+                rates
+            };
+
+            _metricsCurrentCache = (result, DateTime.UtcNow.AddSeconds(5));
+            return result;
+        }
+        finally
+        {
+            _metricsCurrentLock.Release();
+        }
     }
 
     public async Task<object> GetMetricsHistoryAsync(string metric, DateTime from, DateTime to, string interval, CancellationToken ct)
