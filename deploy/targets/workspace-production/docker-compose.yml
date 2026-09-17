@@ -205,8 +205,8 @@ services:
 
   wstunnel-client:
     build:
-      context: ../../..
-      dockerfile: apps/tunnel/Dockerfile
+      context: ../../../apps/tunnel
+      dockerfile: Dockerfile
     image: gaia-tunnel:${GIT_COMMIT:-latest}
     container_name: gaia-wstunnel-client
     restart: unless-stopped
@@ -219,9 +219,10 @@ services:
 
   wireguard-client:
     build:
-      context: ../../..
-      dockerfile: apps/tunnel/Dockerfile
+      context: ../../../apps/tunnel
+      dockerfile: Dockerfile
     image: gaia-tunnel:${GIT_COMMIT:-latest}
+
     container_name: gaia-wireguard-client
     restart: unless-stopped
     network_mode: host
