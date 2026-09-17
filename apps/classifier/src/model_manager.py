@@ -7,40 +7,40 @@ from typing import Dict, Any, List, Optional
 
 MODELS_DIR = Path(__file__).parent.parent / "models"
 ACTIVE_MODEL_JSON = MODELS_DIR / "active_model.json"
-DEFAULT_MODEL_PATH = MODELS_DIR / "torrent_classifier_v2.joblib"
+DEFAULT_MODEL_PATH = MODELS_DIR / "torrent_classifier_v8_20260912_212717.joblib"
 
 
 def init_active_model_if_missing():
-    """Ensure active_model.json exists with baseline v2."""
+    """Ensure active_model.json exists with baseline v8."""
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     if not ACTIVE_MODEL_JSON.exists():
         initial_data = {
-            "version": "v2",
-            "filename": "torrent_classifier_v2.joblib",
+            "version": "v8",
+            "filename": "torrent_classifier_v8_20260912_212717.joblib",
             "model_path": str(DEFAULT_MODEL_PATH),
             "activated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "metrics": {
-                "macro_f1": 0.9040,
-                "accuracy": 0.9073,
+                "macro_f1": 0.8597,
+                "accuracy": 0.8641,
                 "per_class_f1": {
-                    "Adult": 0.932,
-                    "Anime": 0.966,
-                    "Applications": 0.887,
-                    "Audiobooks": 0.865,
-                    "Books & Learning": 0.957,
-                    "Documentaries": 0.835,
-                    "Games": 0.923,
-                    "Movies": 0.871,
-                    "Music": 0.932,
-                    "Television": 0.872
+                    "Adult": 0.8893,
+                    "Anime": 0.8631,
+                    "Applications": 0.8414,
+                    "Audiobooks": 0.9465,
+                    "Books & Learning": 0.9023,
+                    "Documentaries": 0.7649,
+                    "Games": 0.8456,
+                    "Movies": 0.8232,
+                    "Music": 0.886,
+                    "Television": 0.8348
                 }
             },
             "history": [
                 {
-                    "version": "v2",
-                    "filename": "torrent_classifier_v2.joblib",
+                    "version": "v8",
+                    "filename": "torrent_classifier_v8_20260912_212717.joblib",
                     "activated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "macro_f1": 0.9040
+                    "macro_f1": 0.8597
                 }
             ]
         }
@@ -54,12 +54,12 @@ def get_active_model_info() -> Dict[str, Any]:
         with open(ACTIVE_MODEL_JSON, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
-        return {"version": "v2", "filename": "torrent_classifier_v2.joblib", "model_path": str(DEFAULT_MODEL_PATH)}
+        return {"version": "v8", "filename": "torrent_classifier_v8_20260912_212717.joblib", "model_path": str(DEFAULT_MODEL_PATH)}
 
 
 def get_active_model_path() -> Optional[Path]:
     info = get_active_model_info()
-    path = MODELS_DIR / info.get("filename", "torrent_classifier_v2.joblib")
+    path = MODELS_DIR / info.get("filename", "torrent_classifier_v8_20260912_212717.joblib")
     if path.exists():
         return path
     if DEFAULT_MODEL_PATH.exists():
@@ -70,7 +70,7 @@ def get_active_model_path() -> Optional[Path]:
 def list_available_models() -> List[Dict[str, Any]]:
     init_active_model_if_missing()
     info = get_active_model_info()
-    active_filename = info.get("filename", "torrent_classifier_v2.joblib")
+    active_filename = info.get("filename", "torrent_classifier_v8_20260912_212717.joblib")
     history_entries = info.get("history", [])
     history_by_file = {h.get("filename"): h for h in history_entries if isinstance(h, dict) and h.get("filename")}
 
@@ -101,15 +101,6 @@ def list_available_models() -> List[Dict[str, Any]]:
                 hm = hist["metrics"]
                 macro_f1 = hm.get("macro_f1", macro_f1)
                 accuracy = hm.get("accuracy", accuracy)
-
-        # Use cached metadata from active_model.json or baseline defaults (avoiding 17MB joblib.load on each HTTP call)
-        if v_name == "v2":
-            if macro_f1 is None:
-                macro_f1 = 0.9040
-            if accuracy is None:
-                accuracy = 0.9073
-            if num_samples is None:
-                num_samples = 30869
 
         models.append({
             "version": v_name,
