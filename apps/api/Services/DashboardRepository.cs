@@ -524,6 +524,9 @@ public class DashboardRepository
         return new { metric, interval = safeInterval, data };
     }
 
+    private record ClientCountRow(string? client, long count);
+    private record SourceYieldRow(string? source, long attempts, long verified);
+
     private static (object Data, DateTime ExpiresAt)? _analyticsCache;
     private static readonly SemaphoreSlim _analyticsLock = new(1, 1);
 
@@ -559,14 +562,14 @@ public class DashboardRepository
                     ORDER BY count DESC
                     LIMIT 10";
 
-                var clientRows = (await conn.QueryAsync(new CommandDefinition(clientSql, cancellationToken: cts.Token))).ToList();
-                long totalClients = clientRows.Sum(r => Convert.ToInt64(r.count));
+                var clientRows = (await conn.QueryAsync<ClientCountRow>(new CommandDefinition(clientSql, cancellationToken: cts.Token))).ToList();
+                long totalClients = clientRows.Sum(r => r.count);
 
                 var clients = clientRows.Select(r => new
                 {
-                    name = (string)r.client,
-                    count = Convert.ToInt64(r.count),
-                    pct = totalClients > 0 ? Math.Round((Convert.ToInt64(r.count) / (double)totalClients) * 100.0, 1) : 0.0
+                    name = r.client ?? "Unknown",
+                    count = r.count,
+                    pct = totalClients > 0 ? Math.Round((r.count / (double)totalClients) * 100.0, 1) : 0.0
                 }).ToList();
 
                 // Source yields (past 15m)
@@ -578,15 +581,15 @@ public class DashboardRepository
                     WHERE created_at > NOW() - INTERVAL '15 minutes'
                     GROUP BY source";
 
-                var sourceRows = (await conn.QueryAsync(new CommandDefinition(sourceSql, cancellationToken: cts.Token))).ToList();
+                var sourceRows = (await conn.QueryAsync<SourceYieldRow>(new CommandDefinition(sourceSql, cancellationToken: cts.Token))).ToList();
                 long dhtAttempts = 0, dhtVerified = 0;
                 long directAttempts = 0, directVerified = 0;
 
                 foreach (var s in sourceRows)
                 {
-                    string src = (string)(s.source ?? "unknown");
-                    long att = s.attempts != null ? Convert.ToInt64(s.attempts) : 0L;
-                    long ver = s.verified != null ? Convert.ToInt64(s.verified) : 0L;
+                    string src = s.source ?? "unknown";
+                    long att = s.attempts;
+                    long ver = s.verified;
 
                     if (src == "get_peers" || src == "announce_peer" || src == "dht")
                     {
