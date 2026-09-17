@@ -1,4 +1,4 @@
-.PHONY: help install serve train retrain worker worker-dry-run shard rollback clean test
+.PHONY: help install serve train retrain worker worker-dry-run rollback clean test
 
 PYTHON ?= venv/bin/python
 UVICORN ?= venv/bin/uvicorn
@@ -10,7 +10,6 @@ help:
 	@echo "  make worker               Run continuous queue worker daemon"
 	@echo "  make worker-dry-run       Test queue worker in safe dry-run mode"
 	@echo "  make rollback VERSION=v2  Rollback active model to a previous version"
-	@echo "  make shard START=00 END=3f Run batch streaming classifier on infohash shard"
 	@echo "  make install              Install dependencies in virtual environment"
 	@echo "  make clean                Clean temporary cache files"
 
@@ -31,9 +30,6 @@ worker-dry-run:
 
 rollback:
 	$(PYTHON) -m src.model_manager rollback --version $(VERSION)
-
-shard:
-	$(PYTHON) scripts/stream_classifier.py --start-hex $(or $(START),00) --end-hex $(or $(END),ff)
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +

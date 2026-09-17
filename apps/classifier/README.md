@@ -13,35 +13,25 @@ High-throughput, calibrated machine learning classifier and interactive audit st
                                   │  (Strict READ_ONLY)    │
                                   └───────────┬────────────┘
                                               │
-                    ┌─────────────────────────┴─────────────────────────┐
-                    ▼                                                   ▼
-       ┌─────────────────────────┐                         ┌─────────────────────────┐
-       │   scripts/stream_       │                         │       web/app.py        │
-       │   classifier.py         │                         │     FastAPI Studio      │
-       │   (Shared-Nothing Shard)│                         │  (Vercel / Linear UI)   │
-       └────────────┬────────────┘                         └────────────┬────────────┘
-                    │                                                   │
-                    └─────────────────────────┬─────────────────────────┘
                                               ▼
-                             ┌─────────────────────────────────┐
-                             │    src/classifier_service.py    │
-                             │  • Multi-modal TF-IDF Features  │
-                             │  • 10-Class Calibrated SGD      │
-                             │  • Dual Rejection Gates         │
-                             └─────────────────────────────────┘
+                              ┌─────────────────────────────────┐
+                              │    src/classifier_service.py    │
+                              │  • Multi-modal TF-IDF Features  │
+                              │  • 10-Class Calibrated SGD      │
+                              │  • Dual Rejection Gates         │
+                              └─────────────────────────────────┘
                                               │
-                      ┌───────────────────────┴───────────────────────┐
-                      ▼                                               ▼
-             [ ✓ ACCEPTED ]                                  [ ⚠️ NEEDS REVIEW ]
-        Confidence >= 0.65 and                          Confidence < 0.65 (Low Conf)
-        Margin >= 0.35                                  or Margin < 0.35 (Ambiguous)
+                       ┌──────────────────────┴──────────────────────┐
+                       ▼                                              ▼
+              [ ✓ ACCEPTED ]                                 [ ⚠️ NEEDS REVIEW ]
+         Confidence >= 0.65 and                          Confidence < 0.65 (Low Conf)
+         Margin >= 0.35                                  or Margin < 0.35 (Ambiguous)
 ```
 
 ### Key Technical Decisions:
 - **Zero LLM Fallback**: Rather than sending ambiguous cases to expensive or slow LLMs, unclassifiable or contested torrents are safely routed to human review with diagnostic flags.
 - **Open-Set Rejection (`Other` Removed)**: `Other` was removed as a training target class to prevent catch-all misdirection. Out-of-distribution items are rejected using calibrated probability and margin thresholds.
 - **Multi-Modal Feature Extraction**: Combines character n-grams (3-5), word n-grams (1-2), log-size, log-file-count, extension byte ratios across 8 categories (video, audio, audiobook, ebook, archive, software, roms), and high-precision domain regex rules.
-- **Shared-Nothing Range Sharding**: Batch throughput scales linearly across CPU cores by sharding the 20-byte `infohash` keyspace (`00..3f`, `40..7f`, `80..bf`, `c0..ff`) with zero inter-process communication.
 
 ---
 
@@ -62,7 +52,10 @@ apps/classifier/
 │   └── train.py                   # Model training pipeline
 │
 ├── scripts/                       # CLI & Production Operations
-│   └── stream_classifier.py       # High-throughput batch streaming worker with range sharding
+│   ├── worker.py                  # Continuous queue worker daemon
+│   ├── retrain.py                 # Model retraining with quality gate
+│   ├── reclassify.py              # Selective reclassification worker
+│   └── corpus_keyword_analysis.py # Corpus keyword frequency analysis
 │
 ├── web/                           # Web Studio API & UI
 │   ├── app.py                     # FastAPI server
@@ -71,7 +64,7 @@ apps/classifier/
 │   └── static/                    # Static assets
 │
 ├── models/                        # Serialized Model Artifacts (gitignored)
-│   └── torrent_classifier_v2.joblib
+│   └── torrent_classifier_v8_20260912_212717.joblib
 │
 ├── data/                          # Cached Datasets (gitignored)
 │   └── labeled_dataset.jsonl
@@ -104,23 +97,7 @@ Features:
 ```bash
 make train
 ```
-Trains on `data/labeled_dataset.jsonl` using calibrated `modified_huber` loss and saves the model to `models/torrent_classifier_v2.joblib`.
-
-### Run Batch Sharded Classification (10M+ Scale)
-Run independent worker processes across different hex ranges with zero lock contention:
-```bash
-# Worker 1 (first quartile)
-python scripts/stream_classifier.py --start-hex 00 --end-hex 3f --output-jsonl data/shard_0.jsonl
-
-# Worker 2 (second quartile)
-python scripts/stream_classifier.py --start-hex 40 --end-hex 7f --output-jsonl data/shard_1.jsonl
-
-# Worker 3 (third quartile)
-python scripts/stream_classifier.py --start-hex 80 --end-hex bf --output-jsonl data/shard_2.jsonl
-
-# Worker 4 (fourth quartile)
-python scripts/stream_classifier.py --start-hex c0 --end-hex ff --output-jsonl data/shard_3.jsonl
-```
+Trains on `data/labeled_dataset.jsonl` using calibrated `modified_huber` loss and saves the model to `models/`.
 
 ---
 

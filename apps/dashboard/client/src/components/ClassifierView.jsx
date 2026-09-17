@@ -2079,10 +2079,10 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
                       <div className="text-[10px] text-[#777] uppercase tracking-wider">Active Version</div>
                       <div className="text-base font-bold text-white mt-1 flex items-center gap-1.5">
                         <Cpu className="w-4 h-4 text-emerald-400" />
-                        <span>{models?.active?.version || 'v4'}</span>
+                        <span>{models?.active?.version || 'v8'}</span>
                       </div>
                       <div className="text-[10px] text-[#666] mt-1 truncate">
-                        {models?.active?.filename || 'torrent_classifier_v4.joblib'}
+                        {models?.active?.filename || 'torrent_classifier_v8_20260912_212717.joblib'}
                       </div>
                     </div>
 
@@ -2091,7 +2091,7 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
                       <div className="text-base font-bold text-emerald-400 mt-1">
                         {models?.active?.metrics?.macro_f1
                           ? `${(models.active.metrics.macro_f1 * 100).toFixed(2)}%`
-                          : '90.40%'}
+                          : '85.97%'}
                       </div>
                       <div className="text-[10px] text-[#666] mt-1">Baseline: 89.5%</div>
                     </div>
