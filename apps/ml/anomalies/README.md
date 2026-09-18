@@ -128,7 +128,6 @@ CREATE TABLE IF NOT EXISTS operational_alerts (
 1. **Isolation Forest (`src/models/isolation_forest.py`):** Unsupervised multivariate subspace isolation with 150 estimators and robust scaling. Provides feature attribution by computing deviation from median in units of IQR.
 2. **Autoencoder (`src/models/autoencoder.py`):** Non-linear neural bottleneck architecture $(16 \to 8 \to 16)$ learning normal diurnal crawler cycles. Detects unseen failure modes via high reconstruction MSE.
 3. **Supervised Incident Classifier (`src/models/supervised.py`):** Random Forest classifier mapping multivariate anomalies to actionable root-cause categories (`NORMAL`, `DB_LATENCY_SPIKE`, `DHT_DROP_COLLAPSE`, `TIMEOUT_CASCADE`, `RESTART_EVENT`).
-4. **Statistical Baselines (`src/models/baseline.py`):** Rolling EWMA and Modified Z-Score (MAD) for instant single-metric threshold violations.
 
 ---
 
@@ -162,7 +161,6 @@ apps/ml/anomalies/
 │   │   └── postgres_extractor.py     # SQL telemetry extractor
 │   ├── models/
 │   │   ├── autoencoder.py            # Reconstruction-based neural Autoencoder
-│   │   ├── baseline.py               # EWMA and Median Absolute Deviation baselines
 │   │   ├── isolation_forest.py       # Isolation Forest detector
 │   │   └── supervised.py             # Supervised incident classifier
 │   └── pipeline/
