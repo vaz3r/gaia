@@ -23,11 +23,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # ── Health check commands per target ──
-declare -A HEALTH_CMDS=(
-    [gaia-gateway]="nc -z 127.0.0.1 8443 && curl -sk -o /dev/null https://127.0.0.1/"
-    [gaia-portal]="docker inspect gaia-portal-wstunnel-client --format '{{.State.Health.Status}}' 2>/dev/null | grep -q healthy"
-    [workspace-production]="docker exec gaia-postgres pg_isready -U crawler -d craw 2>/dev/null"
-)
+health_check_cmd() {
+    case "$1" in
+        gaia-gateway)       echo "nc -z 127.0.0.1 8443 && curl -sk -o /dev/null https://127.0.0.1/" ;;
+        gaia-portal)        echo "docker inspect gaia-portal-wstunnel-client --format '{{.State.Health.Status}}' 2>/dev/null | grep -q healthy" ;;
+        workspace-production) echo "docker exec gaia-postgres pg_isready -U crawler -d craw 2>/dev/null" ;;
+        *)                  echo "" ;;
+    esac
+}
 
 # ── Parse flags ──
 FORCE_RECREATE=0
@@ -204,7 +207,7 @@ echo "=== Deploy $TAG to $TARGET complete ==="
 if [ "$VERIFY" -eq 1 ]; then
     echo ""
     echo "--- Health check: $TARGET ---"
-    CMD="${HEALTH_CMDS[$TARGET]:-}"
+    CMD="$(health_check_cmd "$TARGET")"
     if [ -z "$CMD" ]; then
         echo "  No health check defined for $TARGET (skipping)"
     else
