@@ -30,13 +30,16 @@ services:
       - /home/${DEPLOY_USER:-ubuntu}/gaia-data/logs:/data/logs
       - /home/${DEPLOY_USER:-ubuntu}/gaia/apps/crawler/config:/etc/crawler/config:ro
 
-  log-shipper:
+  logger:
     build:
-      context: ../../../apps/log-shipper
-    image: gaia-log-shipper:${GIT_COMMIT:-latest}
-    container_name: gaia-log-shipper
+      context: ../../../apps/logger
+    image: gaia-logger:${GIT_COMMIT:-latest}
+    container_name: gaia-logger
     restart: unless-stopped
+    profiles:
+      - logging
     environment:
+      LOG_PROFILE: shipper
       SOURCE_DIR: /logs
       RECEIVER_URL: ${RECEIVER_URL:-http://100.87.194.112:3100}
       API_KEY: ${LOG_SHIPPER_API_KEY}
@@ -45,3 +48,4 @@ services:
       HOST_NAME: gaia-node
     volumes:
       - /home/${DEPLOY_USER:-ubuntu}/gaia-data/logs:/logs
+
