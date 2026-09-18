@@ -589,13 +589,9 @@ async fn spawn_node(
     let mut recv_socks = Vec::with_capacity(config.worker_threads);
     let use_mmsg = config.dht.linux_mmsg_receive;
     let requested = if use_mmsg { "recvmmsg" } else { "tokio" };
-    let effective = requested;
-
-    if use_mmsg {}
 
     tracing::info!(
         requested_backend = requested,
-        effective_backend = effective,
         worker_count = config.worker_threads,
         batch_size = 32,
         git_hash = env!("CRAW_GIT_HASH"),

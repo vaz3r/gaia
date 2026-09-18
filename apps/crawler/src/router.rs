@@ -723,69 +723,6 @@ impl Router {
         self.try_send(&buf[..pos], from);
     }
 
-    #[allow(dead_code)]
-    fn respond_find_node_poisoned(&self, t: &[u8], from: SocketAddr) {
-        use std::io::Write;
-        let dummy = Self::dummy_poison_nodes();
-
-        let mut buf = [0u8; 512];
-        let mut pos = 0;
-
-        let b1 = b"d1:rd2:id20:";
-        buf[pos..pos + b1.len()].copy_from_slice(b1);
-        pos += b1.len();
-
-        buf[pos..pos + 20].copy_from_slice(&self.self_id);
-        pos += 20;
-
-        let b2 = b"5:nodes208:";
-        buf[pos..pos + b2.len()].copy_from_slice(b2);
-        pos += b2.len();
-
-        buf[pos..pos + dummy.len()].copy_from_slice(&dummy);
-        pos += dummy.len();
-
-        let b4 = b"e1:t";
-        buf[pos..pos + b4.len()].copy_from_slice(b4);
-        pos += b4.len();
-
-        let mut cursor = std::io::Cursor::new(&mut buf[pos..]);
-        write!(cursor, "{}:", t.len()).unwrap();
-        pos += cursor.position() as usize;
-
-        buf[pos..pos + t.len()].copy_from_slice(t);
-        pos += t.len();
-
-        let b5 = b"1:y1:re";
-        buf[pos..pos + b5.len()].copy_from_slice(b5);
-        pos += b5.len();
-
-        self.try_send(&buf[..pos], from);
-    }
-
-    #[allow(dead_code)]
-    fn dummy_poison_nodes() -> [u8; 8 * 26] {
-        let mut nodes = [0u8; 8 * 26];
-        let dummy_ips: [[u8; 4]; 8] = [
-            [192, 0, 2, 1],
-            [192, 0, 2, 2],
-            [198, 51, 100, 1],
-            [198, 51, 100, 2],
-            [203, 0, 113, 1],
-            [203, 0, 113, 2],
-            [192, 0, 2, 42],
-            [198, 51, 100, 42],
-        ];
-        for (i, ip) in dummy_ips.iter().enumerate() {
-            let offset = i * 26;
-            nodes[offset..offset + 20].copy_from_slice(&[0xaa; 20]);
-            nodes[offset + 20..offset + 24].copy_from_slice(ip);
-            nodes[offset + 24] = 0x1a;
-            nodes[offset + 25] = 0xe1;
-        }
-        nodes
-    }
-
     fn respond_ping_fast(&self, t: &[u8], from: SocketAddr) {
         use std::io::Write;
         let mut buf = [0u8; 128];

@@ -125,9 +125,4 @@ impl Harvester {
         crate::trace_lifecycle!(&ih, "discovered", stream = "dht", source = source.tag());
         true
     }
-
-    #[allow(dead_code)]
-    pub fn seen(&self) -> usize {
-        self.current.inserted() + self.previous.inserted()
-    }
 }
