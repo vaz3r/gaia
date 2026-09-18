@@ -84,12 +84,12 @@ services:
     volumes:
       - /home/${DEPLOY_USER:-core}/gaia-data/rclone:/root/.config/rclone
 
-  classifier-api:
+  classifier:
     build:
       context: ../../../apps/classifier
       dockerfile: Dockerfile
-    image: gaia-classifier-api:${GIT_COMMIT:-latest}
-    container_name: gaia-classifier-api
+    image: gaia-classifier:${GIT_COMMIT:-latest}
+    container_name: gaia-classifier
     restart: unless-stopped
     network_mode: host
     environment:
@@ -99,29 +99,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-craw}
       PG_PASSWORD: ${PG_PASSWORD}
       PORT: ${CLASSIFIER_PORT:-8080}
-    volumes:
-      - /home/${DEPLOY_USER:-core}/gaia-data/classifier/models:/app/models
-    command: ["uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8080"]
-
-  classifier-worker:
-    build:
-      context: ../../../apps/classifier
-      dockerfile: Dockerfile
-    image: gaia-classifier-worker:${GIT_COMMIT:-latest}
-    container_name: gaia-classifier-worker
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      DB_HOST: localhost
-      PG_PORT: ${PG_PORT:-5432}
-      POSTGRES_USER: ${POSTGRES_USER:-crawler}
-      POSTGRES_DB: ${POSTGRES_DB:-craw}
-      PG_PASSWORD: ${PG_PASSWORD}
       WORKER_BATCH_SIZE: 2000
       WORKER_POLL_INTERVAL: 15
     volumes:
       - /home/${DEPLOY_USER:-core}/gaia-data/classifier/models:/app/models
-    command: ["python", "scripts/worker.py"]
+    command: ["python", "scripts/entrypoint.py"]
 
   anomaly-worker:
     build:

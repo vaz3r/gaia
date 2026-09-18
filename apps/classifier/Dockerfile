@@ -20,6 +20,6 @@ COPY web/ ./web/
 COPY scripts/ ./scripts/
 COPY models/ ./models/
 
-EXPOSE 8000
+EXPOSE 8080
 
-CMD ["uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "scripts/entrypoint.py"]

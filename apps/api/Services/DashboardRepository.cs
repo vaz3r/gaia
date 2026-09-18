@@ -1229,6 +1229,24 @@ public class DashboardRepository
         return await conn.ExecuteAsync(sql, builder);
     }
 
+    private record ScoringStatsDbRow(
+        long total_torrents,
+        long total_scored,
+        long allowed_torrents,
+        long downranked_torrents,
+        long review_torrents,
+        long suppressed_torrents,
+        long safe_tier,
+        long suspicious_tier,
+        long blocked_tier,
+        long unscored_torrents,
+        long safe_count,
+        long blocked_count,
+        long manual_override_count,
+        decimal? avg_integrity_score,
+        DateTime? last_scored_at
+    );
+
     public async Task<object> GetScoringStatsAsync(CancellationToken ct)
     {
         const string cacheKey = "dashboard:scoring:stats";
@@ -1240,20 +1258,63 @@ public class DashboardRepository
         await using var conn = await OpenConnectionAsync(ct);
         const string sql = @"
             SELECT 
-                COUNT(*) AS total_torrents,
-                COUNT(*) FILTER (WHERE policy_action = 'ALLOW') AS allowed_torrents,
-                COUNT(*) FILTER (WHERE policy_action = 'DOWNRANK') AS downranked_torrents,
-                COUNT(*) FILTER (WHERE policy_action = 'REVIEW') AS review_torrents,
-                COUNT(*) FILTER (WHERE policy_action = 'SUPPRESS') AS suppressed_torrents,
-                COUNT(*) FILTER (WHERE risk_tier = 'SAFE') AS safe_tier,
-                COUNT(*) FILTER (WHERE risk_tier = 'SUSPICIOUS') AS suspicious_tier,
-                COUNT(*) FILTER (WHERE risk_tier = 'BLOCKED') AS blocked_tier,
-                COUNT(*) FILTER (WHERE scored_at IS NULL) AS unscored_torrents,
-                ROUND(AVG(integrity_score)::numeric, 1) AS avg_integrity_score
+                COUNT(*)::bigint AS total_torrents,
+                COUNT(*) FILTER (WHERE scored_at IS NOT NULL)::bigint AS total_scored,
+                COUNT(*) FILTER (WHERE policy_action = 'ALLOW')::bigint AS allowed_torrents,
+                COUNT(*) FILTER (WHERE policy_action = 'DOWNRANK')::bigint AS downranked_torrents,
+                COUNT(*) FILTER (WHERE policy_action = 'REVIEW')::bigint AS review_torrents,
+                COUNT(*) FILTER (WHERE policy_action = 'SUPPRESS')::bigint AS suppressed_torrents,
+                COUNT(*) FILTER (WHERE risk_tier = 'SAFE')::bigint AS safe_tier,
+                COUNT(*) FILTER (WHERE risk_tier = 'SUSPICIOUS')::bigint AS suspicious_tier,
+                COUNT(*) FILTER (WHERE risk_tier = 'BLOCKED')::bigint AS blocked_tier,
+                COUNT(*) FILTER (WHERE scored_at IS NULL)::bigint AS unscored_torrents,
+                COUNT(*) FILTER (WHERE policy_action = 'ALLOW' OR risk_tier = 'SAFE')::bigint AS safe_count,
+                COUNT(*) FILTER (WHERE policy_action = 'SUPPRESS' OR risk_tier = 'BLOCKED')::bigint AS blocked_count,
+                COUNT(*) FILTER (WHERE decision_source = 'MANUAL')::bigint AS manual_override_count,
+                ROUND(AVG(integrity_score)::numeric, 1) AS avg_integrity_score,
+                MAX(scored_at) AS last_scored_at
             FROM torrents";
 
-        object result = await conn.QuerySingleAsync(sql);
-        _memoryCache.Set(cacheKey, result, TimeSpan.FromSeconds(30));
+        var row = await conn.QuerySingleAsync<ScoringStatsDbRow>(sql);
+        DateTime? lastScoredAt = row.last_scored_at;
+        long unscored = row.unscored_torrents;
+
+        string workerStatus;
+        if (lastScoredAt.HasValue && (DateTime.UtcNow - lastScoredAt.Value).TotalMinutes < 5)
+        {
+            workerStatus = "ACTIVE";
+        }
+        else if (unscored == 0)
+        {
+            workerStatus = "IDLE";
+        }
+        else
+        {
+            workerStatus = "STALLED";
+        }
+
+        var result = new
+        {
+            total_torrents = row.total_torrents,
+            total_scored = row.total_scored,
+            allowed_torrents = row.allowed_torrents,
+            downranked_torrents = row.downranked_torrents,
+            review_torrents = row.review_torrents,
+            suppressed_torrents = row.suppressed_torrents,
+            safe_tier = row.safe_tier,
+            suspicious_tier = row.suspicious_tier,
+            blocked_tier = row.blocked_tier,
+            safe_count = row.safe_count,
+            blocked_count = row.blocked_count,
+            manual_override_count = row.manual_override_count,
+            unscored_torrents = unscored,
+            avg_integrity_score = row.avg_integrity_score,
+            last_scored_at = lastScoredAt?.ToString("o"),
+            active_worker = "gaia-scoring-worker",
+            worker_status = workerStatus
+        };
+
+        _memoryCache.Set(cacheKey, result, TimeSpan.FromSeconds(10));
         return result;
     }
 

@@ -71,6 +71,8 @@ class TrustClassifier:
         if not self.is_trained:
             # High safety prior for unclassified content
             return np.full((len(X),), 0.90)
+        if hasattr(self.model, "n_features_in_") and X.shape[1] > self.model.n_features_in_:
+            X = X[:, :self.model.n_features_in_]
         raw_probs = self.model.predict_proba(X)[:, 1]
         return self.calibrator.predict(raw_probs)
 

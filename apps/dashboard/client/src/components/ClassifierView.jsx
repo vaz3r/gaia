@@ -662,12 +662,33 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
           {/* Scoring Telemetry Strip */}
           <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
             <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 flex flex-col justify-between">
-              <div className="text-[10px] uppercase text-[#666] font-mono">01 / Scored Catalog</div>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase text-[#666] font-mono">01 / Scored Catalog</span>
+                <span className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium ${
+                  scoringStats?.worker_status === 'ACTIVE'
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    : scoringStats?.worker_status === 'IDLE'
+                    ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
+                    : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${
+                    scoringStats?.worker_status === 'ACTIVE'
+                      ? 'bg-emerald-400 animate-pulse'
+                      : scoringStats?.worker_status === 'IDLE'
+                      ? 'bg-blue-400'
+                      : 'bg-rose-400'
+                  }`} />
+                  {scoringStats?.worker_status || 'UNKNOWN'}
+                </span>
+              </div>
               <div className="text-xl font-bold text-white font-mono mt-1">
                 {scoringStats?.total_scored != null ? Number(scoringStats.total_scored).toLocaleString() : '2.88M+'}
               </div>
-              <p className="text-[11px] text-[#777] mt-1 font-mono">
-                Worker: {scoringStats?.active_worker || 'gaia-scoring-worker'}
+              <p className="text-[11px] text-[#777] mt-1 font-mono flex items-center justify-between">
+                <span>Worker: {scoringStats?.active_worker || 'gaia-scoring-worker'}</span>
+                {scoringStats?.unscored_torrents > 0 && (
+                  <span className="text-amber-400 font-medium">({Number(scoringStats.unscored_torrents).toLocaleString()} pending)</span>
+                )}
               </p>
             </div>
 
