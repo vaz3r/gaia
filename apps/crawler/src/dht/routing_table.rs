@@ -131,11 +131,6 @@ impl RoutingTable {
         self.tables.iter().any(|t| t.contains_id(id))
     }
 
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
     pub fn random_nodes(&self, n: usize) -> Vec<NodeInfo> {
         if self.tables.is_empty() {
             return Vec::new();
@@ -345,11 +340,6 @@ impl SingleRoutingTable {
     #[cfg(test)]
     fn bucket_fill(&self, idx: usize) -> usize {
         self.buckets.get(idx).map(|b| b.len()).unwrap_or(0)
-    }
-
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     pub fn random_nodes(&self, n: usize) -> Vec<NodeInfo> {

@@ -108,7 +108,6 @@ pub struct StorageConfig {
     pub batch_flush_interval_secs: u64,
     pub batch_flush_chunk: usize,
     pub torrent_batch_chunk: usize,
-    pub batch_initial_capacity: usize,
     pub sighting_flush_interval_ms: u64,
     pub sighting_chunk_size: usize,
     pub metrics_flush_interval_secs: u64,
@@ -297,7 +296,6 @@ impl Default for StorageConfig {
             batch_flush_interval_secs: 1,
             batch_flush_chunk: 5000,
             torrent_batch_chunk: 2000,
-            batch_initial_capacity: 4096,
             sighting_flush_interval_ms: 500,
             sighting_chunk_size: 256,
             metrics_flush_interval_secs: 60,
@@ -894,8 +892,6 @@ struct PartialStorage {
     #[serde(default)]
     torrent_batch_chunk: Option<usize>,
     #[serde(default)]
-    batch_initial_capacity: Option<usize>,
-    #[serde(default)]
     sighting_flush_interval_ms: Option<u64>,
     #[serde(default)]
     sighting_chunk_size: Option<usize>,
@@ -1226,9 +1222,6 @@ impl PartialStorage {
         }
         if let Some(v) = self.torrent_batch_chunk {
             cfg.torrent_batch_chunk = v;
-        }
-        if let Some(v) = self.batch_initial_capacity {
-            cfg.batch_initial_capacity = v;
         }
         if let Some(v) = self.sighting_flush_interval_ms {
             cfg.sighting_flush_interval_ms = v;

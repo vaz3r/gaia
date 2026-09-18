@@ -80,7 +80,6 @@ pg_pool_acquire_timeout_secs = 30
 batch_flush_interval_secs = 1
 batch_flush_chunk = 5000
 torrent_batch_chunk = 2000
-batch_initial_capacity = 4096
 sighting_flush_interval_ms = 500
 sighting_chunk_size = 256
 metrics_flush_interval_secs = 60

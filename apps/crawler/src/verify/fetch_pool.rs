@@ -119,24 +119,6 @@ impl Drop for MetadataActiveGuard {
     }
 }
 
-#[allow(dead_code)]
-struct SourceActiveGuard {
-    metrics: Arc<Metrics>,
-}
-#[allow(dead_code)]
-impl SourceActiveGuard {
-    fn new(metrics: Arc<Metrics>) -> Self {
-        metrics.source_active.fetch_add(1, Ordering::Relaxed);
-        SourceActiveGuard { metrics }
-    }
-}
-impl Drop for SourceActiveGuard {
-    fn drop(&mut self) {
-        let prev = self.metrics.source_active.fetch_sub(1, Ordering::Relaxed);
-        debug_assert!(prev > 0, "source_active underflow");
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub enum Transport {
     Tcp,

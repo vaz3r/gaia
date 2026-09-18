@@ -3,7 +3,7 @@ TrustClassifier: Calibrated authenticity and safety classifier.
 """
 import joblib
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingClassifier
 from src.calibration.calibrator import ProbabilityCalibrator

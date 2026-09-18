@@ -2,8 +2,7 @@
 PreVerifier: Dual-Head Verification Prioritizer & Expected Utility Queue Ranker.
 """
 import random
-import math
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from sklearn.ensemble import HistGradientBoostingClassifier
 
 

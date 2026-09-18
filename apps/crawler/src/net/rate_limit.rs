@@ -87,11 +87,6 @@ impl RateLimiter {
         });
         expired
     }
-
-    #[allow(dead_code)]
-    pub fn len(&self) -> usize {
-        self.buckets.len()
-    }
 }
 
 #[cfg(test)]

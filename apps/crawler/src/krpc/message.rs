@@ -39,14 +39,6 @@ impl Message {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn error(t: Bytes, e: BValue) -> Message {
-        Message {
-            t,
-            kind: Kind::Error { e },
-        }
-    }
-
     pub fn parse(buf: &Bytes) -> Result<Message, DecodeError> {
         let root = decode(buf)?;
         Message::from_value(root)
