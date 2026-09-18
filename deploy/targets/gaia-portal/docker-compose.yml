@@ -19,7 +19,7 @@ services:
     volumes:
       - /var/lib/redis/data:/data
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "sh", "-c", "redis-cli -a \"$$REDIS_PASSWORD\" ping"]
       interval: 5s
@@ -115,9 +115,11 @@ services:
       - "--tls-verify-certificate"
       - "--tls-sni-override"
       - "gaia-gateway"
+      - "--http-upgrade-path-prefix"
+      - "/wstunnel"
       - "-L"
       - "udp://127.0.0.1:51820:127.0.0.1:51820?timeout_sec=0"
-      - "${GATEWAY_WSTUNNEL_URL:-wss://192.168.10.111:8443}"
+      - "${GATEWAY_WSTUNNEL_URL:-wss://192.168.10.111:443}"
     volumes:
       - ./wstunnel/ca.crt:/etc/ssl/certs/ca-certificates.crt:ro
     healthcheck:

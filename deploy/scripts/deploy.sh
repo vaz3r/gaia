@@ -2,25 +2,112 @@
 set -euo pipefail
 
 # Unified Deployment Script (Target-Based Architecture)
-# Usage: ./deploy/scripts/deploy.sh <target-name> [commit-ref] [services...]
+#
+# Usage:
+#   ./deploy/scripts/deploy.sh <target> [ref] [services] [flags...]
+#   ./deploy/scripts/deploy.sh --stack "t1,t2,t3" [ref] [flags...]
+#
+# Flags:
+#   --force-recreate   Recreate containers (for config/infra changes)
+#   --verify           Run post-deploy health checks
+#   --stack "a,b,c"    Deploy multiple targets in order (with --verify between each)
 #
 # Examples:
 #   ./deploy/scripts/deploy.sh gaia-node
 #   ./deploy/scripts/deploy.sh workspace-production HEAD
-#   ./deploy/scripts/deploy.sh workspace-production HEAD "classifier"
+#   ./deploy/scripts/deploy.sh workspace-production HEAD "classifier-api classifier-worker"
+#   ./deploy/scripts/deploy.sh gaia-gateway HEAD --force-recreate --verify
+#   ./deploy/scripts/deploy.sh --stack "gaia-gateway,gaia-portal,workspace-production" HEAD --force-recreate --verify
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-TARGET="${1:-}"
-REF="${2:-HEAD}"
-SERVICES="${3:-}"
+# ── Health check commands per target ──
+declare -A HEALTH_CMDS=(
+    [gaia-gateway]="nc -z 127.0.0.1 8443 && curl -sk -o /dev/null https://127.0.0.1/"
+    [gaia-portal]="docker inspect gaia-portal-wstunnel-client --format '{{.State.Health.Status}}' 2>/dev/null | grep -q healthy"
+    [workspace-production]="docker exec gaia-postgres pg_isready -U crawler -d craw 2>/dev/null"
+)
+
+# ── Parse flags ──
+FORCE_RECREATE=0
+VERIFY=0
+STACK_TARGETS=""
+REF="HEAD"
+POSITIONALS=()
+
+for arg in "$@"; do
+    case "$arg" in
+        --force-recreate) FORCE_RECREATE=1 ;;
+        --verify)         VERIFY=1 ;;
+        --stack)          ;; # handled via $2 below
+        --stack=*)        STACK_TARGETS="${arg#--stack=}" ;;
+        -*)               echo "ERROR: Unknown flag: $arg"; exit 1 ;;
+        *)                POSITIONALS+=("$arg") ;;
+    esac
+done
+
+# Handle --stack "a,b,c" (next positional after --stack)
+if [[ " $* " == *" --stack "* ]] && [ -z "$STACK_TARGETS" ]; then
+    # Find --stack position and grab the next arg
+    for i in $(seq 1 $#); do
+        eval "arg=\${$i}"
+        if [ "$arg" = "--stack" ]; then
+            NEXT=$((i + 1))
+            eval "STACK_TARGETS=\${$NEXT:-}"
+            break
+        fi
+    done
+fi
+
+# ── Stack mode: deploy multiple targets in sequence ──
+if [ -n "$STACK_TARGETS" ]; then
+    IFS=',' read -ra STACK <<< "$STACK_TARGETS"
+    REF="${POSITIONALS[0]:-HEAD}"
+    TOTAL=${#STACK[@]}
+    FAILED=0
+
+    echo "=== Stack deploy: $STACK_TARGETS ($TOTAL targets), ref=$REF ==="
+    echo ""
+
+    for i in "${!STACK[@]}"; do
+        TARGET="${STACK[$i]}"
+        IDX=$((i + 1))
+        echo "--- [$IDX/$TOTAL] $TARGET ---"
+
+        if ! "$0" "$TARGET" "$REF" --force-recreate ${VERIFY:+--verify}; then
+            echo ""
+            echo "ERROR: Deployment failed at target: $TARGET"
+            echo "Fix the issue, then re-run from the failed target:"
+            echo "  $0 --stack \"$(IFS=','; echo "${STACK[*]:$i}"|tr ' ' ',')\" $REF --force-recreate --verify"
+            exit 1
+        fi
+        echo ""
+    done
+
+    echo "=== Stack deploy complete: $STACK_TARGETS ==="
+    exit 0
+fi
+
+# ── Single target mode ──
+TARGET="${POSITIONALS[0]:-}"
+REF="${POSITIONALS[1]:-HEAD}"
+SERVICES="${POSITIONALS[2]:-}"
 
 if [ -z "$TARGET" ]; then
     echo "ERROR: Target name required."
-    echo "Usage: $0 <target-name> [commit-ref] [services...]"
+    echo ""
+    echo "Usage:"
+    echo "  $0 <target> [ref] [services] [--force-recreate] [--verify]"
+    echo "  $0 --stack \"t1,t2,t3\" [ref] [--force-recreate] [--verify]"
+    echo ""
     echo "Available targets:"
     ls -1 "$REPO_ROOT/deploy/targets/"
+    echo ""
+    echo "Examples:"
+    echo "  $0 gaia-node"
+    echo "  $0 workspace-production HEAD \"classifier-api classifier-worker\""
+    echo "  $0 --stack \"gaia-gateway,gaia-portal,workspace-production\" HEAD --force-recreate --verify"
     exit 1
 fi
 
@@ -42,15 +129,12 @@ set +a
 
 # SSH Configuration
 if [ -n "${DEPLOY_PASSWORD:-}" ]; then
-    # Use sshpass for password authentication
     SSH="sshpass -p $DEPLOY_PASSWORD ssh -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no $DEPLOY_USER@$DEPLOY_HOST"
     SCP="sshpass -p $DEPLOY_PASSWORD scp -o StrictHostKeyChecking=no -o PreferredAuthentications=password -o PubkeyAuthentication=no"
 elif [ -n "${DEPLOY_SSH_KEY:-}" ]; then
-    # Use SSH key authentication
     SSH="ssh -i $DEPLOY_SSH_KEY -o StrictHostKeyChecking=no $DEPLOY_USER@$DEPLOY_HOST"
     SCP="scp -i $DEPLOY_SSH_KEY -o StrictHostKeyChecking=no"
 else
-    # Fallback to interactive prompt
     SSH="ssh -o StrictHostKeyChecking=no $DEPLOY_USER@$DEPLOY_HOST"
     SCP="scp -o StrictHostKeyChecking=no"
 fi
@@ -58,7 +142,10 @@ fi
 TAG=$(git rev-parse --short "$REF")
 REMOTE_TARGET_DIR="$DEPLOY_REMOTE_GIT/deploy/targets/$TARGET"
 
-echo "=== Deploying $TAG to $TARGET ($DEPLOY_HOST) ==="
+RECREATE_FLAG="--no-recreate"
+[ "$FORCE_RECREATE" -eq 1 ] && RECREATE_FLAG="--force-recreate"
+
+echo "=== Deploying $TAG to $TARGET ($DEPLOY_HOST) [recreate=$([ "$FORCE_RECREATE" -eq 1 ] && echo on || echo off)] ==="
 
 # ── 1. Check GitHub auth on remote ──
 echo "[1/4] Checking git access..."
@@ -101,15 +188,33 @@ if [ -f "$REPO_ROOT/apps/ml/anomalies/models_storage/isolation_forest.joblib" ];
     fi
 fi
 
-
 # ── 4. Build and deploy services ──
 if [ -n "$SERVICES" ]; then
-    echo "[4/4] Building and deploying services: $SERVICES (only target services updated via --no-deps)..."
-    $SSH "cd $REMOTE_TARGET_DIR && GIT_COMMIT=$TAG docker compose --env-file .env up -d --no-deps --build $SERVICES"
+    echo "[4/4] Building and deploying services: $SERVICES..."
+    $SSH "cd $REMOTE_TARGET_DIR && GIT_COMMIT=$TAG docker compose --env-file .env up -d --no-deps $RECREATE_FLAG --build $SERVICES"
 else
-    echo "[4/4] Building and deploying compose stack (ensuring existing containers are not recreated)..."
-    $SSH "cd $REMOTE_TARGET_DIR && GIT_COMMIT=$TAG docker compose --env-file .env up -d --no-recreate --build"
+    echo "[4/4] Building and deploying compose stack ($RECREATE_FLAG)..."
+    $SSH "cd $REMOTE_TARGET_DIR && GIT_COMMIT=$TAG docker compose --env-file .env up -d $RECREATE_FLAG --build"
 fi
 
 echo ""
 echo "=== Deploy $TAG to $TARGET complete ==="
+
+# ── 5. Post-deploy health check ──
+if [ "$VERIFY" -eq 1 ]; then
+    echo ""
+    echo "--- Health check: $TARGET ---"
+    CMD="${HEALTH_CMDS[$TARGET]:-}"
+    if [ -z "$CMD" ]; then
+        echo "  No health check defined for $TARGET (skipping)"
+    else
+        sleep 3
+        if $SSH "$CMD" 2>/dev/null; then
+            echo "  PASS: $TARGET"
+        else
+            echo "  FAIL: $TARGET — health check failed"
+            echo "  Command: $CMD"
+            exit 1
+        fi
+    fi
+fi

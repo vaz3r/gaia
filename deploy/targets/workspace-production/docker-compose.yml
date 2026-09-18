@@ -48,7 +48,7 @@ services:
     restart: unless-stopped
     shm_size: 2gb
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-crawler}
       POSTGRES_DB: ${POSTGRES_DB:-craw}
@@ -176,7 +176,7 @@ services:
     container_name: gaia-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     command: ["redis-server", "--appendonly", "yes", "--maxmemory", "1024mb", "--maxmemory-policy", "volatile-lru"]
     volumes:
       - /home/${DEPLOY_USER:-core}/gaia-data/redis:/data
@@ -194,9 +194,11 @@ services:
       - "--tls-verify-certificate"
       - "--tls-sni-override"
       - "gaia-gateway"
+      - "--http-upgrade-path-prefix"
+      - "/wstunnel"
       - "-L"
       - "udp://127.0.0.1:51820:127.0.0.1:51820?timeout_sec=0"
-      - "${GATEWAY_WSTUNNEL_URL:-wss://192.168.10.111:8443}"
+      - "${GATEWAY_WSTUNNEL_URL:-wss://192.168.10.111:443}"
     volumes:
       - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro
     healthcheck:
