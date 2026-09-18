@@ -78,11 +78,6 @@ public class MeiliClient
         }
     }
 
-    public async Task<int> PushBatchAsync(IReadOnlyList<object> documents, bool waitForTask = false)
-    {
-        return await PushBatchToIndexAsync("torrents", documents, waitForTask);
-    }
-
     public async Task<int> PushBatchToIndexAsync(string indexUid, IReadOnlyList<object> documents, bool waitForTask = false)
     {
         if (documents.Count == 0) return 0;
@@ -102,11 +97,6 @@ public class MeiliClient
         }
 
         return documents.Count;
-    }
-
-    public async Task<int> DeleteBatchAsync(IReadOnlyList<string> infohashes, bool waitForTask = false)
-    {
-        return await DeleteBatchFromIndexAsync("torrents", infohashes, waitForTask);
     }
 
     public async Task<int> DeleteBatchFromIndexAsync(string indexUid, IReadOnlyList<string> infohashes, bool waitForTask = false)
@@ -272,40 +262,6 @@ public class MeiliClient
         }
     }
 
-    public async Task<Dictionary<string, JsonElement>?> GetStatsAsync(string indexUid)
-    {
-        try
-        {
-            var resp = await _httpClient.GetAsync($"/indexes/{indexUid}/stats");
-            if (resp.IsSuccessStatusCode)
-            {
-                return await resp.Content.ReadFromJsonAsync<Dictionary<string, JsonElement>>();
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to fetch stats for index {IndexUid}", indexUid);
-        }
-        return null;
-    }
-
-    public async Task<JsonElement?> GetDocumentAsync(string indexUid, string docId)
-    {
-        try
-        {
-            var resp = await _httpClient.GetAsync($"/indexes/{indexUid}/documents/{docId}");
-            if (resp.IsSuccessStatusCode)
-            {
-                using var doc = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
-                return doc.RootElement.Clone();
-            }
-        }
-        catch
-        {
-            // not found or error
-        }
-        return null;
-    }
 }
 
 public class MeiliTaskResponse
