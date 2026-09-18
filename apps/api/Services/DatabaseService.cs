@@ -326,10 +326,10 @@ public class DatabaseService
                 ORDER BY d.day_gst ASC;
             """;
 
-            var scalar = await conn.QueryFirstOrDefaultAsync<dynamic>(scalarStatsSql);
-            var queue = await conn.QueryFirstOrDefaultAsync<dynamic>(queueStatsSql);
-            var hourlyRows = await conn.QueryAsync(hourlySql);
-            var dailyRows = await conn.QueryAsync(dailySql);
+            var scalar = await conn.QueryFirstOrDefaultAsync<dynamic>(scalarStatsSql, commandTimeout: 60);
+            var queue = await conn.QueryFirstOrDefaultAsync<dynamic>(queueStatsSql, commandTimeout: 60);
+            var hourlyRows = await conn.QueryAsync(hourlySql, commandTimeout: 60);
+            var dailyRows = await conn.QueryAsync(dailySql, commandTimeout: 60);
 
             var hourly = hourlyRows.Select(r => new Dictionary<string, object>
             {
