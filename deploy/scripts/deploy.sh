@@ -39,29 +39,16 @@ STACK_TARGETS=""
 REF="HEAD"
 POSITIONALS=()
 
-for arg in "$@"; do
-    case "$arg" in
-        --force-recreate) FORCE_RECREATE=1 ;;
-        --verify)         VERIFY=1 ;;
-        --stack)          ;; # handled via $2 below
-        --stack=*)        STACK_TARGETS="${arg#--stack=}" ;;
-        -*)               echo "ERROR: Unknown flag: $arg"; exit 1 ;;
-        *)                POSITIONALS+=("$arg") ;;
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --force-recreate) FORCE_RECREATE=1; shift ;;
+        --verify)         VERIFY=1; shift ;;
+        --stack)          STACK_TARGETS="$2"; shift 2 ;;
+        --stack=*)        STACK_TARGETS="${1#--stack=}"; shift ;;
+        -*)               echo "ERROR: Unknown flag: $1"; exit 1 ;;
+        *)                POSITIONALS+=("$1"); shift ;;
     esac
 done
-
-# Handle --stack "a,b,c" (next positional after --stack)
-if [[ " $* " == *" --stack "* ]] && [ -z "$STACK_TARGETS" ]; then
-    # Find --stack position and grab the next arg
-    for i in $(seq 1 $#); do
-        eval "arg=\${$i}"
-        if [ "$arg" = "--stack" ]; then
-            NEXT=$((i + 1))
-            eval "STACK_TARGETS=\${$NEXT:-}"
-            break
-        fi
-    done
-fi
 
 # ── Stack mode: deploy multiple targets in sequence ──
 if [ -n "$STACK_TARGETS" ]; then
