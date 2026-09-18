@@ -126,7 +126,10 @@ builder.Services.AddSingleton<AdminAuthFilter>();
 // ── Output Cache (in-process, protects against spike traffic) ─────────────────
 builder.Services.AddOutputCache(opts =>
 {
-    opts.AddBasePolicy(p => p.Expire(TimeSpan.FromSeconds(5)));
+    opts.AddBasePolicy(p => p.With(c =>
+        !c.HttpContext.Request.Path.StartsWithSegments("/api/live") &&
+        !c.HttpContext.Request.Path.StartsWithSegments("/api/classifier"))
+        .Expire(TimeSpan.FromSeconds(5)));
     opts.AddPolicy("stats", p => p.Expire(TimeSpan.FromSeconds(30)).Tag("stats"));
 });
 

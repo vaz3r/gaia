@@ -28,9 +28,9 @@ public static class DashboardEndpoints
             ctx.Response.Headers.Append("Connection", "keep-alive");
             ctx.Response.Headers.Append("X-Accel-Buffering", "no");
 
-            while (!ct.IsCancellationRequested)
+            try
             {
-                try
+                while (!ct.IsCancellationRequested)
                 {
                     var stats = await db.GetDashboardStatsAsync(ct);
                     var metrics = await repo.GetMetricsCurrentAsync(ct);
@@ -49,17 +49,20 @@ public static class DashboardEndpoints
 
                     await ctx.Response.WriteAsync($"data: {payload}\n\n", ct);
                     await ctx.Response.Body.FlushAsync(ct);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    // If client disconnected, break
-                    break;
-                }
 
-                await Task.Delay(2500, ct);
+                    await Task.Delay(2500, ct);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal client disconnect (browser closed tab or navigated away)
+            }
+            catch (Exception)
+            {
+                // Transport or socket closed
             }
         };
 
-        group.MapGet("/live/stream", sseHandler);
+        group.MapGet("/live/stream", sseHandler).CacheOutput(p => p.NoCache());
     }
 }

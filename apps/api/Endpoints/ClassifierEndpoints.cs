@@ -8,8 +8,8 @@ public static class ClassifierEndpoints
     {
         var methods = new[] { "GET", "POST", "PUT", "DELETE", "PATCH" };
 
-        app.MapMethods("/api/classifier/{**slug}", methods, ForwardClassifierRequest);
-        app.MapMethods("/api/classifier", methods, ForwardClassifierRequest);
+        app.MapMethods("/api/classifier/{**slug}", methods, ForwardClassifierRequest).CacheOutput(p => p.NoCache());
+        app.MapMethods("/api/classifier", methods, ForwardClassifierRequest).CacheOutput(p => p.NoCache());
     }
 
     private static async Task ForwardClassifierRequest(
@@ -89,7 +89,11 @@ public static class ClassifierEndpoints
                 await response.Content.CopyToAsync(ctx.Response.Body, ctx.RequestAborted);
             }
         }
-        catch (HttpRequestException ex)
+        catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+        {
+            // Client closed connection, exit cleanly
+        }
+        catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to proxy request to Classifier API at {Url}", fullTargetUrl);
             ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
