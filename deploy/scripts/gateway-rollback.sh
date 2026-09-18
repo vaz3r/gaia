@@ -7,13 +7,14 @@ set -euo pipefail
 ACTION="${1:-status}"
 RANCH_PASS="rosrtdz@1995"
 SSH_RANCH="sshpass -p ${RANCH_PASS} ssh -o StrictHostKeyChecking=no root@ranch"
+DEPLOY_USER="core"
 
 
 case "$ACTION" in
     to-systemd)
         echo "=== [ROLLBACK] Reverting Gateway and Tunnels to Host Systemd Services ==="
         echo "1. Stopping Docker Compose tunnel services..."
-        $SSH_RANCH "pct exec 116 -- bash -c 'cd /root/gaia/deploy/targets/gaia-gateway && docker compose down' || true"
+        $SSH_RANCH "pct exec 116 -- bash -c 'cd /home/core/gaia/deploy/targets/gaia-gateway && docker compose down' || true"
         $SSH_RANCH "pct exec 110 -- bash -c 'cd /home/core/gaia/deploy/targets/workspace-production && docker compose stop wstunnel-client wireguard-client' || true"
         $SSH_RANCH "pct exec 116 -- ip link del wg0 2>/dev/null || true"
         $SSH_RANCH "pct exec 110 -- ip link del wg0 2>/dev/null || true"
@@ -40,7 +41,7 @@ case "$ACTION" in
         $SSH_RANCH "pct exec 110 -- ip link del wg0 2>/dev/null || true"
 
         echo "2. Starting Docker Compose on CT 116 (gaia-gateway)..."
-        $SSH_RANCH "pct exec 116 -- bash -c 'cd /root/gaia/deploy/targets/gaia-gateway && docker compose up -d'"
+        $SSH_RANCH "pct exec 116 -- bash -c 'cd /home/core/gaia/deploy/targets/gaia-gateway && docker compose up -d'"
 
         echo "3. Starting Docker Compose on CT 110 (workspace-production tunnel)..."
         $SSH_RANCH "pct exec 110 -- bash -c 'cd /home/core/gaia/deploy/targets/workspace-production && docker compose up -d wstunnel-client wireguard-client'"
