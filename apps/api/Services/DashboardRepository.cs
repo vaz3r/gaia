@@ -815,7 +815,7 @@ public class DashboardRepository
                 FROM dht_surveillance_nodes";
 
             stats = await conn.QuerySingleAsync(statsSql);
-            _memoryCache.Set(statsCacheKey, stats, TimeSpan.FromSeconds(60));
+            _memoryCache.Set(statsCacheKey, (object)stats, TimeSpan.FromSeconds(60));
         }
 
         return new
@@ -1252,7 +1252,7 @@ public class DashboardRepository
                 ROUND(AVG(integrity_score)::numeric, 1) AS avg_integrity_score
             FROM torrents";
 
-        var result = await conn.QuerySingleAsync(sql);
+        object result = await conn.QuerySingleAsync(sql);
         _memoryCache.Set(cacheKey, result, TimeSpan.FromSeconds(30));
         return result;
     }
@@ -1362,7 +1362,7 @@ public class DashboardRepository
             ORDER BY peer_count DESC
             LIMIT 10";
 
-        var summary = await conn.QuerySingleOrDefaultAsync(summarySql) ?? new { };
+        object summary = (object?)(await conn.QuerySingleOrDefaultAsync(summarySql)) ?? new { };
         var catSurv = (await conn.QueryAsync(catSurvSql)).ToList();
         var trends7d = (await conn.QueryAsync(trends7dSql)).ToList();
         var peerGeo = (await conn.QueryAsync(peerGeoSql)).ToList();
