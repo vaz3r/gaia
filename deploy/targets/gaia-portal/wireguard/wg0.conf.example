@@ -1,0 +1,9 @@
+[Interface]
+Address = 10.99.0.3/24
+PrivateKey = <PORTAL_PRIVATE_KEY>
+
+[Peer]
+PublicKey = <GATEWAY_PUBLIC_KEY>
+Endpoint = 192.168.10.111:51820
+AllowedIPs = 10.99.0.0/24
+PersistentKeepalive = 25

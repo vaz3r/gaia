@@ -1,4 +1,4 @@
-name: gaia-portal-stack
+name: gaia-portal
 
 services:
   redis:
@@ -101,3 +101,52 @@ services:
       - "3005:3005"
     depends_on:
       - api
+
+  wstunnel-client:
+    build:
+      context: ../../../apps/tunnel
+      dockerfile: Dockerfile
+    image: gaia-tunnel:${GIT_COMMIT:-latest}
+    container_name: gaia-portal-wstunnel-client
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - "wstunnel-client"
+      - "--tls-verify-certificate"
+      - "--tls-sni-override"
+      - "gaia-gateway"
+      - "-L"
+      - "udp://127.0.0.1:51820:127.0.0.1:51820?timeout_sec=0"
+      - "${GATEWAY_WSTUNNEL_URL:-wss://192.168.10.111:8443}"
+    volumes:
+      - ./wstunnel/ca.crt:/etc/ssl/certs/ca-certificates.crt:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pidof wstunnel >/dev/null 2>&1 && ss -uln | grep -q '127.0.0.1:51820' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  wireguard-client:
+    build:
+      context: ../../../apps/tunnel
+      dockerfile: Dockerfile
+    image: gaia-tunnel:${GIT_COMMIT:-latest}
+    container_name: gaia-portal-wireguard-client
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - /dev/net/tun:/dev/net/tun
+      - ./wireguard/wg0.conf:/etc/wireguard/wg0.conf:ro
+    command: ["wireguard", "/etc/wireguard/wg0.conf"]
+    healthcheck:
+      test: ["CMD-SHELL", "ip link show wg0 >/dev/null 2>&1 && ip addr show wg0 | grep -q 10.99.0.3 && hs=$$(wg show wg0 latest-handshakes | awk '{print $$2}') && case \"$$hs\" in ''|*[!0-9]*) exit 1;; esac && [ \"$$hs\" -gt 0 ] && now=$$(date +%s) && [ $$((now - hs)) -ge 0 ] && [ $$((now - hs)) -le 180 ] && ping -c 1 -W 2 10.99.0.1 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      wstunnel-client:
+        condition: service_healthy
