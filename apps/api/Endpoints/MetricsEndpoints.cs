@@ -40,12 +40,6 @@ public static class MetricsEndpoints
             return Results.Ok(data);
         }).WithTags("Analytics");
 
-        app.MapGet("/api/performance", async (DashboardRepository repo, CancellationToken ct) =>
-        {
-            var data = await repo.GetMetricsCurrentAsync(ct);
-            return Results.Ok(data);
-        }).WithTags("Performance");
-
         app.MapGet("/api/routing/security", async (DashboardRepository repo, CancellationToken ct) =>
         {
             var data = await repo.GetRoutingSecurityAsync(ct);

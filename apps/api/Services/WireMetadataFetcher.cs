@@ -10,13 +10,7 @@ public class WireMetadataFetcher
 {
     private readonly ILogger<WireMetadataFetcher> _logger;
 
-    public static readonly string[] DefaultTrackers = new[]
-    {
-        "udp://tracker.opentrackr.org:1337/announce",
-        "udp://open.stealth.si:80/announce",
-        "udp://tracker.torrent.eu.org:451/announce",
-        "udp://explodie.org:6969/announce"
-    };
+    public static string[] DefaultTrackers => TorrentBuilder.DefaultTrackers;
 
     public WireMetadataFetcher(ILogger<WireMetadataFetcher> logger)
     {

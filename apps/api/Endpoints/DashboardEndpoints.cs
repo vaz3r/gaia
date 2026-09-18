@@ -9,15 +9,6 @@ public static class DashboardEndpoints
     {
         var group = app.MapGroup("/api").WithTags("Dashboard");
 
-        // Health check
-        group.MapGet("/health", () => Results.Ok(new
-        {
-            ok = true,
-            status = "operational",
-            now = DateTime.UtcNow.ToString("o"),
-            version = "gaia-v2-dotnet10"
-        }));
-
         // Aggregated database stats
         group.MapGet("/stats", async (DatabaseService db, CancellationToken ct) =>
         {
@@ -70,6 +61,5 @@ public static class DashboardEndpoints
         };
 
         group.MapGet("/live/stream", sseHandler);
-        group.MapGet("/stats/live", sseHandler);
     }
 }
