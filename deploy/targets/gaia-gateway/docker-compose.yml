@@ -35,8 +35,6 @@ services:
       - "wstunnel-server"
       - "--restrict-to"
       - "127.0.0.1:51820"
-      - "--restrict-http-upgrade-path-prefix"
-      - "/wstunnel"
       - "ws://127.0.0.1:${WSTUNNEL_PORT:-8443}"
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 ${WSTUNNEL_PORT:-8443} || exit 1"]
