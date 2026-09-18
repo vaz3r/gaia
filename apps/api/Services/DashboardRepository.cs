@@ -2,6 +2,7 @@ using System.Data;
 using System.Text;
 using System.Text.Json;
 using Dapper;
+using Microsoft.Extensions.Caching.Memory;
 using Npgsql;
 
 namespace Gaia.Api.Services;
@@ -11,17 +12,20 @@ public class DashboardRepository
     private readonly NpgsqlDataSource _dataSource;
     private readonly CacheService _cache;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IMemoryCache _memoryCache;
     private readonly ILogger<DashboardRepository> _logger;
 
     public DashboardRepository(
         NpgsqlDataSource dataSource,
         CacheService cache,
         IHttpClientFactory httpClientFactory,
+        IMemoryCache memoryCache,
         ILogger<DashboardRepository> logger)
     {
         _dataSource = dataSource;
         _cache = cache;
         _httpClientFactory = httpClientFactory;
+        _memoryCache = memoryCache;
         _logger = logger;
     }
 
@@ -795,19 +799,24 @@ public class DashboardRepository
 
         var nodes = (await conn.QueryAsync(dataSql, builder)).ToList();
 
-        const string statsSql = @"
-            SELECT 
-                COUNT(*) AS total_surveillance_nodes,
-                COUNT(*) FILTER (WHERE is_blocked = TRUE) AS blocked_nodes,
-                COUNT(*) FILTER (WHERE abuse_category = 'Sybil Node Rotator' OR distinct_node_ids > 1) AS sybil_nodes,
-                COUNT(*) FILTER (WHERE abuse_category = 'Passive Swarm Monitor' OR (get_peers_count >= 10 AND announce_peer_count = 0)) AS passive_monitors,
-                COUNT(*) FILTER (WHERE abuse_category = 'DHT Table Scraper' OR find_node_count >= 20) AS dht_scrapers,
-                COUNT(*) FILTER (WHERE abuse_category = 'Unreciprocating Leecher' OR (query_count >= 10 AND announce_peer_count = 0)) AS unreciprocating_leechers,
-                COALESCE(SUM(query_count), 0) AS total_intercepted_queries,
-                COALESCE(SUM(bep42_violations), 0) AS total_bep42_violations
-            FROM dht_surveillance_nodes";
+        const string statsCacheKey = "dashboard:surveillance:global_stats";
+        if (!_memoryCache.TryGetValue(statsCacheKey, out object? stats) || stats == null)
+        {
+            const string statsSql = @"
+                SELECT 
+                    COUNT(*) AS total_surveillance_nodes,
+                    COUNT(*) FILTER (WHERE is_blocked = TRUE) AS blocked_nodes,
+                    COUNT(*) FILTER (WHERE abuse_category = 'Sybil Node Rotator' OR distinct_node_ids > 1) AS sybil_nodes,
+                    COUNT(*) FILTER (WHERE abuse_category = 'Passive Swarm Monitor' OR (get_peers_count >= 10 AND announce_peer_count = 0)) AS passive_monitors,
+                    COUNT(*) FILTER (WHERE abuse_category = 'DHT Table Scraper' OR find_node_count >= 20) AS dht_scrapers,
+                    COUNT(*) FILTER (WHERE abuse_category = 'Unreciprocating Leecher' OR (query_count >= 10 AND announce_peer_count = 0)) AS unreciprocating_leechers,
+                    COALESCE(SUM(query_count), 0) AS total_intercepted_queries,
+                    COALESCE(SUM(bep42_violations), 0) AS total_bep42_violations
+                FROM dht_surveillance_nodes";
 
-        var stats = await conn.QuerySingleAsync(statsSql);
+            stats = await conn.QuerySingleAsync(statsSql);
+            _memoryCache.Set(statsCacheKey, stats, TimeSpan.FromSeconds(60));
+        }
 
         return new
         {
@@ -1081,7 +1090,7 @@ public class DashboardRepository
         var dataSql = $@"
             SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
                    category, integrity_score, policy_action, risk_tier, decision_source,
-                   policy_reason, availability_score, availability_state, scored_at
+                   availability_score, availability_state, scored_at
             FROM torrents
             {where}
             ORDER BY scored_at DESC NULLS LAST, verified_at DESC
@@ -1222,6 +1231,12 @@ public class DashboardRepository
 
     public async Task<object> GetScoringStatsAsync(CancellationToken ct)
     {
+        const string cacheKey = "dashboard:scoring:stats";
+        if (_memoryCache.TryGetValue(cacheKey, out object? cached) && cached != null)
+        {
+            return cached;
+        }
+
         await using var conn = await OpenConnectionAsync(ct);
         const string sql = @"
             SELECT 
@@ -1237,7 +1252,181 @@ public class DashboardRepository
                 ROUND(AVG(integrity_score)::numeric, 1) AS avg_integrity_score
             FROM torrents";
 
-        return await conn.QuerySingleAsync(sql);
+        var result = await conn.QuerySingleAsync(sql);
+        _memoryCache.Set(cacheKey, result, TimeSpan.FromSeconds(30));
+        return result;
+    }
+
+    #endregion
+
+    #region 7. Swarm & Content Intelligence Analysis
+
+    private record AnalysisTelemetry(
+        object Summary,
+        IEnumerable<dynamic> Categories,
+        IEnumerable<dynamic> Survivability,
+        IEnumerable<dynamic> Trends7d,
+        IEnumerable<dynamic> PeerGeography
+    );
+
+    private record SwarmCollections(
+        IEnumerable<dynamic> Trending,
+        IEnumerable<dynamic> Velocity,
+        IEnumerable<dynamic> TopSwarms
+    );
+
+    public async Task<object> GetAnalysisDataAsync(string? selectedCategory, CancellationToken ct)
+    {
+        var category = string.IsNullOrWhiteSpace(selectedCategory) || selectedCategory.Equals("All", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : selectedCategory.Trim();
+
+        // 1. Global Telemetry (cached for 10 minutes)
+        const string telemetryCacheKey = "dashboard:analysis:telemetry";
+        if (!_memoryCache.TryGetValue(telemetryCacheKey, out AnalysisTelemetry? telemetry) || telemetry == null)
+        {
+            telemetry = await ComputeAnalysisTelemetryAsync(ct);
+            _memoryCache.Set(telemetryCacheKey, telemetry, TimeSpan.FromMinutes(10));
+        }
+
+        // 2. Category Swarms (cached for 60 seconds per category)
+        var swarmsCacheKey = $"dashboard:analysis:swarms:{category ?? "__all__"}";
+        if (!_memoryCache.TryGetValue(swarmsCacheKey, out SwarmCollections? swarms) || swarms == null)
+        {
+            swarms = await ComputeCategorySwarmsAsync(category, ct);
+            _memoryCache.Set(swarmsCacheKey, swarms, TimeSpan.FromSeconds(60));
+        }
+
+        return new
+        {
+            summary = telemetry.Summary,
+            categories = telemetry.Categories,
+            survivability = telemetry.Survivability,
+            trends_7d = telemetry.Trends7d,
+            peer_geography = telemetry.PeerGeography,
+            selected_category = category ?? "All",
+            trending = swarms.Trending,
+            fastest_growing = swarms.Velocity,
+            top_swarms = swarms.TopSwarms,
+            cached_at = DateTime.UtcNow.ToString("o")
+        };
+    }
+
+    private async Task<AnalysisTelemetry> ComputeAnalysisTelemetryAsync(CancellationToken ct)
+    {
+        await using var conn = await OpenConnectionAsync(ct);
+
+        const string summarySql = @"
+            SELECT 
+                count(*) as total_torrents,
+                count(category) as classified_torrents,
+                count(*) - count(category) as unclassified_torrents,
+                count(*) filter (where needs_review = true) as review_needed_torrents,
+                round(avg(total_seen), 1) as avg_sightings,
+                max(total_seen) as max_sightings,
+                count(*) filter (where total_seen >= 10) as high_activity_swarms,
+                count(*) filter (where first_seen >= now() - interval '48 hours') as fresh_swarms_48h,
+                count(*) filter (where last_seen >= now() - interval '24 hours') as active_swarms_24h,
+                round(sum(total_size / (1024*1024*1024)::numeric) / 1024, 2) as total_size_tb
+            FROM torrents";
+
+        const string catSurvSql = @"
+            SELECT 
+                category,
+                count(*)::bigint as count,
+                round(count(*)::numeric * 100.0 / nullif(sum(count(*)) over (), 0), 2) as pct,
+                round(avg(category_confidence)::numeric, 3) as avg_confidence,
+                round(avg(total_size / (1024*1024*1024)::numeric), 2) as avg_size_gb,
+                round(sum(total_size / (1024*1024*1024)::numeric) / 1024, 2) as total_size_tb,
+                round(avg(swarm_peers::numeric), 1) as avg_peers,
+                round(avg(health_score::numeric), 1) as avg_health,
+                count(*) filter (where needs_review = true) as review_needed,
+                count(*) filter (where swarm_peers > 0) as active_seed_torrents,
+                round(count(*) filter (where swarm_peers > 0) * 100.0 / nullif(count(*), 0), 1) as survivability_pct
+            FROM torrents
+            WHERE category IS NOT NULL
+            GROUP BY category
+            ORDER BY count DESC";
+
+        const string trends7dSql = @"
+            SELECT to_char(date_trunc('day', verified_at), 'YYYY-MM-DD""T""HH24:MI:SS.MS""Z""') as day, category, count(*) as count
+            FROM torrents
+            WHERE verified_at >= now() - interval '7 days' AND category IS NOT NULL
+            GROUP BY date_trunc('day', verified_at), category
+            ORDER BY date_trunc('day', verified_at) ASC";
+
+        const string peerGeoSql = @"
+            SELECT split_part(host(ip), '.', 1) as prefix, count(*) as peer_count
+            FROM stable_peers
+            GROUP BY prefix
+            ORDER BY peer_count DESC
+            LIMIT 10";
+
+        var summary = await conn.QuerySingleOrDefaultAsync(summarySql) ?? new { };
+        var catSurv = (await conn.QueryAsync(catSurvSql)).ToList();
+        var trends7d = (await conn.QueryAsync(trends7dSql)).ToList();
+        var peerGeo = (await conn.QueryAsync(peerGeoSql)).ToList();
+
+        return new AnalysisTelemetry(summary, catSurv, catSurv, trends7d, peerGeo);
+    }
+
+    private async Task<SwarmCollections> ComputeCategorySwarmsAsync(string? category, CancellationToken ct)
+    {
+        await using var conn = await OpenConnectionAsync(ct);
+
+        var builder = new DynamicParameters();
+        var catFilter = string.Empty;
+        if (!string.IsNullOrWhiteSpace(category))
+        {
+            builder.Add("cat", category);
+            catFilter = "AND category = @cat";
+        }
+
+        var trendingSql = $@"
+            SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
+                   first_seen, last_seen, total_seen, health_score, popularity_score, swarm_peers,
+                   category, category_confidence, needs_review,
+                   popularity_score as trend_score,
+                   round(total_seen / GREATEST(0.25, EXTRACT(epoch FROM (now() - verified_at)) / 3600.0)::numeric, 2) as velocity
+            FROM torrents
+            WHERE popularity_score > 0 {catFilter}
+            ORDER BY popularity_score DESC
+            LIMIT 25";
+
+        var velocitySql = $@"
+            WITH candidates AS (
+              SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
+                     first_seen, last_seen, total_seen, health_score, popularity_score, swarm_peers,
+                     category, category_confidence, needs_review
+              FROM torrents
+              WHERE verified_at >= now() - interval '48 hours' {catFilter}
+              ORDER BY verified_at DESC
+              LIMIT 500
+            )
+            SELECT infohash, name, total_size, file_count, verified_at,
+                   first_seen, last_seen, total_seen, health_score, popularity_score, swarm_peers,
+                   category, category_confidence, needs_review,
+                   round(total_seen / GREATEST(0.25, EXTRACT(epoch FROM (now() - verified_at)) / 3600.0)::numeric, 2) as velocity,
+                   round(EXTRACT(epoch FROM (now() - verified_at))::numeric / 3600.0, 1) as age_hours
+            FROM candidates
+            ORDER BY velocity DESC, verified_at DESC
+            LIMIT 25";
+
+        var topSwarmsSql = $@"
+            SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
+                   first_seen, last_seen, total_seen, health_score, popularity_score, swarm_peers,
+                   category, category_confidence, needs_review,
+                   round(total_seen / GREATEST(0.5, EXTRACT(epoch FROM (now() - first_seen)) / 3600.0)::numeric, 2) as velocity
+            FROM torrents
+            WHERE 1=1 {catFilter}
+            ORDER BY total_seen DESC
+            LIMIT 25";
+
+        var trending = (await conn.QueryAsync(trendingSql, builder)).ToList();
+        var velocity = (await conn.QueryAsync(velocitySql, builder)).ToList();
+        var topSwarms = (await conn.QueryAsync(topSwarmsSql, builder)).ToList();
+
+        return new SwarmCollections(trending, velocity, topSwarms);
     }
 
     #endregion

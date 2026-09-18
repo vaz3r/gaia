@@ -16,6 +16,7 @@ services:
       ASPNETCORE_URLS: http://0.0.0.0:${DASH_PORT:-3000}
       PORT: ${DASH_PORT:-3000}
       GAIA_ADMIN_TOKEN: ${GAIA_ADMIN_TOKEN:-}
+      CLASSIFIER_API_URL: ${CLASSIFIER_API_URL:-http://127.0.0.1:8080}
 
   logger:
     build:

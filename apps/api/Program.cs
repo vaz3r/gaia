@@ -76,6 +76,16 @@ builder.Services.AddSingleton<PostgresTrigramSearchProvider>();
 builder.Services.AddSingleton<CircuitBreaker>();
 builder.Services.AddHttpClient();
 
+var classifierUrl = builder.Configuration["CLASSIFIER_API_URL"]
+    ?? Environment.GetEnvironmentVariable("CLASSIFIER_API_URL")
+    ?? "http://127.0.0.1:8080";
+
+builder.Services.AddHttpClient("Classifier", client =>
+{
+    client.BaseAddress = new Uri(classifierUrl.TrimEnd('/') + "/");
+    client.Timeout     = TimeSpan.FromSeconds(30);
+});
+
 if (string.Equals(searchProviderSetting, "PostgreSQL", StringComparison.OrdinalIgnoreCase))
 {
     // Dedicated Operator Dashboard instance: direct Postgres search provider only, zero Meilisearch
@@ -150,6 +160,8 @@ app.MapMetricsEndpoints();
 app.MapSurveillanceEndpoints();
 app.MapAlertsEndpoints();
 app.MapScoringEndpoints();
+app.MapAnalysisEndpoints();
+app.MapClassifierEndpoints();
 
 app.MapGet("/health", () => Results.Ok(new
 {
