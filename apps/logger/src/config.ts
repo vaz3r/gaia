@@ -22,6 +22,9 @@ export interface LoggerConfig {
   // Analyzer
   logsDir: string;
   analyzerPort: number;
+  // Retention Janitor
+  logRetentionDays: number;
+  janitorIntervalMs: number;
 }
 
 export function loadConfig(): LoggerConfig {
@@ -54,5 +57,8 @@ export function loadConfig(): LoggerConfig {
     // Analyzer
     logsDir: process.env.LOGS_DIR || process.env.STORAGE_DIR || '/logs',
     analyzerPort,
+    // Retention Janitor
+    logRetentionDays: process.env.LOG_RETENTION_DAYS !== undefined ? parseInt(process.env.LOG_RETENTION_DAYS, 10) : 7,
+    janitorIntervalMs: process.env.LOG_JANITOR_INTERVAL_MS ? parseInt(process.env.LOG_JANITOR_INTERVAL_MS, 10) : 3600000,
   };
 }

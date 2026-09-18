@@ -4,6 +4,7 @@ import { loadConfig } from './config.js';
 import { startShipper } from './modules/shipper.js';
 import { createReceiverApp } from './modules/receiver.js';
 import { createAnalyzerApp, AnalyzerInstance } from './modules/analyzer.js';
+import { startJanitor, JanitorHandle } from './modules/janitor.js';
 
 const config = loadConfig();
 const logger = pino({ level: config.logLevel });
@@ -14,6 +15,7 @@ let receiverServer: Server | null = null;
 let analyzerServer: Server | null = null;
 let analyzerInstance: AnalyzerInstance | null = null;
 let shipperHandle: { stop: () => void } | null = null;
+let janitorHandle: JanitorHandle | null = null;
 
 async function bootstrap() {
   const shouldRunReceiver = config.profile === 'receiver' || config.profile === 'server' || config.profile === 'all';
@@ -26,6 +28,11 @@ async function bootstrap() {
     receiverServer = app.listen(config.receiverPort, '0.0.0.0', () => {
       logger.info(`Log Receiver listening on 0.0.0.0:${config.receiverPort}`);
     });
+
+    if (config.logRetentionDays > 0) {
+      logger.info({ retentionDays: config.logRetentionDays }, 'Launching log retention janitor...');
+      janitorHandle = await startJanitor(config, logger);
+    }
   }
 
   if (shouldRunAnalyzer) {
@@ -47,6 +54,10 @@ async function shutdown(signal: string) {
 
   if (shipperHandle) {
     shipperHandle.stop();
+  }
+
+  if (janitorHandle) {
+    janitorHandle.stop();
   }
 
   const closePromises: Promise<void>[] = [];
