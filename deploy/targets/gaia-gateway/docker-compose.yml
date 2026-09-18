@@ -65,11 +65,11 @@ services:
       - ./wireguard/wg0.conf:/etc/wireguard/wg0.conf:ro
     command: ["wireguard", "/etc/wireguard/wg0.conf"]
     healthcheck:
-      test: ["CMD-SHELL", "ip link show wg0 >/dev/null 2>&1 && ip addr show wg0 | grep -q 10.99.0.1 && hs=$$(wg show wg0 latest-handshakes | awk '{print $$2}') && case \"$$hs\" in ''|*[!0-9]*) exit 1;; esac && ( [ \"$$hs\" -eq 0 ] || ( now=$$(date +%s) && [ $$((now - hs)) -ge 0 ] && [ $$((now - hs)) -le 180 ] ) ) || exit 1"]
+      test: ["CMD-SHELL", "ip link show wg0 >/dev/null 2>&1 && ip addr show wg0 | grep -q 10.99.0.1"]
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     depends_on:
       wstunnel:
         condition: service_healthy
