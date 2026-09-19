@@ -9,5 +9,6 @@ pub mod peer_outcomes;
 pub mod pg;
 pub mod sightings;
 pub mod surveillance;
+pub mod tombstone_filter;
 pub mod torrents;
 

@@ -27,6 +27,7 @@ use crate::storage::janitor::JanitorConfig;
 use crate::storage::jobs::{RetryConfig as JobRetryConfig, VerifyStore};
 use crate::storage::pending_infohashes::{PendingInfohashScheduler, PendingInfohashWriter};
 use crate::storage::pg::PoolConfig;
+use crate::storage::tombstone_filter::TombstoneFilter;
 use crate::storage::sightings::SightingWriter;
 use crate::storage::surveillance::SurveillanceRecorder;
 use crate::trace::TraceConfig;
@@ -133,6 +134,9 @@ async fn main() {
         config.buffer.flush_interval_secs,
     )));
 
+    let tombstone_filter = TombstoneFilter::new(pool.clone(), Duration::from_secs(600));
+    tokio::spawn(tombstone_filter.clone().run());
+
     let harvester = Harvester::new(
         config.harvest.bloom_capacity,
         config.harvest.bloom_fp_rate,
@@ -143,6 +147,7 @@ async fn main() {
         verify_tx.clone(),
         announce_tx,
         pending_writer.clone(),
+        tombstone_filter,
         metrics.clone(),
     );
     tokio::spawn(crate::harvest::run_harvester(harvest_rx, harvester));

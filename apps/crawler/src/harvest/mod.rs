@@ -4,6 +4,7 @@ use crate::harvest::bloom::BloomFilter;
 use crate::krpc::Infohash;
 use crate::metrics::{Add1, Metrics};
 use crate::storage::pending_infohashes::PendingInfohashWriter;
+use crate::storage::tombstone_filter::TombstoneFilter;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -33,6 +34,7 @@ pub struct Harvester {
     verify_tx: mpsc::Sender<Infohash>,
     announce_tx: mpsc::Sender<(Infohash, SocketAddr)>,
     pending_writer: Arc<PendingInfohashWriter>,
+    tombstone: Arc<TombstoneFilter>,
     metrics: Arc<Metrics>,
 }
 
@@ -59,6 +61,7 @@ impl Harvester {
         verify_tx: mpsc::Sender<Infohash>,
         announce_tx: mpsc::Sender<(Infohash, SocketAddr)>,
         pending_writer: Arc<PendingInfohashWriter>,
+        tombstone: Arc<TombstoneFilter>,
         metrics: Arc<Metrics>,
     ) -> Self {
         let capacity = capacity.max(64);
@@ -74,11 +77,20 @@ impl Harvester {
             verify_tx,
             announce_tx,
             pending_writer,
+            tombstone,
             metrics,
         }
     }
 
     pub fn harvest(&mut self, ih: Infohash, source: Source, direct: Option<SocketAddr>) -> bool {
+        // --- Tombstone gate: silently drop any infohash that has been blocked
+        // by the category-policy system. This is the outermost guard so blocked
+        // hashes never enter the bloom filters or any downstream channel. ---
+        if self.tombstone.is_blocked(&ih) {
+            self.metrics.tombstone_dropped.add(1);
+            return false;
+        }
+
         if source == Source::AnnouncePeer
             && let Some(peer) = direct
         {

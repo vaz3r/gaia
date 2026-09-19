@@ -226,6 +226,8 @@ pub struct Metrics {
     pub udp_recv_invalid_addr_total: AtomicU64,
     pub udp_recv_zero_length_total: AtomicU64,
     pub udp_recv_fatal_total: AtomicU64,
+    // Category-policy tombstone filter
+    pub tombstone_dropped: AtomicU64,
 }
 
 impl Metrics {
@@ -440,6 +442,8 @@ pub struct Snapshot {
     pub udp_recv_invalid_addr_total: u64,
     pub udp_recv_zero_length_total: u64,
     pub udp_recv_fatal_total: u64,
+    // Category-policy tombstone filter
+    pub tombstone_dropped: u64,
 }
 
 impl Metrics {
@@ -710,6 +714,7 @@ impl Metrics {
             udp_recv_invalid_addr_total: self.udp_recv_invalid_addr_total.load(Ordering::Relaxed),
             udp_recv_zero_length_total: self.udp_recv_zero_length_total.load(Ordering::Relaxed),
             udp_recv_fatal_total: self.udp_recv_fatal_total.load(Ordering::Relaxed),
+            tombstone_dropped: self.tombstone_dropped.load(Ordering::Relaxed),
         }
     }
 }
