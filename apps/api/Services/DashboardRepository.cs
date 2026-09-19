@@ -1310,7 +1310,7 @@ public class DashboardRepository
             unscored_torrents = unscored,
             avg_integrity_score = row.avg_integrity_score,
             last_scored_at = lastScoredAt?.ToString("o"),
-            active_worker = "gaia-scoring-worker",
+            active_worker = "gaia-ml (scoring)",
             worker_status = workerStatus
         };
 

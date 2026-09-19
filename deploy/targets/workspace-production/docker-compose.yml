@@ -105,12 +105,12 @@ services:
       - /home/${DEPLOY_USER:-core}/gaia-data/classifier/models:/app/models
     command: ["python", "scripts/entrypoint.py"]
 
-  anomaly-worker:
+  gaia-ml:
     build:
-      context: ../../../apps/ml/anomalies
+      context: ../../../apps/ml
       dockerfile: Dockerfile
-    image: gaia-anomaly-worker:${GIT_COMMIT:-latest}
-    container_name: gaia-anomaly-worker
+    image: gaia-ml:${GIT_COMMIT:-latest}
+    container_name: gaia-ml
     restart: unless-stopped
     network_mode: host
     environment:
@@ -119,38 +119,24 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-crawler}
       POSTGRES_DB: ${POSTGRES_DB:-craw}
       PG_PASSWORD: ${PG_PASSWORD}
-      LOG_ANALYZER_URL: http://localhost:3001
-      DETECTION_INTERVAL_MINUTES: 15
-      RETRAIN_INTERVAL_HOURS: 24
-      ALERT_MIN_SCORE: 0.60
-      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
       LOG_LEVEL: INFO
-    volumes:
-      - /home/${DEPLOY_USER:-core}/gaia-data/anomalies/models:/app/models_storage
-      - /home/${DEPLOY_USER:-core}/gaia-data/anomalies/data:/app/data
-
-  scoring-worker:
-    build:
-      context: ../../../apps/ml/scoring
-      dockerfile: Dockerfile
-    image: gaia-scoring-worker:${GIT_COMMIT:-latest}
-    container_name: gaia-scoring-worker
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      DB_HOST: localhost
-      PG_PORT: ${PG_PORT:-5432}
-      POSTGRES_USER: ${POSTGRES_USER:-crawler}
-      POSTGRES_DB: ${POSTGRES_DB:-craw}
-      PG_PASSWORD: ${PG_PASSWORD}
+      ENABLED_WORKERS: "scoring,anomalies"
+      # Scoring params
       BATCH_SIZE: 500
       POLL_INTERVAL: 5
       RETRAIN_INTERVAL_HOURS: 168
       AVAILABILITY_REFRESH_HOURS: 24
-      LOG_LEVEL: INFO
+      # Anomaly params
+      DETECTION_INTERVAL_MINUTES: 15
+      ANOMALIES_RETRAIN_INTERVAL_HOURS: 24
+      ALERT_MIN_SCORE: 0.60
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      LOG_ANALYZER_URL: http://localhost:3001
     volumes:
-      - /home/${DEPLOY_USER:-core}/gaia-data/scoring/models:/app/model_registry
-      - /home/${DEPLOY_USER:-core}/gaia-data/scoring/reports:/app/reports
+      - /home/${DEPLOY_USER:-core}/gaia-data/scoring/models:/app/scoring/model_registry
+      - /home/${DEPLOY_USER:-core}/gaia-data/scoring/reports:/app/scoring/reports
+      - /home/${DEPLOY_USER:-core}/gaia-data/anomalies/models:/app/anomalies/models_storage
+      - /home/${DEPLOY_USER:-core}/gaia-data/anomalies/data:/app/anomalies/data
 
   pgbouncer:
     image: bitnami/pgbouncer:latest
