@@ -46,69 +46,60 @@
 
 ```mermaid
 flowchart TD
-    subgraph Internet_Public [Public Internet / Users / BitTorrent Swarms]
+    subgraph Internet_Public ["Public Internet & BitTorrent Swarms"]
         Users["Users & Media Automation<br/>(Sonarr / Radarr / Web Browsers)"]
         DHT["Global BitTorrent Swarm<br/>(Mainline DHT / BEP-5 / BEP-9)"]
     end
 
-    subgraph Offshore_VPS_1 [gaia-node (Offshore VPS - Crawler Node)]
+    subgraph Offshore_VPS_1 ["gaia-node (Offshore VPS - Crawler Node)"]
         CRAW["apps/crawler<br/>(Rust DHT Ingestion)"]
         SHIPPER["apps/logger<br/>(Log Shipper)"]
-        DHT <-->|UDP 6881 / DHT Packets| CRAW
+        DHT ---|"UDP 6881 (DHT Packets)"| CRAW
     end
 
-    subgraph Offshore_VPS_2 [gaia-gateway (Offshore Reverse Proxy - Public IP)]
-        NGINX["Nginx (SSL Termination & Rate Limiting)<br/>TLS 1.3 / Port 443"]
+    subgraph Offshore_VPS_2 ["gaia-gateway (Offshore Reverse Proxy)"]
+        NGINX["Nginx (SSL & Rate Limiting)<br/>TLS 1.3 / Port 443"]
         GW_TUNNEL["wstunnel-server<br/>(Port 8443)"]
         GW_WG["wireguard<br/>(10.99.0.1/24)"]
         
-        Users -->|HTTPS 443| NGINX
-        NGINX -->|/wstunnel WebSocket| GW_TUNNEL
-        GW_TUNNEL <--> GW_WG
+        Users -->|"HTTPS 443"| NGINX
+        NGINX -->|"/wstunnel WebSocket"| GW_TUNNEL
+        GW_TUNNEL --- GW_WG
     end
 
-    subgraph Homelab_Cluster [Homelab Infrastructure (Zero Inbound Ports / Hidden IP)]
-        direction TB
+    subgraph Portal_Node ["gaia-portal (Homelab DMZ - 192.168.10.139)"]
+        P_TUNNEL["wstunnel-client<br/>(Outbound wss:// to Gateway)"]
+        P_WG["wireguard-client<br/>(10.99.0.3/24)"]
+        PORTAL_WEB["apps/portal (React UI)<br/>Port 3005"]
+        PORTAL_API["apps/api (.NET 10 Minimal API)<br/>Port 5000"]
+        MEILI["Meilisearch (Search Engine)<br/>Port 7700"]
+        REDIS["Redis 7 (Cache)<br/>Port 6379"]
+        SYNC["apps/sync (CDC Worker)"]
 
-        subgraph Portal_Node [gaia-portal (192.168.10.139)]
-            P_TUNNEL["wstunnel-client<br/>(Outbound wss:// to Gateway)"]
-            P_WG["wireguard-client<br/>(10.99.0.3/24)"]
-            PORTAL_WEB["apps/portal (React UI)<br/>Port 3005"]
-            PORTAL_API["apps/api (.NET 10 Minimal API)<br/>Port 5000"]
-            MEILI["Meilisearch (Search Engine)<br/>Port 7700"]
-            REDIS["Redis 7 (Cache)<br/>Port 6379"]
-            SYNC["apps/sync (CDC Worker)"]
+        P_TUNNEL ---|"TLS 1.3 WebSocket"| GW_TUNNEL
+        P_TUNNEL --- P_WG
+        NGINX -->|"Tunnel 10.99.0.3:3005"| PORTAL_WEB
+        PORTAL_WEB --> PORTAL_API
+        PORTAL_API --> MEILI
+        PORTAL_API --> REDIS
+        SYNC --> MEILI
+        SYNC --> REDIS
+    end
 
-            P_TUNNEL <-->|TLS 1.3 WebSocket| GW_TUNNEL
-            P_TUNNEL <--> P_WG
-            NGINX -->|Forward over Tunnel 10.99.0.3:3005| PORTAL_WEB
-            PORTAL_WEB --> PORTAL_API
-            PORTAL_API --> MEILI
-            PORTAL_API --> REDIS
-            SYNC --> MEILI
-            SYNC --> REDIS
-        end
+    subgraph Core_Node ["workspace-production (Homelab Core - 100.87.194.112)"]
+        PG[("PostgreSQL 16 Master DB<br/>Port 5432 / 6432")]
+        DASH["apps/dashboard (Admin Web)<br/>Port 3000"]
+        ML_SVC["apps/classifier & apps/ml<br/>(Inference Workers)"]
+        BACKUP["apps/backup<br/>(Rclone to Cloud)"]
+        LOGGER["apps/logger<br/>(Log Receiver / Janitor)"]
 
-        subgraph Core_Node [workspace-production (100.87.194.112 / 192.168.10.10)]
-            PG[("PostgreSQL 16 (Master DB)<br/>Port 5432 / 6432")]
-            DASH["apps/dashboard (Admin Web)<br/>Port 3000"]
-            ML_SVC["apps/classifier & apps/ml<br/>(Inference Workers)"]
-            BACKUP["apps/backup<br/>(Rclone to Cloud)"]
-            LOGGER["apps/logger<br/>(Log Receiver / Janitor)"]
-
-            CRAW -->|Batch Ingest via WireGuard/Tailscale| PG
-            SYNC -->|CDC Poll| PG
-            PORTAL_API -->|Read-through Fallback| PG
-            DASH --> PG
-            ML_SVC --> PG
-            BACKUP --> PG
-            SHIPPER -->|HTTP Log Stream| LOGGER
-        end
-
-        subgraph OpSec_Shield [Homelab Kernel Defense]
-            DOT["systemd-resolved DoT<br/>(Cloudflare/Quad9 Port 853)"]
-            KS["Kernel Egress Killswitch<br/>(iptables drop 80/443 except Gateway)"]
-        end
+        CRAW -->|"Batch Ingest via WireGuard"| PG
+        SYNC -->|"CDC Poll"| PG
+        PORTAL_API -->|"Read Fallback"| PG
+        DASH --> PG
+        ML_SVC --> PG
+        BACKUP --> PG
+        SHIPPER -->|"HTTP Log Stream"| LOGGER
     end
 ```
 
