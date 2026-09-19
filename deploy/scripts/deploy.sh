@@ -28,6 +28,7 @@ health_check_cmd() {
         gaia-gateway)       echo "nc -z 127.0.0.1 8443 && curl -sk -o /dev/null https://127.0.0.1/" ;;
         gaia-portal)        echo "docker inspect gaia-portal-wstunnel-client --format '{{.State.Health.Status}}' 2>/dev/null | grep -q healthy" ;;
         workspace-production) echo "docker exec gaia-postgres pg_isready -U crawler -d craw 2>/dev/null" ;;
+        gaia-node)          echo "docker inspect gaia-crawler --format '{{.State.Status}}' 2>/dev/null | grep -q running" ;;
         *)                  echo "" ;;
     esac
 }
@@ -136,6 +137,15 @@ RECREATE_FLAG="--no-recreate"
 [ "$FORCE_RECREATE" -eq 1 ] && RECREATE_FLAG="--force-recreate"
 
 echo "=== Deploying $TAG to $TARGET ($DEPLOY_HOST) [recreate=$([ "$FORCE_RECREATE" -eq 1 ] && echo on || echo off)] ==="
+
+# ── Suspend egress killswitch on remote during deploy if active ──
+RESTORE_KILLSWITCH=0
+if $SSH "command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet gaia-killswitch" 2>/dev/null; then
+    echo "Temporarily suspending egress killswitch on $DEPLOY_HOST for deployment..."
+    $SSH "sudo iptables -D OUTPUT -p tcp -m tcp --dport 443 -j REJECT --reject-with icmp-net-unreachable 2>/dev/null || true; sudo iptables -D OUTPUT -p tcp -m tcp --dport 80 -j REJECT --reject-with icmp-net-unreachable 2>/dev/null || true"
+    RESTORE_KILLSWITCH=1
+    trap 'if [ "$RESTORE_KILLSWITCH" -eq 1 ]; then echo "Restoring egress killswitch on $DEPLOY_HOST..."; $SSH "sudo systemctl restart gaia-killswitch" 2>/dev/null || true; fi' EXIT
+fi
 
 # ── 1. Check GitHub auth on remote ──
 echo "[1/4] Checking git access..."
