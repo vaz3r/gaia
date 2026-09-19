@@ -44,7 +44,7 @@ public class CategoryPurgeService
 
     public ChannelReader<PurgeProgress> GetProgressReader() => _progressChannel.Reader;
 
-    public async Task<PurgeProgress> StartPurgeAsync(string category, int chunkSize = 5000, int delayMs = 50)
+    public async Task<PurgeProgress> StartPurgeAsync(string category, int chunkSize = 1000, int delayMs = 50)
     {
         if (string.IsNullOrWhiteSpace(category))
             throw new ArgumentException("Category cannot be empty", nameof(category));
@@ -76,11 +76,13 @@ public class CategoryPurgeService
             // Ambiguous or low-confidence records (needs_review = true or conf < 0.85) are preserved
             // to ensure false positives (e.g. movies, games mislabeled as Adult) are never purged or tombstoned.
             var totalCount = await conn.ExecuteScalarAsync<long>(
-                @"SELECT count(*) FROM torrents 
-                  WHERE category = @category 
-                    AND (needs_review = false OR needs_review IS NULL) 
-                    AND (category_confidence IS NULL OR category_confidence >= 0.85);",
-                new { category });
+                new CommandDefinition(
+                    @"SELECT count(*) FROM torrents 
+                      WHERE category = @category 
+                        AND (needs_review = false OR needs_review IS NULL) 
+                        AND (category_confidence IS NULL OR category_confidence >= 0.85);",
+                    new { category },
+                    commandTimeout: 180));
 
             if (totalCount == 0)
             {
@@ -167,13 +169,17 @@ public class CategoryPurgeService
 
                 // Fetch chunk of infohashes (only high-confidence verified records; ambiguous ones are protected)
                 var hashes = (await conn.QueryAsync<byte[]>(
-                    @"SELECT infohash FROM torrents 
-                      WHERE category = @category 
-                        AND (needs_review = false OR needs_review IS NULL)
-                        AND (category_confidence IS NULL OR category_confidence >= 0.85)
-                      LIMIT @chunkSize 
-                      FOR UPDATE SKIP LOCKED;",
-                    new { category, chunkSize }, tx)).ToList();
+                    new CommandDefinition(
+                        @"SELECT infohash FROM torrents 
+                          WHERE category = @category 
+                            AND (needs_review = false OR needs_review IS NULL)
+                            AND (category_confidence IS NULL OR category_confidence >= 0.85)
+                          LIMIT @chunkSize 
+                          FOR UPDATE SKIP LOCKED;",
+                        new { category, chunkSize },
+                        transaction: tx,
+                        commandTimeout: 180,
+                        cancellationToken: ct))).ToList();
 
                 if (hashes.Count == 0)
                 {
@@ -183,21 +189,25 @@ public class CategoryPurgeService
 
                 // 1. Tombstone them permanently so they are NEVER crawled again
                 await conn.ExecuteAsync(
-                    @"INSERT INTO blocked_infohashes (infohash, category, reason, blocked_at)
-                      SELECT u, @category, 'category_purged', now()
-                      FROM unnest(@hashes) AS u
-                      ON CONFLICT (infohash) DO NOTHING;",
-                    new { hashes, category }, tx);
+                    new CommandDefinition(
+                        @"INSERT INTO blocked_infohashes (infohash, category, reason, blocked_at)
+                          SELECT u, @category, 'category_purged', now()
+                          FROM unnest(@hashes) AS u
+                          ON CONFLICT (infohash) DO NOTHING;",
+                        new { hashes, category },
+                        transaction: tx,
+                        commandTimeout: 180,
+                        cancellationToken: ct));
 
                 // 2. Cascade delete from secondary and log tables
-                await conn.ExecuteAsync("DELETE FROM fetch_peer_outcomes WHERE infohash = ANY(@hashes);", new { hashes }, tx);
-                await conn.ExecuteAsync("DELETE FROM verification_jobs WHERE infohash = ANY(@hashes);", new { hashes }, tx);
-                await conn.ExecuteAsync("DELETE FROM infohash_sightings WHERE infohash = ANY(@hashes);", new { hashes }, tx);
-                await conn.ExecuteAsync("DELETE FROM peer_torrents WHERE infohash = ANY(@hashes);", new { hashes }, tx);
-                await conn.ExecuteAsync("DELETE FROM torrent_score_history WHERE infohash = ANY(@hashes);", new { hashes }, tx);
+                await conn.ExecuteAsync(new CommandDefinition("DELETE FROM fetch_peer_outcomes WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
+                await conn.ExecuteAsync(new CommandDefinition("DELETE FROM verification_jobs WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
+                await conn.ExecuteAsync(new CommandDefinition("DELETE FROM infohash_sightings WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
+                await conn.ExecuteAsync(new CommandDefinition("DELETE FROM peer_torrents WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
+                await conn.ExecuteAsync(new CommandDefinition("DELETE FROM torrent_score_history WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
 
                 // 3. Delete from primary torrents table
-                await conn.ExecuteAsync("DELETE FROM torrents WHERE infohash = ANY(@hashes);", new { hashes }, tx);
+                await conn.ExecuteAsync(new CommandDefinition("DELETE FROM torrents WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
 
                 await tx.CommitAsync(ct);
 
@@ -246,9 +256,9 @@ public class CategoryPurgeService
             try
             {
                 await using var vacuumConn = await _db.DataSource.OpenConnectionAsync(CancellationToken.None);
-                await vacuumConn.ExecuteAsync("VACUUM ANALYZE torrents;");
-                await vacuumConn.ExecuteAsync("VACUUM ANALYZE fetch_peer_outcomes;");
-                await vacuumConn.ExecuteAsync("VACUUM ANALYZE infohash_sightings;");
+                await vacuumConn.ExecuteAsync(new CommandDefinition("VACUUM ANALYZE torrents;", commandTimeout: 600));
+                await vacuumConn.ExecuteAsync(new CommandDefinition("VACUUM ANALYZE fetch_peer_outcomes;", commandTimeout: 600));
+                await vacuumConn.ExecuteAsync(new CommandDefinition("VACUUM ANALYZE infohash_sightings;", commandTimeout: 600));
             }
             catch (Exception ex)
             {

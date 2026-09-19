@@ -515,7 +515,7 @@ export default function CategoryPoliciesView() {
               </div>
               <div className="flex justify-between text-[#888]">
                 <span>Batch execution:</span>
-                <span className="text-[#aaa]">5,000 / batch (50ms yield)</span>
+                <span className="text-[#aaa]">1,000 / batch (50ms yield)</span>
               </div>
             </div>
 

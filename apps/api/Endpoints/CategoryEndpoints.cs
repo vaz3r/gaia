@@ -110,7 +110,7 @@ public static class CategoryEndpoints
         {
             try
             {
-                var chunkSize = req?.ChunkSize ?? 5000;
+                var chunkSize = req?.ChunkSize ?? 1000;
                 var delayMs = req?.DelayMs ?? 50;
 
                 var progress = await purgeService.StartPurgeAsync(category, chunkSize, delayMs);
