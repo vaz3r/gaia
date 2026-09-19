@@ -467,32 +467,34 @@ def fetch_unclassified_batch(limit: int = 2000) -> List[Dict[str, Any]]:
                 FROM torrents
                 WHERE classified_at IS NULL
                 ORDER BY verified_at DESC NULLS LAST
-                LIMIT %s
-                FOR UPDATE SKIP LOCKED;
+                LIMIT %s;
             """
             cur.execute(query, (limit,))
             rows = cur.fetchall()
-
-            batch = []
-            for r in rows:
-                files = r[4]
-                if isinstance(files, str):
-                    try:
-                        files = json.loads(files)
-                    except Exception:
-                        files = []
-                batch.append({
-                    "infohash": r[0],
-                    "infohash_hex": bytea_to_hex(r[0]),
-                    "name": r[1] or "",
-                    "total_size": r[2] or 0,
-                    "file_count": r[3] or 1,
-                    "files": files or []
-                })
         conn.commit()
+
+        batch = []
+        for r in rows:
+            files = r[4]
+            if isinstance(files, str):
+                try:
+                    files = json.loads(files)
+                except Exception:
+                    files = []
+            batch.append({
+                "infohash": r[0],
+                "infohash_hex": bytea_to_hex(r[0]),
+                "name": r[1] or "",
+                "total_size": r[2] or 0,
+                "file_count": r[3] or 1,
+                "files": files or []
+            })
         return batch
     except Exception:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         raise
     finally:
         p.putconn(conn)
