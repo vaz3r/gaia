@@ -5,6 +5,8 @@ craw-stack/
 target/
 node_modules/
 dist/
+bin/
+obj/
 
 # Data backups
 backup-*.sql
