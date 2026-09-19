@@ -108,7 +108,9 @@ public class CategoryPurgeService
                 Processed = 0,
                 EstimatedBytesReclaimed = 0,
                 ItemsPerSecond = 0,
-                StartedAt = startedAt
+                StartedAt = startedAt,
+                LastError = null,
+                Cancelled = false
             };
             _progressChannel.Writer.TryWrite(_status);
 
@@ -164,55 +166,83 @@ public class CategoryPurgeService
         {
             while (!ct.IsCancellationRequested)
             {
-                await using var conn = await _db.DataSource.OpenConnectionAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(ct);
+                int chunkProcessed = 0;
+                const int maxRetries = 5;
+                int retryCount = 0;
 
-                // Fetch chunk of infohashes (only high-confidence verified records; ambiguous ones are protected)
-                var hashes = (await conn.QueryAsync<byte[]>(
-                    new CommandDefinition(
-                        @"SELECT infohash FROM torrents 
-                          WHERE category = @category 
-                            AND (needs_review = false OR needs_review IS NULL)
-                            AND (category_confidence IS NULL OR category_confidence >= 0.85)
-                          LIMIT @chunkSize 
-                          FOR UPDATE SKIP LOCKED;",
-                        new { category, chunkSize },
-                        transaction: tx,
-                        commandTimeout: 180,
-                        cancellationToken: ct))).ToList();
-
-                if (hashes.Count == 0)
+                while (true)
                 {
-                    await tx.RollbackAsync(ct);
+                    try
+                    {
+                        await using var conn = await _db.DataSource.OpenConnectionAsync(ct);
+                        await using var tx = await conn.BeginTransactionAsync(ct);
+
+                        // Fetch chunk of infohashes (only high-confidence verified records; ambiguous ones are protected)
+                        // Deterministic ORDER BY infohash prevents lock circularity (deadlocks) with concurrent crawler/classifier workers
+                        var hashes = (await conn.QueryAsync<byte[]>(
+                            new CommandDefinition(
+                                @"SELECT infohash FROM torrents 
+                                  WHERE category = @category 
+                                    AND (needs_review = false OR needs_review IS NULL)
+                                    AND (category_confidence IS NULL OR category_confidence >= 0.85)
+                                  ORDER BY infohash
+                                  LIMIT @chunkSize 
+                                  FOR UPDATE SKIP LOCKED;",
+                                new { category, chunkSize },
+                                transaction: tx,
+                                commandTimeout: 180,
+                                cancellationToken: ct))).ToList();
+
+                        if (hashes.Count == 0)
+                        {
+                            await tx.RollbackAsync(ct);
+                            chunkProcessed = 0;
+                            break;
+                        }
+
+                        // 1. Tombstone them permanently so they are NEVER crawled again
+                        await conn.ExecuteAsync(
+                            new CommandDefinition(
+                                @"INSERT INTO blocked_infohashes (infohash, category, reason, blocked_at)
+                                  SELECT u, @category, 'category_purged', now()
+                                  FROM unnest(@hashes) AS u
+                                  ON CONFLICT (infohash) DO NOTHING;",
+                                new { hashes, category },
+                                transaction: tx,
+                                commandTimeout: 180,
+                                cancellationToken: ct));
+
+                        // 2. Cascade delete from secondary and log tables
+                        await conn.ExecuteAsync(new CommandDefinition("DELETE FROM fetch_peer_outcomes WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
+                        await conn.ExecuteAsync(new CommandDefinition("DELETE FROM verification_jobs WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
+                        await conn.ExecuteAsync(new CommandDefinition("DELETE FROM infohash_sightings WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
+                        await conn.ExecuteAsync(new CommandDefinition("DELETE FROM peer_torrents WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
+                        await conn.ExecuteAsync(new CommandDefinition("DELETE FROM torrent_score_history WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
+
+                        // 3. Delete from primary torrents table
+                        await conn.ExecuteAsync(new CommandDefinition("DELETE FROM torrents WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
+
+                        await tx.CommitAsync(ct);
+                        chunkProcessed = hashes.Count;
+                        break;
+                    }
+                    catch (Exception ex) when (IsTransientException(ex) && retryCount < maxRetries && !ct.IsCancellationRequested)
+                    {
+                        retryCount++;
+                        var backoffMs = (int)(Math.Pow(2, retryCount) * 100) + Random.Shared.Next(50, 250);
+                        _logger.LogWarning(ex, "Transient database contention/deadlock ({Message}) in purge worker for '{Category}'. Retrying batch ({Retry}/{Max}) in {Backoff}ms...",
+                            ex.Message, category, retryCount, maxRetries, backoffMs);
+                        await Task.Delay(backoffMs, ct);
+                    }
+                }
+
+                if (chunkProcessed == 0)
+                {
                     break;
                 }
 
-                // 1. Tombstone them permanently so they are NEVER crawled again
-                await conn.ExecuteAsync(
-                    new CommandDefinition(
-                        @"INSERT INTO blocked_infohashes (infohash, category, reason, blocked_at)
-                          SELECT u, @category, 'category_purged', now()
-                          FROM unnest(@hashes) AS u
-                          ON CONFLICT (infohash) DO NOTHING;",
-                        new { hashes, category },
-                        transaction: tx,
-                        commandTimeout: 180,
-                        cancellationToken: ct));
-
-                // 2. Cascade delete from secondary and log tables
-                await conn.ExecuteAsync(new CommandDefinition("DELETE FROM fetch_peer_outcomes WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
-                await conn.ExecuteAsync(new CommandDefinition("DELETE FROM verification_jobs WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
-                await conn.ExecuteAsync(new CommandDefinition("DELETE FROM infohash_sightings WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
-                await conn.ExecuteAsync(new CommandDefinition("DELETE FROM peer_torrents WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
-                await conn.ExecuteAsync(new CommandDefinition("DELETE FROM torrent_score_history WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
-
-                // 3. Delete from primary torrents table
-                await conn.ExecuteAsync(new CommandDefinition("DELETE FROM torrents WHERE infohash = ANY(@hashes);", new { hashes }, transaction: tx, commandTimeout: 180, cancellationToken: ct));
-
-                await tx.CommitAsync(ct);
-
-                processed += hashes.Count;
-                totalBytesReclaimed += hashes.Count * estimatedBytesPerRow;
+                processed += chunkProcessed;
+                totalBytesReclaimed += chunkProcessed * estimatedBytesPerRow;
 
                 var elapsed = sw.Elapsed.TotalSeconds;
                 var rate = elapsed > 0 ? processed / elapsed : 0;
@@ -303,5 +333,26 @@ public class CategoryPurgeService
             };
             _progressChannel.Writer.TryWrite(_status);
         }
+    }
+
+    private static bool IsTransientException(Exception ex)
+    {
+        if (ex is PostgresException pex)
+        {
+            return pex.SqlState is PostgresErrorCodes.DeadlockDetected       // 40P01
+                                or PostgresErrorCodes.SerializationFailure    // 40001
+                                or PostgresErrorCodes.LockNotAvailable;       // 55P03
+        }
+
+        if (ex is NpgsqlException && ex.InnerException is PostgresException innerPex)
+        {
+            return innerPex.SqlState is PostgresErrorCodes.DeadlockDetected
+                                     or PostgresErrorCodes.SerializationFailure
+                                     or PostgresErrorCodes.LockNotAvailable;
+        }
+
+        return ex.Message.Contains("40P01", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("deadlock", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("lock", StringComparison.OrdinalIgnoreCase);
     }
 }

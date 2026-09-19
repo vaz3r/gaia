@@ -18,6 +18,7 @@ import {
   Activity,
   Zap,
   Check,
+  RotateCcw,
   X
 } from 'lucide-react';
 import { api } from '../api.js';
@@ -149,7 +150,7 @@ export default function CategoryPoliciesView() {
     try {
       const res = await api(`/api/admin/categories/${encodeURIComponent(purgeConfirmCategory.category)}/purge`, {
         method: 'POST',
-        body: JSON.stringify({ chunkSize: 5000, delayMs: 50 })
+        body: JSON.stringify({ chunkSize: 1000, delayMs: 50 })
       });
 
       setPurgeStatus(res);
@@ -161,6 +162,30 @@ export default function CategoryPoliciesView() {
       }
     } catch (err) {
       alert(`Purge failed to launch: ${err.message}`);
+    } finally {
+      setLaunchingPurge(false);
+    }
+  };
+
+  const handleDirectResumePurge = async (categoryName) => {
+    if (!categoryName) return;
+    setLaunchingPurge(true);
+    setActionSuccess(null);
+
+    try {
+      const res = await api(`/api/admin/categories/${encodeURIComponent(categoryName)}/purge`, {
+        method: 'POST',
+        body: JSON.stringify({ chunkSize: 1000, delayMs: 50 })
+      });
+
+      setPurgeStatus(res);
+      setActionSuccess(`Background purge worker resumed for '${categoryName}'.`);
+
+      if (!pollTimerRef.current) {
+        pollTimerRef.current = setInterval(fetchPurgeStatus, 1000);
+      }
+    } catch (err) {
+      alert(`Purge failed to resume: ${err.message}`);
     } finally {
       setLaunchingPurge(false);
     }
@@ -340,6 +365,43 @@ export default function CategoryPoliciesView() {
                 {purgeStatus.etaSeconds != null ? `${purgeStatus.etaSeconds}s` : 'Calculating...'}
               </span>
             </div>
+          </div>
+        </section>
+      )}
+
+      {/* Purge Interrupted / Error Banner */}
+      {!purgeStatus?.isRunning && (purgeStatus?.lastError || (purgeStatus?.processed > 0 && purgeStatus?.processed < purgeStatus?.totalTarget)) && (
+        <section className="rounded-xl border border-rose-600/50 bg-rose-950/20 p-5 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0" />
+              <div>
+                <div className="text-sm font-semibold text-white flex items-center gap-2">
+                  <span>Purge interrupted for category:</span>
+                  <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono text-xs">
+                    {purgeStatus.category}
+                  </span>
+                </div>
+                {purgeStatus.lastError && (
+                  <div className="text-xs text-rose-300/80 font-mono mt-0.5">
+                    Reason: {purgeStatus.lastError}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <button
+              onClick={() => handleDirectResumePurge(purgeStatus.category)}
+              disabled={launchingPurge}
+              className="px-3 py-1.5 rounded-lg border border-amber-600 bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 text-xs font-mono font-medium flex items-center gap-1.5 self-start shrink-0"
+            >
+              <RotateCcw className={`w-4 h-4 text-amber-400 ${launchingPurge ? 'animate-spin' : ''}`} />
+              <span>{launchingPurge ? 'Resuming...' : 'Resume Purge'}</span>
+            </button>
+          </div>
+
+          <div className="text-xs text-[#aaa] font-mono">
+            Cleaned <span className="text-white font-bold">{formatNum(purgeStatus.processed)}</span> / {formatNum(purgeStatus.totalTarget)} records so far (~{formatBytes(purgeStatus.estimatedBytesReclaimed)} reclaimed). Click Resume Purge to continue background cleaning.
           </div>
         </section>
       )}
