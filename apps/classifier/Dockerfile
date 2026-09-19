@@ -20,6 +20,6 @@ COPY web/ ./web/
 COPY scripts/ ./scripts/
 COPY models/ ./models/
 
-EXPOSE 8080
+EXPOSE 8000
 
 CMD ["python", "scripts/entrypoint.py"]

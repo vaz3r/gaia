@@ -49,7 +49,8 @@ apps/classifier/
 │   ├── classifier_service.py      # Inference service & dual rejection logic
 │   ├── feature_extractor.py       # Multi-modal feature pipeline & attribution
 │   ├── db.py                      # Read-only PostgreSQL connection pool & queries
-│   └── train.py                   # Model training pipeline
+│   ├── model_manager.py           # Model versioning, activation, and rollback
+│   └── reclassify_worker.py       # Background reclassification manager
 │
 ├── scripts/                       # CLI & Production Operations
 │   ├── worker.py                  # Continuous queue worker daemon
@@ -67,7 +68,6 @@ apps/classifier/
 │   └── torrent_classifier_v8_20260912_212717.joblib
 │
 ├── data/                          # Cached Datasets (gitignored)
-│   └── labeled_dataset.jsonl
 │
 └── tools/                         # Auxiliary Tooling
     ├── labeling/                  # Ground truth annotation MCP server & batch tools
@@ -75,7 +75,10 @@ apps/classifier/
     │   ├── start_server.sh
     │   ├── extract_batches.py
     │   ├── merge_labeled.py
-    │   └── LABELING_GUIDE.md
+    │   ├── CLASSIFIER_PROMPT.md
+    │   ├── LABELING_GUIDE.md
+    │   ├── HOW_TO_LABEL.md
+    │   └── mcp/                   # OpenCode MCP server (stdio)
     └── deepseek/                  # Historical LLM scraping & PoW experiments
 ```
 
@@ -95,9 +98,9 @@ Features:
 
 ### Retrain Model
 ```bash
-make train
+make retrain
 ```
-Trains on `data/labeled_dataset.jsonl` using calibrated `modified_huber` loss and saves the model to `models/`.
+Trains on ground truth from PostgreSQL using calibrated `modified_huber` loss with quality gate and saves the model to `models/`.
 
 ---
 

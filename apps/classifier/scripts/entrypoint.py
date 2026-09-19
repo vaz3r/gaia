@@ -51,7 +51,7 @@ def main():
 
     mode = os.environ.get("MODE", "all").strip().lower()
     host = os.environ.get("HOST", "0.0.0.0")
-    port = os.environ.get("PORT", os.environ.get("CLASSIFIER_PORT", "8080"))
+    port = os.environ.get("PORT", os.environ.get("CLASSIFIER_PORT", "8000"))
     batch_size = os.environ.get("WORKER_BATCH_SIZE", "2000")
     poll_interval = os.environ.get("WORKER_POLL_INTERVAL", "15")
 

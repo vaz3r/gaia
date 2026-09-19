@@ -19,7 +19,7 @@ fi
 # Check deps
 python -c "import fastmcp, psycopg2" 2>/dev/null || {
     echo "Installing MCP dependencies..."
-    pip install -r "$SCRIPT_DIR/labeling/requirements-mcp.txt"
+    pip install -r "$SCRIPT_DIR/requirements-mcp.txt"
 }
 
 MODE="${1:-http}"
@@ -27,8 +27,8 @@ PORT="${2:-9000}"
 
 if [ "$MODE" = "stdio" ]; then
     echo "Starting MCP server (stdio)..."
-    python "$SCRIPT_DIR/labeling/mcp_server.py"
+    python "$SCRIPT_DIR/mcp_server.py"
 else
     echo "Starting MCP server on http://0.0.0.0:$PORT/mcp"
-    python "$SCRIPT_DIR/labeling/mcp_server.py" http "$PORT"
+    python "$SCRIPT_DIR/mcp_server.py" http "$PORT"
 fi

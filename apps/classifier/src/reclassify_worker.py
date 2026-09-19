@@ -1,12 +1,7 @@
-import os
-import sys
 import time
 import json
 import threading
-from pathlib import Path
 from typing import Dict, Any, Optional, List
-
-import psycopg2.extras
 
 import db
 from classifier_service import TorrentClassifierService

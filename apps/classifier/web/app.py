@@ -2,11 +2,10 @@ import sys
 import threading
 import subprocess
 from pathlib import Path
-from typing import Optional, List, Any, Union, Dict
+from typing import Optional, List, Any, Union
 
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 # Add src to sys.path

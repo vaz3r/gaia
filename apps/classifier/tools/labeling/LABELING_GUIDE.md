@@ -18,7 +18,7 @@ This guide explains how to label specific torrent categories to improve classifi
 ### Step 1: Label 10K Targeted Torrents
 
 ```bash
-cd apps/classifier/deepseek
+cd apps/classifier/tools/deepseek
 ./label_targeted.sh
 ```
 
@@ -33,7 +33,7 @@ This labels 2,500 torrents from each of 4 categories:
 ### Step 2: Retrain the Model
 
 ```bash
-cd apps/classifier/deepseek
+cd apps/classifier
 ./retrain.sh
 ```
 
@@ -56,7 +56,7 @@ python test_10k.py
 ### Label a Specific Category
 
 ```bash
-cd apps/classifier/deepseek
+cd apps/classifier/tools/deepseek
 source venv/bin/activate
 
 # Label 2,500 Documentaries (50 batches of 50)
@@ -175,7 +175,7 @@ conn.close()
 
 ## Logs
 
-Logs are saved to `label_targeted_YYYYMMDD_HHMMSS.log` in the `deepseek/` directory.
+Logs are saved to `label_targeted_YYYYMMDD_HHMMSS.log` in the `tools/deepseek/` directory.
 
 To monitor progress:
 
@@ -238,10 +238,6 @@ If rate limited, wait 2-3 minutes and retry.
 
 | File | Description |
 |------|-------------|
-| `deepseek/label_targeted.sh` | Main labeling script (10K torrents) |
-| `deepseek/retrain.sh` | Retraining pipeline |
-| `deepseek/classify.py` | DeepSeek classifier with `--target` flag |
-| `mlp/test_10k.py` | 50K test evaluation script |
-| `mlp/data/models/` | Saved models |
-| `mlp/data/labeled_data/` | Training/test data |
-| `mlp/data/test_results/` | Test results and low-confidence exports |
+| `tools/deepseek/label_targeted.sh` | Main labeling script (10K torrents) |
+| `tools/deepseek/classify.py` | DeepSeek classifier with `--target` flag |
+| `tools/deepseek/classify_obscura.py` | Obscura-based DeepSeek classifier |

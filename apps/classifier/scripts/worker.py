@@ -5,7 +5,7 @@ import time
 import signal
 import argparse
 from pathlib import Path
-from typing import List, Dict, Any
+
 
 # Add src to sys.path
 SRC_DIR = Path(__file__).parent.parent / "src"
