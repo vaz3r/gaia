@@ -122,13 +122,15 @@ builder.Services.AddSingleton<NpgsqlDataSource>(sp => sp.GetRequiredService<Data
 builder.Services.AddSingleton<DashboardRepository>();
 builder.Services.AddSingleton<WireMetadataFetcher>();
 builder.Services.AddSingleton<AdminAuthFilter>();
+builder.Services.AddSingleton<CategoryPurgeService>();
 
 // ── Output Cache (in-process, protects against spike traffic) ─────────────────
 builder.Services.AddOutputCache(opts =>
 {
     opts.AddBasePolicy(p => p.With(c =>
         !c.HttpContext.Request.Path.StartsWithSegments("/api/live") &&
-        !c.HttpContext.Request.Path.StartsWithSegments("/api/classifier"))
+        !c.HttpContext.Request.Path.StartsWithSegments("/api/classifier") &&
+        !c.HttpContext.Request.Path.StartsWithSegments("/api/admin"))
         .Expire(TimeSpan.FromSeconds(5)));
     opts.AddPolicy("stats", p => p.Expire(TimeSpan.FromSeconds(30)).Tag("stats"));
 });
@@ -165,6 +167,7 @@ app.MapAlertsEndpoints();
 app.MapScoringEndpoints();
 app.MapAnalysisEndpoints();
 app.MapClassifierEndpoints();
+app.MapCategoryEndpoints();
 
 app.MapGet("/health", () => Results.Ok(new
 {

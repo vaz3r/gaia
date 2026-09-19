@@ -497,10 +497,79 @@ def fetch_unclassified_batch(limit: int = 2000) -> List[Dict[str, Any]]:
     finally:
         p.putconn(conn)
 
+_DISABLED_CAT_CACHE: Dict[str, Any] = {"ts": 0.0, "cats": set()}
+
+def get_disabled_categories() -> set:
+    """Fetch disabled categories from category_policies with 30s TTL cache."""
+    global _DISABLED_CAT_CACHE
+    now = time.time()
+    if now - _DISABLED_CAT_CACHE["ts"] < 30.0:
+        return _DISABLED_CAT_CACHE["cats"]
+    p = get_pool()
+    conn = p.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT category FROM category_policies WHERE is_enabled = false;")
+            rows = cur.fetchall()
+            disabled = {r[0] for r in rows}
+            _DISABLED_CAT_CACHE = {"ts": now, "cats": disabled}
+            return disabled
+    except Exception:
+        return _DISABLED_CAT_CACHE["cats"]
+    finally:
+        p.putconn(conn)
+
 def bulk_update_classifications(records: List[Dict[str, Any]], max_retries: int = 3) -> int:
-    """Execute high-speed single-statement bulk update via UNNEST with deadlock retry."""
+    """Execute high-speed single-statement bulk update via UNNEST with deadlock retry.
+    Automatically tombstones and purges torrents belonging to disabled categories."""
     if not records:
         return 0
+
+    p = get_pool()
+
+    # Intercept any records belonging to disabled categories
+    disabled_cats = get_disabled_categories()
+    if disabled_cats:
+        allowed_records = []
+        blocked_hashes = []
+        blocked_cats = []
+        for r in records:
+            cat = r.get("predicted_category")
+            if cat in disabled_cats:
+                ih = r["infohash"] if isinstance(r["infohash"], (bytes, memoryview)) else hex_to_bytea(r["infohash_hex"])
+                blocked_hashes.append(ih)
+                blocked_cats.append(cat)
+            else:
+                allowed_records.append(r)
+
+        if blocked_hashes:
+            conn = p.getconn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO blocked_infohashes (infohash, category, reason, blocked_at)
+                        SELECT u.ih, u.cat, 'category_disabled', now()
+                        FROM unnest(%s::bytea[], %s::text[]) AS u(ih, cat)
+                        ON CONFLICT (infohash) DO NOTHING;
+                    """, (blocked_hashes, blocked_cats))
+                    cur.execute("DELETE FROM fetch_peer_outcomes WHERE infohash = ANY(%s);", (blocked_hashes,))
+                    cur.execute("DELETE FROM verification_jobs WHERE infohash = ANY(%s);", (blocked_hashes,))
+                    cur.execute("DELETE FROM infohash_sightings WHERE infohash = ANY(%s);", (blocked_hashes,))
+                    cur.execute("DELETE FROM peer_torrents WHERE infohash = ANY(%s);", (blocked_hashes,))
+                    cur.execute("DELETE FROM torrent_score_history WHERE infohash = ANY(%s);", (blocked_hashes,))
+                    cur.execute("DELETE FROM torrents WHERE infohash = ANY(%s);", (blocked_hashes,))
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            finally:
+                p.putconn(conn)
+
+        records = allowed_records
+        if not records:
+            return 0
 
     infohashes = []
     categories = []
@@ -515,8 +584,6 @@ def bulk_update_classifications(records: List[Dict[str, Any]], max_retries: int 
         confidences.append(float(r["confidence"]))
         needs_reviews.append(bool(r["needs_review"]))
         metas.append(json.dumps(r.get("meta", {})))
-
-    p = get_pool()
 
     for attempt in range(max_retries):
         conn = p.getconn()

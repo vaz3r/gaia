@@ -31,9 +31,11 @@ import {
   CheckCircle,
   Ban,
   Eye,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { api, magnetFrom } from '../api.js';
 import { formatBytes, formatNum, formatTime, formatDubaiDate } from '../utils.js';
+import CategoryPoliciesView from './CategoryPoliciesView.jsx';
 
 const CATEGORY_COLORS = {
   Adult: 'bg-rose-500/10 text-rose-400 border-rose-500/25',
@@ -643,6 +645,18 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
               </span>
             )}
           </button>
+
+          <button
+            onClick={() => setActiveStudioTab('policies')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium font-mono flex items-center gap-2 transition-colors ${
+              activeStudioTab === 'policies'
+                ? 'bg-white text-black font-semibold'
+                : 'bg-[#0f0f0f] border border-[#222] text-[#888] hover:text-white hover:border-[#333]'
+            }`}
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5 text-amber-400" />
+            <span>Category Policies & Purge</span>
+          </button>
         </div>
 
         <div className="text-[11px] font-mono text-[#666] hidden sm:block">
@@ -650,7 +664,9 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
             ? 'Ground-truth active learning'
             : activeStudioTab === 'scoring'
             ? 'Quality, safety & availability triage'
-            : 'Catalog governance & suppressed torrent audits'}
+            : activeStudioTab === 'blocked'
+            ? 'Catalog governance & suppressed torrent audits'
+            : 'Dynamic crawl policy & database purge worker'}
         </div>
       </div>
 
@@ -1198,6 +1214,15 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* SUB-VIEW 4: CATEGORY POLICIES & DATA PURGE                   */}
+      {/* ============================================================ */}
+      {activeStudioTab === 'policies' && (
+        <div className="animate-in fade-in duration-150">
+          <CategoryPoliciesView />
         </div>
       )}
 

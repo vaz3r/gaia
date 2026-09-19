@@ -102,6 +102,20 @@ public class CacheService
         }
     }
 
+    public async Task PublishAsync(string channel, string message)
+    {
+        if (!_enabled || _redis is null) return;
+        try
+        {
+            var sub = _redis.GetSubscriber();
+            await sub.PublishAsync(RedisChannel.Literal(channel), message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Redis PUBLISH failed for channel {Channel}", channel);
+        }
+    }
+
     /// <summary>Builds a short stable cache key from arbitrary key components.</summary>
     public static string MakeKey(string prefix, params object?[] parts)
     {
