@@ -25,7 +25,7 @@ def get_pool() -> pool.ThreadedConnectionPool:
             user=POSTGRES_USER,
             password=PG_PASSWORD,
             dbname=POSTGRES_DB,
-            options="-c statement_timeout=5000",
+            options="-c statement_timeout=15000",
             keepalives=1,
             keepalives_idle=30,
             keepalives_interval=10,
@@ -676,6 +676,11 @@ def get_queue_metrics() -> Dict[str, Any]:
                         category_counts = {r[0]: int(r[1]) for r in cat_rows}
                         _CLASSIFIER_CAT_CACHE = {"ts": now_ts, "data": category_counts}
                     except Exception:
+                        if conn:
+                            try:
+                                conn.rollback()
+                            except Exception:
+                                pass
                         category_counts = _CLASSIFIER_CAT_CACHE.get("data", {})
             else:
                 unclassified = total

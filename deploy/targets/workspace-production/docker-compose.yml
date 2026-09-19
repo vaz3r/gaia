@@ -36,7 +36,7 @@ services:
       LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-7}
       LOG_JANITOR_INTERVAL_MS: ${LOG_JANITOR_INTERVAL_MS:-3600000}
     ports:
-      - "100.87.194.112:3100:3000"
+      - "3100:3000"
       - "3001:3001"
     volumes:
       - /mnt/gaia/logs/crawler:/logs
@@ -48,7 +48,7 @@ services:
     restart: unless-stopped
     shm_size: 2gb
     ports:
-      - "127.0.0.1:5432:5432"
+      - "5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-crawler}
       POSTGRES_DB: ${POSTGRES_DB:-craw}
