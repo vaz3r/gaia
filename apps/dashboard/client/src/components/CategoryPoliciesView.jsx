@@ -150,12 +150,12 @@ export default function CategoryPoliciesView() {
     try {
       const res = await api(`/api/admin/categories/${encodeURIComponent(purgeConfirmCategory.category)}/purge`, {
         method: 'POST',
-        body: JSON.stringify({ chunkSize: 1000, delayMs: 50 })
+        body: JSON.stringify({ chunkSize: 250, delayMs: 2000 })
       });
 
       setPurgeStatus(res);
       setPurgeConfirmCategory(null);
-      setActionSuccess(`Background purge worker launched for '${purgeConfirmCategory.category}'.`);
+      setActionSuccess(`Low-impact background purge worker launched for '${purgeConfirmCategory.category}'.`);
 
       if (!pollTimerRef.current) {
         pollTimerRef.current = setInterval(fetchPurgeStatus, 1000);
@@ -175,11 +175,11 @@ export default function CategoryPoliciesView() {
     try {
       const res = await api(`/api/admin/categories/${encodeURIComponent(categoryName)}/purge`, {
         method: 'POST',
-        body: JSON.stringify({ chunkSize: 1000, delayMs: 50 })
+        body: JSON.stringify({ chunkSize: 250, delayMs: 2000 })
       });
 
       setPurgeStatus(res);
-      setActionSuccess(`Background purge worker resumed for '${categoryName}'.`);
+      setActionSuccess(`Low-impact background purge worker resumed for '${categoryName}'.`);
 
       if (!pollTimerRef.current) {
         pollTimerRef.current = setInterval(fetchPurgeStatus, 1000);
@@ -308,7 +308,7 @@ export default function CategoryPoliciesView() {
                   </span>
                 </div>
                 <div className="text-xs text-[#aaa] font-mono mt-0.5">
-                  C# Background Worker executing 5,000/batch with 50ms lock pacing
+                  Low-impact background worker (250/batch with 2,000ms pacing & dynamic backpressure)
                 </div>
               </div>
             </div>

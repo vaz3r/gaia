@@ -44,7 +44,7 @@ public class CategoryPurgeService
 
     public ChannelReader<PurgeProgress> GetProgressReader() => _progressChannel.Reader;
 
-    public async Task<PurgeProgress> StartPurgeAsync(string category, int chunkSize = 1000, int delayMs = 50)
+    public async Task<PurgeProgress> StartPurgeAsync(string category, int chunkSize = 250, int delayMs = 2000)
     {
         if (string.IsNullOrWhiteSpace(category))
             throw new ArgumentException("Category cannot be empty", nameof(category));
@@ -167,6 +167,7 @@ public class CategoryPurgeService
             while (!ct.IsCancellationRequested)
             {
                 int chunkProcessed = 0;
+                var batchSw = Stopwatch.StartNew();
                 const int maxRetries = 5;
                 int retryCount = 0;
 
@@ -262,9 +263,24 @@ public class CategoryPurgeService
                 };
                 _progressChannel.Writer.TryWrite(_status);
 
-                if (delayMs > 0)
+                batchSw.Stop();
+                var batchDurationMs = batchSw.ElapsedMilliseconds;
+
+                // Adaptive Backpressure:
+                // If PostgreSQL took longer than 1,000ms to commit the batch, dynamically scale
+                // the rest delay to 2x the execution time. This guarantees that autovacuum, WAL writer,
+                // and concurrent crawler writes are given ample time to breathe without I/O starvation.
+                var effectiveDelay = delayMs;
+                if (batchDurationMs > 1000)
                 {
-                    await Task.Delay(delayMs, ct);
+                    effectiveDelay = Math.Max(delayMs, (int)batchDurationMs * 2);
+                    _logger.LogInformation("Adaptive backpressure active for '{Category}': batch took {Duration}ms; pacing delay extended to {Delay}ms.",
+                        category, batchDurationMs, effectiveDelay);
+                }
+
+                if (effectiveDelay > 0)
+                {
+                    await Task.Delay(effectiveDelay, ct);
                 }
             }
 

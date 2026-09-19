@@ -110,8 +110,8 @@ public static class CategoryEndpoints
         {
             try
             {
-                var chunkSize = req?.ChunkSize ?? 1000;
-                var delayMs = req?.DelayMs ?? 50;
+                var chunkSize = req?.ChunkSize ?? 250;
+                var delayMs = req?.DelayMs ?? 2000;
 
                 var progress = await purgeService.StartPurgeAsync(category, chunkSize, delayMs);
                 return Results.Accepted($"/api/admin/categories/purge/status", progress);
@@ -152,6 +152,7 @@ public static class CategoryEndpoints
             context.Response.Headers.ContentType = "text/event-stream";
             context.Response.Headers.CacheControl = "no-cache";
             context.Response.Headers.Connection = "keep-alive";
+            context.Response.Headers.Append("X-Accel-Buffering", "no");
 
             // Push initial status
             var initial = purgeService.GetStatus();
