@@ -291,28 +291,43 @@ public class WireMetadataFetcher
     /// </summary>
     public static byte[] BuildTorrentBuffer(byte[] rawInfoBuffer, string? primaryAnnounce = null, IEnumerable<string>? trackers = null)
     {
-        var trList = (trackers ?? DefaultTrackers).ToList();
+        var trList = (trackers ?? DefaultTrackers).Distinct().ToList();
         var mainTracker = primaryAnnounce ?? trList.FirstOrDefault() ?? DefaultTrackers[0];
+
+        if (!trList.Contains(mainTracker))
+        {
+            trList.Insert(0, mainTracker);
+        }
 
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms, Encoding.UTF8);
 
+        // 1. "announce"
         writer.Write("d8:announce"u8);
         writer.Write(Encoding.UTF8.GetBytes($"{Encoding.UTF8.GetByteCount(mainTracker)}:{mainTracker}"));
 
+        // 2. "announce-list" (BEP-12)
         writer.Write("13:announce-listl"u8);
         foreach (var tr in trList)
         {
             writer.Write("l"u8);
-            writer.Write(Encoding.UTF8.GetBytes($"{Encoding.UTF8.GetByteCount(tr)}:{tr}e"));
+            writer.Write(Encoding.UTF8.GetBytes($"{Encoding.UTF8.GetByteCount(tr)}:{tr}"));
+            writer.Write("e"u8);
         }
         writer.Write("e"u8);
 
-        writer.Write("7:comment31:Downloaded from GAIA Indexer"u8);
-        writer.Write("10:created by12:GAIA V2 .NET"u8);
+        // 3. "comment" (Dynamic byte count avoids length mismatch)
+        const string comment = "Downloaded from GAIA Indexer";
+        writer.Write(Encoding.UTF8.GetBytes($"7:comment{Encoding.UTF8.GetByteCount(comment)}:{comment}"));
+
+        // 4. "created by"
+        const string createdBy = "GAIA V2 .NET";
+        writer.Write(Encoding.UTF8.GetBytes($"10:created by{Encoding.UTF8.GetByteCount(createdBy)}:{createdBy}"));
+
+        // 5. "creation date"
         writer.Write(Encoding.UTF8.GetBytes($"13:creation datei{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}e"));
 
-        // Raw info dictionary
+        // 6. "info" (Raw verified info dictionary)
         writer.Write("4:info"u8);
         writer.Write(rawInfoBuffer);
         writer.Write("e"u8); // End root dict
