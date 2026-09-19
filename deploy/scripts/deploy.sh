@@ -191,7 +191,10 @@ fi
 # ── 4. Build and deploy services ──
 if [ -n "$SERVICES" ]; then
     echo "[4/4] Building and deploying services: $SERVICES..."
-    $SSH "cd $REMOTE_TARGET_DIR && GIT_COMMIT=$TAG docker compose --env-file .env up -d --no-deps $RECREATE_FLAG --build $SERVICES"
+    for svc in $SERVICES; do
+        echo "--> Building and deploying $svc..."
+        $SSH "cd $REMOTE_TARGET_DIR && GIT_COMMIT=$TAG docker compose --env-file .env up -d --no-deps $RECREATE_FLAG --build $svc"
+    done
 else
     echo "[4/4] Building and deploying compose stack ($RECREATE_FLAG)..."
     $SSH "cd $REMOTE_TARGET_DIR && GIT_COMMIT=$TAG docker compose --env-file .env up -d $RECREATE_FLAG --build"
