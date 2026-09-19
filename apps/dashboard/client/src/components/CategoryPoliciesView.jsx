@@ -393,9 +393,17 @@ export default function CategoryPoliciesView() {
                       <div className="text-white font-medium">
                         {formatNum(cat.torrent_count || 0)}
                       </div>
-                      <div className="text-[10px] text-[#555]">
-                        ~{formatBytes((cat.torrent_count || 0) * 28000)}
-                      </div>
+                      {cat.review_count > 0 ? (
+                        <div className="text-[10px] text-amber-400/90 flex items-center gap-1 mt-0.5" title="Ambiguous or low-confidence classifications protected from purge">
+                          <span>{formatNum(cat.verified_count || 0)} verified</span>
+                          <span>•</span>
+                          <span className="text-amber-400 font-semibold">{formatNum(cat.review_count)} flagged</span>
+                        </div>
+                      ) : (
+                        <div className="text-[10px] text-[#555]">
+                          ~{formatBytes((cat.torrent_count || 0) * 28000)}
+                        </div>
+                      )}
                     </td>
 
                     {/* Tombstones Count */}
@@ -436,7 +444,7 @@ export default function CategoryPoliciesView() {
                           className="px-3 py-1.5 rounded-lg border border-rose-800/80 bg-rose-950/70 text-rose-300 hover:bg-rose-900 text-xs font-mono font-medium flex items-center gap-1.5 ml-auto transition-colors"
                         >
                           <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                          <span>Purge {formatNum(cat.torrent_count)} Torrents</span>
+                          <span>Purge {formatNum(cat.verified_count || cat.torrent_count)} Verified</span>
                         </button>
                       ) : (
                         <span className="inline-flex items-center gap-1 text-[11px] text-emerald-500 font-mono">
@@ -472,11 +480,17 @@ export default function CategoryPoliciesView() {
             <p className="text-xs text-[#ccc] leading-relaxed">
               This action will permanently delete{' '}
               <strong className="text-white font-mono">
-                {formatNum(purgeConfirmCategory.torrent_count)}
+                {formatNum(purgeConfirmCategory.verified_count || purgeConfirmCategory.torrent_count)}
               </strong>{' '}
-              records from PostgreSQL, cascade cleanup across peer probe logs, and record all infohashes into the
+              verified high-confidence records from PostgreSQL, cascade cleanup across peer probe logs, and record their infohashes into the
               permanent anti-recrawl tombstone table.
             </p>
+
+            {purgeConfirmCategory.review_count > 0 && (
+              <div className="rounded-lg bg-amber-950/30 border border-amber-800/50 p-2.5 text-[11px] text-amber-300/90 leading-snug">
+                🛡️ <strong>Safety Guard Active:</strong> {formatNum(purgeConfirmCategory.review_count)} low-confidence or ambiguous torrents are <em>protected and preserved</em> in the database for reclassification to prevent deleting false positives.
+              </div>
+            )}
 
             <div className="bg-[#181818] rounded-lg p-3 border border-[#262626] text-xs font-mono space-y-1">
               <div className="flex justify-between text-[#888]">
@@ -484,13 +498,19 @@ export default function CategoryPoliciesView() {
                 <span className="text-white">{purgeConfirmCategory.category}</span>
               </div>
               <div className="flex justify-between text-[#888]">
-                <span>Torrents to delete:</span>
-                <span className="text-white">{formatNum(purgeConfirmCategory.torrent_count)}</span>
+                <span>Verified to delete:</span>
+                <span className="text-rose-400 font-bold">{formatNum(purgeConfirmCategory.verified_count || purgeConfirmCategory.torrent_count)}</span>
               </div>
+              {purgeConfirmCategory.review_count > 0 && (
+                <div className="flex justify-between text-[#888]">
+                  <span>Flagged (Protected):</span>
+                  <span className="text-amber-400">{formatNum(purgeConfirmCategory.review_count)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-[#888]">
                 <span>Estimated space freed:</span>
                 <span className="text-emerald-400">
-                  ~{formatBytes(purgeConfirmCategory.torrent_count * 28000)}
+                  ~{formatBytes((purgeConfirmCategory.verified_count || purgeConfirmCategory.torrent_count) * 28000)}
                 </span>
               </div>
               <div className="flex justify-between text-[#888]">

@@ -72,8 +72,14 @@ public class CategoryPurgeService
                     $"Category '{category}' is currently enabled. You must disable future crawling for this category before purging stored data.");
             }
 
+            // Confidence guard: only purge verified high-confidence records.
+            // Ambiguous or low-confidence records (needs_review = true or conf < 0.85) are preserved
+            // to ensure false positives (e.g. movies, games mislabeled as Adult) are never purged or tombstoned.
             var totalCount = await conn.ExecuteScalarAsync<long>(
-                "SELECT count(*) FROM torrents WHERE category = @category;",
+                @"SELECT count(*) FROM torrents 
+                  WHERE category = @category 
+                    AND (needs_review = false OR needs_review IS NULL) 
+                    AND (category_confidence IS NULL OR category_confidence >= 0.85);",
                 new { category });
 
             if (totalCount == 0)
@@ -159,10 +165,12 @@ public class CategoryPurgeService
                 await using var conn = await _db.DataSource.OpenConnectionAsync(ct);
                 await using var tx = await conn.BeginTransactionAsync(ct);
 
-                // Fetch chunk of infohashes
+                // Fetch chunk of infohashes (only high-confidence verified records; ambiguous ones are protected)
                 var hashes = (await conn.QueryAsync<byte[]>(
                     @"SELECT infohash FROM torrents 
                       WHERE category = @category 
+                        AND (needs_review = false OR needs_review IS NULL)
+                        AND (category_confidence IS NULL OR category_confidence >= 0.85)
                       LIMIT @chunkSize 
                       FOR UPDATE SKIP LOCKED;",
                     new { category, chunkSize }, tx)).ToList();

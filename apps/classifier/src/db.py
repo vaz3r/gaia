@@ -535,7 +535,11 @@ def bulk_update_classifications(records: List[Dict[str, Any]], max_retries: int 
         blocked_cats = []
         for r in records:
             cat = r.get("predicted_category")
-            if cat in disabled_cats:
+            needs_review = bool(r.get("needs_review", False))
+            conf = float(r.get("confidence", 0.0))
+            # Confidence protection: only auto-tombstone if high confidence (>= 85%) and not flagged for review.
+            # Low confidence / ambiguous torrents are preserved in DB with needs_review=true so valid movies/games aren't lost.
+            if cat in disabled_cats and (not needs_review) and conf >= 0.85:
                 ih = r["infohash"] if isinstance(r["infohash"], (bytes, memoryview)) else hex_to_bytea(r["infohash_hex"])
                 blocked_hashes.append(ih)
                 blocked_cats.append(cat)

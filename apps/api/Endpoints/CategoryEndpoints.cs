@@ -27,10 +27,16 @@ public static class CategoryEndpoints
                     cp.description, 
                     cp.updated_at,
                     COALESCE(tc.torrent_count, 0) AS torrent_count,
+                    COALESCE(tc.verified_count, 0) AS verified_count,
+                    COALESCE(tc.review_count, 0) AS review_count,
                     COALESCE(bc.tombstone_count, 0) AS tombstone_count
                 FROM category_policies cp
                 LEFT JOIN (
-                    SELECT category, count(*) AS torrent_count 
+                    SELECT 
+                        category, 
+                        count(*) AS torrent_count,
+                        count(*) FILTER (WHERE (needs_review = false OR needs_review IS NULL) AND (category_confidence IS NULL OR category_confidence >= 0.85)) AS verified_count,
+                        count(*) FILTER (WHERE needs_review = true) AS review_count
                     FROM torrents 
                     GROUP BY category
                 ) tc ON tc.category = cp.category
