@@ -1337,18 +1337,29 @@ public class DashboardRepository
         IEnumerable<dynamic> TopSwarms
     );
 
+    private static AnalysisTelemetry? _lastAnalysisTelemetry;
+
     public async Task<object> GetAnalysisDataAsync(string? selectedCategory, CancellationToken ct)
     {
         var category = string.IsNullOrWhiteSpace(selectedCategory) || selectedCategory.Equals("All", StringComparison.OrdinalIgnoreCase)
             ? null
             : selectedCategory.Trim();
 
-        // 1. Global Telemetry (cached for 10 minutes)
+        // 1. Global Telemetry (cached for 15 minutes with resilient fallback)
         const string telemetryCacheKey = "dashboard:analysis:telemetry";
         if (!_memoryCache.TryGetValue(telemetryCacheKey, out AnalysisTelemetry? telemetry) || telemetry == null)
         {
-            telemetry = await ComputeAnalysisTelemetryAsync(ct);
-            _memoryCache.Set(telemetryCacheKey, telemetry, TimeSpan.FromMinutes(10));
+            try
+            {
+                telemetry = await ComputeAnalysisTelemetryAsync(ct);
+                _lastAnalysisTelemetry = telemetry;
+                _memoryCache.Set(telemetryCacheKey, telemetry, TimeSpan.FromMinutes(15));
+            }
+            catch (Exception ex) when (_lastAnalysisTelemetry != null)
+            {
+                _logger.LogWarning(ex, "Failed to compute fresh analysis telemetry; serving cached fallback telemetry.");
+                telemetry = _lastAnalysisTelemetry;
+            }
         }
 
         // 2. Category Swarms (cached for 60 seconds per category)
@@ -1361,11 +1372,11 @@ public class DashboardRepository
 
         return new
         {
-            summary = telemetry.Summary,
-            categories = telemetry.Categories,
-            survivability = telemetry.Survivability,
-            trends_7d = telemetry.Trends7d,
-            peer_geography = telemetry.PeerGeography,
+            summary = telemetry?.Summary ?? new { },
+            categories = telemetry?.Categories ?? new List<dynamic>(),
+            survivability = telemetry?.Survivability ?? new List<dynamic>(),
+            trends_7d = telemetry?.Trends7d ?? new List<dynamic>(),
+            peer_geography = telemetry?.PeerGeography ?? new List<dynamic>(),
             selected_category = category ?? "All",
             trending = swarms.Trending,
             fastest_growing = swarms.Velocity,
@@ -1424,10 +1435,10 @@ public class DashboardRepository
             ORDER BY peer_count DESC
             LIMIT 10";
 
-        object summary = (object?)(await conn.QuerySingleOrDefaultAsync(summarySql)) ?? new { };
-        var catSurv = (await conn.QueryAsync(catSurvSql)).ToList();
-        var trends7d = (await conn.QueryAsync(trends7dSql)).ToList();
-        var peerGeo = (await conn.QueryAsync(peerGeoSql)).ToList();
+        object summary = (object?)(await conn.QuerySingleOrDefaultAsync(summarySql, commandTimeout: 90)) ?? new { };
+        var catSurv = (await conn.QueryAsync(catSurvSql, commandTimeout: 90)).ToList();
+        var trends7d = (await conn.QueryAsync(trends7dSql, commandTimeout: 90)).ToList();
+        var peerGeo = (await conn.QueryAsync(peerGeoSql, commandTimeout: 90)).ToList();
 
         return new AnalysisTelemetry(summary, catSurv, catSurv, trends7d, peerGeo);
     }
@@ -1484,9 +1495,9 @@ public class DashboardRepository
             ORDER BY total_seen DESC
             LIMIT 25";
 
-        var trending = (await conn.QueryAsync(trendingSql, builder)).ToList();
-        var velocity = (await conn.QueryAsync(velocitySql, builder)).ToList();
-        var topSwarms = (await conn.QueryAsync(topSwarmsSql, builder)).ToList();
+        var trending = (await conn.QueryAsync(trendingSql, builder, commandTimeout: 90)).ToList();
+        var velocity = (await conn.QueryAsync(velocitySql, builder, commandTimeout: 90)).ToList();
+        var topSwarms = (await conn.QueryAsync(topSwarmsSql, builder, commandTimeout: 90)).ToList();
 
         return new SwarmCollections(trending, velocity, topSwarms);
     }

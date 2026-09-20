@@ -26,26 +26,25 @@ get_local_containers() {
     local target="workspace-production"
     # Get stats
     local stats_file=$(mktemp)
-    docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" > "$stats_file" 2>/dev/null || true
+    timeout 15 docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" > "$stats_file" 2>/dev/null || true
 
-    docker ps -a --format '{{.Names}}\t{{.Status}}\t{{.Image}}' | while IFS=$'\t' read -r name status img; do
-        # Extract health
-        local health=$(docker inspect "$name" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || echo "unknown")
-        local restarts=$(docker inspect "$name" --format '{{.RestartCount}}' 2>/dev/null || echo "0")
-        local state=$(docker inspect "$name" --format '{{.State.Status}}' 2>/dev/null || echo "unknown")
-        
-        # Match stats
-        local cpu="0.0%"
-        local mem="0B"
-        if [ -f "$stats_file" ]; then
-            local stat_match=$(grep -E "^${name}\s" "$stats_file" || true)
-            if [ -n "$stat_match" ]; then
-                cpu=$(echo "$stat_match" | awk -F'\t' '{print $2}')
-                mem=$(echo "$stat_match" | awk -F'\t' '{print $3}')
+    local c_ids
+    c_ids=$(docker ps -aq 2>/dev/null || true)
+    if [ -n "$c_ids" ]; then
+        docker inspect $c_ids --format '{{.Name}}	{{.State.Status}}	{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}	{{.RestartCount}}' 2>/dev/null | while IFS=$'\t' read -r raw_name state health restarts; do
+            local name="${raw_name#/}"
+            local cpu="0.0%"
+            local mem="0B"
+            if [ -f "$stats_file" ]; then
+                local stat_match=$(grep -E "^${name}\s" "$stats_file" || true)
+                if [ -n "$stat_match" ]; then
+                    cpu=$(echo "$stat_match" | awk -F'\t' '{print $2}')
+                    mem=$(echo "$stat_match" | awk -F'\t' '{print $3}')
+                fi
             fi
-        fi
-        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "$target" "$name" "$state" "$health" "$restarts" "$cpu" "$mem" >> "$RESULTS_TMP"
-    done
+            printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "$target" "$name" "$state" "$health" "$restarts" "$cpu" "$mem" >> "$RESULTS_TMP.local"
+        done
+    fi
     rm -f "$stats_file"
 }
 
@@ -59,6 +58,7 @@ get_remote_containers() {
     DEPLOY_USER=$(grep -E '^DEPLOY_USER=' "$env_file" | head -1 | cut -d= -f2- | tr -d '"'\'' ')
     DEPLOY_PASSWORD=$(grep -E '^DEPLOY_PASSWORD=' "$env_file" | head -1 | cut -d= -f2- | tr -d '"'\'' ' || true)
     DEPLOY_SSH_KEY=$(grep -E '^DEPLOY_SSH_KEY=' "$env_file" | head -1 | cut -d= -f2- | tr -d '"'\'' ' || true)
+    eval DEPLOY_SSH_KEY="$DEPLOY_SSH_KEY"
 
     local SSH_CMD=""
     if [ -n "$DEPLOY_PASSWORD" ]; then
@@ -72,45 +72,52 @@ get_remote_containers() {
     # Run remote probe script
     local remote_script='
     stats_file=$(mktemp)
-    docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" > "$stats_file" 2>/dev/null || true
-    docker ps -a --format "{{.Names}}" | while read -r name; do
-        [ -z "$name" ] && continue
-        state=$(docker inspect "$name" --format "{{.State.Status}}" 2>/dev/null || echo "unknown")
-        health=$(docker inspect "$name" --format "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" 2>/dev/null || echo "none")
-        restarts=$(docker inspect "$name" --format "{{.RestartCount}}" 2>/dev/null || echo "0")
-        cpu="0.0%"
-        mem="0B"
-        if [ -f "$stats_file" ]; then
-            stat_match=$(grep -E "^${name}\s" "$stats_file" || true)
-            if [ -n "$stat_match" ]; then
-                cpu=$(echo "$stat_match" | awk -F"\t" "{print \$2}")
-                mem=$(echo "$stat_match" | awk -F"\t" "{print \$3}")
+    timeout 15 docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" > "$stats_file" 2>/dev/null || true
+    c_ids=$(docker ps -aq 2>/dev/null || true)
+    if [ -n "$c_ids" ]; then
+        docker inspect $c_ids --format "{{.Name}}	{{.State.Status}}	{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}	{{.RestartCount}}" 2>/dev/null | while IFS="	" read -r raw_name state health restarts; do
+            name="${raw_name#/}"
+            cpu="0.0%"
+            mem="0B"
+            if [ -f "$stats_file" ]; then
+                stat_match=$(grep -E "^${name}\s" "$stats_file" || true)
+                if [ -n "$stat_match" ]; then
+                    cpu=$(echo "$stat_match" | awk -F"\t" "{print \$2}")
+                    mem=$(echo "$stat_match" | awk -F"\t" "{print \$3}")
+                fi
             fi
-        fi
-        printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$name" "$state" "$health" "$restarts" "$cpu" "$mem"
-    done
+            printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$name" "$state" "$health" "$restarts" "$cpu" "$mem"
+        done
+    fi
     rm -f "$stats_file"
     '
 
     local out
     out=$($SSH_CMD "$remote_script" 2>/dev/null || true)
     while IFS=$'\t' read -r name state health restarts cpu mem; do
-        [ -n "$name" ] && printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "$target" "$name" "$state" "$health" "$restarts" "$cpu" "$mem" >> "$RESULTS_TMP"
+        [ -n "$name" ] && printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "$target" "$name" "$state" "$health" "$restarts" "$cpu" "$mem" >> "$RESULTS_TMP.$target"
     done <<< "$out"
 }
 
-# Collect based on filter
-if [ "$TARGET_FILTER" == "all" ] || [ "$TARGET_FILTER" == "workspace-production" ]; then
-    get_local_containers
-fi
-if [ "$TARGET_FILTER" == "all" ] || [ "$TARGET_FILTER" == "gaia-gateway" ]; then
-    get_remote_containers "gaia-gateway"
-fi
-if [ "$TARGET_FILTER" == "all" ] || [ "$TARGET_FILTER" == "gaia-portal" ]; then
-    get_remote_containers "gaia-portal"
-fi
-if [ "$TARGET_FILTER" == "all" ] || [ "$TARGET_FILTER" == "gaia-node" ]; then
-    get_remote_containers "gaia-node"
+# Collect based on filter concurrently
+if [ "$TARGET_FILTER" == "all" ]; then
+    get_local_containers &
+    get_remote_containers "gaia-gateway" &
+    get_remote_containers "gaia-portal" &
+    get_remote_containers "gaia-node" &
+    wait
+    cat "$RESULTS_TMP.local" "$RESULTS_TMP.gaia-gateway" "$RESULTS_TMP.gaia-portal" "$RESULTS_TMP.gaia-node" >> "$RESULTS_TMP" 2>/dev/null || true
+    rm -f "$RESULTS_TMP.local" "$RESULTS_TMP.gaia-gateway" "$RESULTS_TMP.gaia-portal" "$RESULTS_TMP.gaia-node"
+else
+    if [ "$TARGET_FILTER" == "workspace-production" ]; then
+        get_local_containers
+        cat "$RESULTS_TMP.local" >> "$RESULTS_TMP" 2>/dev/null || true
+        rm -f "$RESULTS_TMP.local"
+    else
+        get_remote_containers "$TARGET_FILTER"
+        cat "$RESULTS_TMP.$TARGET_FILTER" >> "$RESULTS_TMP" 2>/dev/null || true
+        rm -f "$RESULTS_TMP.$TARGET_FILTER"
+    fi
 fi
 
 if [[ "$FORMAT" == "json" ]]; then
