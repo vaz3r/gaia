@@ -229,7 +229,10 @@ def get_torrent_by_infohash(hex_infohash: str) -> Optional[Dict[str, Any]]:
     try:
         conn.autocommit = True
         with conn.cursor() as cur:
-            ih_bytes = hex_to_bytea(hex_infohash)
+            try:
+                ih_bytes = hex_to_bytea(hex_infohash)
+            except (ValueError, TypeError):
+                return None
             cur.execute(
                 """
                 SELECT infohash, name, total_size, file_count, files, first_seen, last_seen, verified_at,
@@ -673,7 +676,10 @@ def upsert_label(
 ) -> Dict[str, Any]:
     """Upsert human or DeepSeek label into labeled_results.
     If category is 'Other', marks torrent as needs_review = false to drain review queue."""
-    ih_bytes = hex_to_bytea(infohash_hex)
+    try:
+        ih_bytes = hex_to_bytea(infohash_hex)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Invalid infohash hex format: {infohash_hex}") from e
     p = get_pool()
     conn = p.getconn()
     try:
