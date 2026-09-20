@@ -49,7 +49,7 @@ class ReclassifyManager:
                 return True
             return False
 
-    def start(self, batch_size: int = 500, limit: Optional[int] = None, dry_run: bool = False) -> Dict[str, Any]:
+    def start(self, batch_size: int = 200, limit: Optional[int] = None, dry_run: bool = False) -> Dict[str, Any]:
         with self._lock:
             if self._status["is_running"]:
                 raise RuntimeError("Reclassification task is already running")
@@ -196,13 +196,19 @@ class ReclassifyManager:
                     old_categories.append(old_cat)
 
                 t_batch = time.time()
-                # Process batch through model
-                acc, flag = self._process_batch(service, batch_items, old_categories, category_shifts, dry_run=dry_run)
-                batch_dur = time.time() - t_batch
-                processed += len(batch_items)
-                accepted_count += acc
-                still_flagged_count += flag
-                self._update_progress(processed, accepted_count, still_flagged_count, category_shifts, t_start, target_count, batch_duration=batch_dur, batch_size=len(batch_items))
+                # Process batch through model with resilient error isolation
+                try:
+                    acc, flag = self._process_batch(service, batch_items, old_categories, category_shifts, dry_run=dry_run)
+                    batch_dur = time.time() - t_batch
+                    processed += len(batch_items)
+                    accepted_count += acc
+                    still_flagged_count += flag
+                    self._update_progress(processed, accepted_count, still_flagged_count, category_shifts, t_start, target_count, batch_duration=batch_dur, batch_size=len(batch_items))
+                except Exception as batch_err:
+                    import logging
+                    logging.getLogger("reclassify_worker").warning(f"Transient error processing batch: {batch_err}")
+                    time.sleep(0.5)
+
                 # Yield GIL and CPU to allow uvicorn and health checks to remain real-time responsive
                 time.sleep(0.02)
 

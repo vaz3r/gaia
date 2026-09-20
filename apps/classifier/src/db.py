@@ -608,64 +608,95 @@ def bulk_update_classifications(records: List[Dict[str, Any]], max_retries: int 
         if not records:
             return 0
 
-    infohashes = []
-    categories = []
-    confidences = []
-    needs_reviews = []
-    metas = []
-
+    # Ensure deterministic B-tree lock ordering to prevent deadlocks and lock contention
+    records_with_ih = []
     for r in records:
         ih = r["infohash"] if isinstance(r["infohash"], (bytes, memoryview)) else hex_to_bytea(r["infohash_hex"])
-        infohashes.append(ih)
-        categories.append(r["predicted_category"])
-        confidences.append(float(r["confidence"]))
-        needs_reviews.append(bool(r["needs_review"]))
-        metas.append(json.dumps(r.get("meta", {})))
+        records_with_ih.append((ih, r))
+    records_with_ih.sort(key=lambda x: x[0])
 
-    for attempt in range(max_retries):
-        conn = p.getconn()
-        try:
-            conn.autocommit = False
-            conn.set_session(readonly=False)
-            with conn.cursor() as cur:
-                cur.execute("SET statement_timeout = 30000;")
-                query = """
-                    UPDATE torrents AS t
-                    SET 
-                        category = c.category,
-                        category_confidence = c.confidence,
-                        needs_review = c.needs_review,
-                        classified_at = now(),
-                        classification_meta = c.meta::jsonb
-                    FROM (
-                        SELECT 
-                            unnest(%s::bytea[]) AS infohash,
-                            unnest(%s::text[]) AS category,
-                            unnest(%s::real[]) AS confidence,
-                            unnest(%s::boolean[]) AS needs_review,
-                            unnest(%s::jsonb[]) AS meta
-                    ) AS c
-                    WHERE t.infohash = c.infohash;
-                """
-                cur.execute(query, (infohashes, categories, confidences, needs_reviews, metas))
-                updated_count = cur.rowcount
-                conn.commit()
-                return updated_count
-        except Exception as e:
+    total_updated = 0
+    chunk_size = 100
+    # Process in micro-chunks of 100 to minimize lock hold duration and contention with crawler
+    for chunk_start in range(0, len(records_with_ih), chunk_size):
+        chunk = records_with_ih[chunk_start : chunk_start + chunk_size]
+        infohashes = [x[0] for x in chunk]
+        categories = [x[1]["predicted_category"] for x in chunk]
+        confidences = [float(x[1]["confidence"]) for x in chunk]
+        needs_reviews = [bool(x[1]["needs_review"]) for x in chunk]
+        metas = [json.dumps(x[1].get("meta", {})) for x in chunk]
+
+        for attempt in range(max_retries):
+            conn = p.getconn()
             try:
-                if conn and not conn.closed:
-                    conn.rollback()
-            except Exception:
-                pass
-            err_str = str(e).lower()
-            if ("deadlock" in err_str or "closed the connection" in err_str or "connection already closed" in err_str) and attempt < max_retries - 1:
-                time.sleep(1.0 * (attempt + 1))
-                continue
-            raise
-        finally:
-            release_conn(p, conn, close=conn.closed if conn else False)
+                conn.autocommit = False
+                conn.set_session(readonly=False)
+                with conn.cursor() as cur:
+                    cur.execute("SET statement_timeout = '30000'; SET lock_timeout = '4000';")
+                    query = """
+                        UPDATE torrents AS t
+                        SET 
+                            category = c.category,
+                            category_confidence = c.confidence,
+                            needs_review = c.needs_review,
+                            classified_at = now(),
+                            classification_meta = c.meta::jsonb
+                        FROM (
+                            SELECT 
+                                unnest(%s::bytea[]) AS infohash,
+                                unnest(%s::text[]) AS category,
+                                unnest(%s::real[]) AS confidence,
+                                unnest(%s::boolean[]) AS needs_review,
+                                unnest(%s::jsonb[]) AS meta
+                        ) AS c
+                        WHERE t.infohash = c.infohash;
+                    """
+                    cur.execute(query, (infohashes, categories, confidences, needs_reviews, metas))
+                    total_updated += cur.rowcount
+                    conn.commit()
+                    break
+            except Exception as e:
+                try:
+                    if conn and not conn.closed:
+                        conn.rollback()
+                except Exception:
+                    pass
+                err_str = str(e).lower()
+                is_lock_or_timeout = any(term in err_str for term in [
+                    "deadlock", "lock timeout", "lock_timeout", "statement timeout",
+                    "canceling statement", "while locking tuple", "closed the connection",
+                    "connection already closed"
+                ])
+                if is_lock_or_timeout and attempt < max_retries - 1:
+                    time.sleep(0.3 * (attempt + 1))
+                    continue
+                if attempt == max_retries - 1:
+                    # Fallback to single-item updates with fast lock_timeout so unblocked records succeed
+                    for single_ih, single_cat, single_conf, single_nr, single_meta in zip(
+                        infohashes, categories, confidences, needs_reviews, metas
+                    ):
+                        conn_single = p.getconn()
+                        try:
+                            conn_single.autocommit = True
+                            with conn_single.cursor() as cur_single:
+                                cur_single.execute("SET statement_timeout = '5000'; SET lock_timeout = '1000';")
+                                cur_single.execute("""
+                                    UPDATE torrents
+                                    SET category = %s, category_confidence = %s, needs_review = %s,
+                                        classified_at = now(), classification_meta = %s::jsonb
+                                    WHERE infohash = %s;
+                                """, (single_cat, single_conf, single_nr, single_meta, single_ih))
+                                total_updated += cur_single.rowcount
+                        except Exception:
+                            pass
+                        finally:
+                            release_conn(p, conn_single)
+                    break
+                raise
+            finally:
+                release_conn(p, conn, close=conn.closed if conn else False)
 
-    return 0
+    return total_updated
 
 def upsert_label(
     infohash_hex: str,
