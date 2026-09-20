@@ -611,7 +611,7 @@ def bulk_update_classifications(records: List[Dict[str, Any]], max_retries: int 
     # Ensure deterministic B-tree lock ordering to prevent deadlocks and lock contention
     records_with_ih = []
     for r in records:
-        ih = r["infohash"] if isinstance(r["infohash"], (bytes, memoryview)) else hex_to_bytea(r["infohash_hex"])
+        ih = bytes(r["infohash"]) if isinstance(r["infohash"], (bytes, memoryview)) else hex_to_bytea(r["infohash_hex"])
         records_with_ih.append((ih, r))
     records_with_ih.sort(key=lambda x: x[0])
 
