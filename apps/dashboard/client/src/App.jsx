@@ -368,9 +368,15 @@ export default function App() {
   useEffect(() => {
     loadTrackers();
 
+    // Immediate initial fetch to ensure fast first-render data
+    api('/api/stats').then(setServerStats).catch(() => {});
+    api('/api/metrics/current').then(setServerMetrics).catch(() => {});
+    api('/api/analytics').then((res) => { if (res) setAnalyticsData(res); }).catch(() => {});
+    fetchAlerts();
+
     const fetchSupplemental = () => {
-      // If SSE is not connected, fallback to fetching core stats
-      if (!streamConnected) {
+      // If SSE is not connected or metrics are missing, poll core stats
+      if (!streamConnected || !serverMetrics) {
         api('/api/stats').then(setServerStats).catch(() => {});
         api('/api/metrics/current').then(setServerMetrics).catch(() => {});
         api('/api/analytics').then((res) => { if (res) setAnalyticsData(res); }).catch(() => {});
@@ -386,9 +392,9 @@ export default function App() {
     };
 
     fetchSupplemental();
-    const interval = setInterval(fetchSupplemental, 60000);
+    const interval = setInterval(fetchSupplemental, 15000);
     return () => clearInterval(interval);
-  }, [streamConnected]);
+  }, [streamConnected, serverMetrics]);
 
   // Click-outside listener for More menu dropdown
   useEffect(() => {
@@ -526,49 +532,64 @@ export default function App() {
   const metrics = useMemo(() => {
     const rates = serverMetrics?.rates || {};
     const snap = serverMetrics?.snapshot || {};
+    const hasMetrics = Boolean(serverMetrics && (serverMetrics.rates || serverMetrics.snapshot));
 
     const verifiedRateVal = (serverStats?.verified_last_1h && serverStats.verified_last_1h > 0)
       ? serverStats.verified_last_1h
-      : (rates.verify_success ?? 31400);
-    const discoveredRateVal = rates.infohashes_harvested ?? (serverStats?.seen_last_1h ?? 2320000);
-    const fetchAttemptsVal = rates.fetch_attempts ?? 824000;
-    const connectOkVal = (rates.tcp_connect_ok ?? 26200) + (rates.utp_connect_ok ?? 24100);
-    const failuresVal = (rates.fetch_connect_timeout ?? 430000) + (rates.fetch_connect_io ?? 184000);
+      : (rates.verify_success ?? 0);
 
-    const totalVerifiedCount = serverStats?.total_torrents ?? 1811860;
-    const queueDepth = serverStats?.queue_backlog ?? 5743;
-    const activeVerifiersCount = serverStats?.verifying ?? 441;
+    // Live DHT harvest rate: use rates.infohashes_harvested if available;
+    // DO NOT fall back to serverStats.seen_last_1h (which is net-new DB inserts, ~7k/hr, not DHT harvests)
+    const discoveredRateVal = rates.infohashes_harvested ?? (rates.fetch_attempts ?? (hasMetrics ? 0 : null));
+    const fetchAttemptsVal = rates.fetch_attempts ?? (hasMetrics ? 0 : null);
+    const tcpConnectOk = rates.tcp_connect_ok ?? 0;
+    const utpConnectOk = rates.utp_connect_ok ?? 0;
+    const connectOkVal = (rates.tcp_connect_ok != null || rates.utp_connect_ok != null) ? (tcpConnectOk + utpConnectOk) : (hasMetrics ? 0 : null);
+    const failuresVal = (rates.fetch_connect_timeout ?? 0) + (rates.fetch_connect_io ?? 0);
 
-    const conversionRate = fetchAttemptsVal > 0 ? ((verifiedRateVal / fetchAttemptsVal) * 100).toFixed(2) : '3.80';
-    const dropRate = fetchAttemptsVal > 0 ? (((fetchAttemptsVal - verifiedRateVal) / fetchAttemptsVal) * 100).toFixed(1) : '96.2';
+    const totalVerifiedCount = serverStats?.total_torrents ?? 0;
+    const queueDepth = serverStats?.queue_backlog ?? 0;
+    const activeVerifiersCount = serverStats?.verifying ?? 0;
+
+    const conversionRate = (fetchAttemptsVal != null && fetchAttemptsVal > 0 && verifiedRateVal > 0)
+      ? ((verifiedRateVal / fetchAttemptsVal) * 100).toFixed(2)
+      : (hasMetrics ? '0.00' : '--');
+    const dropRate = (fetchAttemptsVal != null && fetchAttemptsVal > 0)
+      ? (((fetchAttemptsVal - verifiedRateVal) / fetchAttemptsVal) * 100).toFixed(1)
+      : '0.0';
+
+    const handshakeRate = (fetchAttemptsVal != null && fetchAttemptsVal > 0 && connectOkVal != null)
+      ? `${((connectOkVal / fetchAttemptsVal) * 100).toFixed(1)}%`
+      : (hasMetrics ? '0.0%' : '--');
 
     const uptimeStr = serverStats?.session_uptime_s
       ? formatUptime(serverStats.session_uptime_s)
-      : '15h 48m';
+      : (serverStats ? '0m' : '--');
 
-    const newTorrents1hVal = serverStats?.new_torrents_last_1h ?? Math.round(verifiedRateVal * 0.21);
+    const newTorrents1hVal = serverStats?.new_torrents_last_1h ?? 0;
     const refreshed1hVal = serverStats?.refreshed_last_1h ?? Math.max(0, verifiedRateVal - newTorrents1hVal);
 
     return {
-      totalVerified: (totalVerifiedCount / 1000000).toFixed(2) + 'M',
+      totalVerified: totalVerifiedCount > 0 ? (totalVerifiedCount / 1000000).toFixed(2) + 'M' : '--',
       totalVerifiedRaw: totalVerifiedCount,
       verifiedToday: serverStats?.verified_last_24h
         ? `+${(serverStats.verified_last_24h / 1000).toFixed(1)}k today`
-        : '+248.5k today',
+        : '-- today',
       verified24h: serverStats?.verified_last_24h ?? 0,
       verified1h: serverStats?.verified_last_1h ?? 0,
       verifiedRateNum: verifiedRateVal,
-      verifiedRate: (verifiedRateVal / 1000).toFixed(1) + 'k/hr',
+      verifiedRate: verifiedRateVal > 0 ? (verifiedRateVal / 1000).toFixed(1) + 'k/hr' : (serverStats ? '0.0k/hr' : '--'),
       newTorrentsRateNum: newTorrents1hVal,
-      newTorrentsRate: (newTorrents1hVal / 1000).toFixed(1) + 'k/hr',
+      newTorrentsRate: newTorrents1hVal > 0 ? (newTorrents1hVal / 1000).toFixed(1) + 'k/hr' : (serverStats ? '0.0k/hr' : '--'),
       refreshedRateNum: refreshed1hVal,
-      refreshedRate: (refreshed1hVal / 1000).toFixed(1) + 'k/hr',
-      discoveredRateNum: discoveredRateVal,
-      discoveredRate: (discoveredRateVal / 1000000).toFixed(2) + 'M/hr',
-      fetchAttemptsNum: fetchAttemptsVal,
-      fetchAttempts: (fetchAttemptsVal / 1000).toFixed(1) + 'k/hr',
-      connectOkNum: connectOkVal,
-      connectOk: (connectOkVal / 1000).toFixed(1) + 'k/hr',
+      refreshedRate: refreshed1hVal > 0 ? (refreshed1hVal / 1000).toFixed(1) + 'k/hr' : (serverStats ? '0.0k/hr' : '--'),
+      discoveredRateNum: discoveredRateVal ?? 0,
+      discoveredRate: discoveredRateVal != null ? (discoveredRateVal / 1000000).toFixed(2) + 'M/hr' : '--',
+      fetchAttemptsNum: fetchAttemptsVal ?? 0,
+      fetchAttempts: fetchAttemptsVal != null ? (fetchAttemptsVal / 1000).toFixed(1) + 'k/hr' : '--',
+      connectOkNum: connectOkVal ?? 0,
+      connectOk: connectOkVal != null ? (connectOkVal / 1000).toFixed(1) + 'k/hr' : '--',
+      handshakeRate,
       failures: (failuresVal / 1000).toFixed(1) + 'k/hr',
       dropRate,
       conversionRate,
@@ -577,23 +598,26 @@ export default function App() {
       uptime: uptimeStr,
       latency: 18 + (tick % 5),
       lastPing: ((tick * 2) % 3) + 1,
-      routingNodes: snap.routing_table_len ?? 10368,
+      routingNodes: snap.routing_table_len ?? 0,
+      routingNodesStr: snap.routing_table_len != null ? snap.routing_table_len.toLocaleString() : '--',
       routingBucketsUsed: 1572,
-      tcpOk: rates.tcp_metadata_ok ?? 17920,
-      utpOk: rates.utp_metadata_ok ?? 15410,
-      timeoutFailures: rates.fetch_connect_timeout ?? 430100,
-      ioFailures: rates.fetch_connect_io ?? 184200,
-      shaMismatch: rates.sha1_mismatch ?? 307,
-      getPeersRate: rates.inbound_get_peers ?? 2310000,
-      findNodeRate: rates.inbound_find_node ?? 3900000,
-      announcePeerRate: rates.inbound_announce_peer ?? 19040,
-      verifyBufMax: snap.verify_channel_depth_max ?? 389,
+      tcpOk: rates.tcp_metadata_ok ?? 0,
+      utpOk: rates.utp_metadata_ok ?? 0,
+      tcpOkStr: rates.tcp_metadata_ok != null ? `${(rates.tcp_metadata_ok / 1000).toFixed(1)}k` : '--',
+      utpOkStr: rates.utp_metadata_ok != null ? `${(rates.utp_metadata_ok / 1000).toFixed(1)}k` : '--',
+      timeoutFailures: rates.fetch_connect_timeout ?? 0,
+      ioFailures: rates.fetch_connect_io ?? 0,
+      shaMismatch: rates.sha1_mismatch ?? 0,
+      getPeersRate: rates.inbound_get_peers ?? 0,
+      findNodeRate: rates.inbound_find_node ?? 0,
+      announcePeerRate: rates.inbound_announce_peer ?? 0,
+      verifyBufMax: snap.verify_channel_depth_max ?? 0,
       verifyBufCur: snap.verify_channel_depth ?? 0,
-      freshBufMax: snap.fresh_channel_depth_max ?? 217,
+      freshBufMax: snap.fresh_channel_depth_max ?? 0,
       freshBufCur: snap.fresh_channel_depth ?? 0,
-      peerCacheSize: snap.peer_cache_size ?? 73439,
-      peerCacheEvictions: rates.peer_cache_evictions ?? 256000,
-      activeSockets: (rates.fetch_active ?? 580) + (rates.source_active ?? 1150),
+      peerCacheSize: snap.peer_cache_size ?? 0,
+      peerCacheEvictions: rates.peer_cache_evictions ?? 0,
+      activeSockets: (rates.fetch_active ?? 0) + (rates.source_active ?? 0),
       maxSockets: 4000,
     };
   }, [tick, serverStats, serverMetrics]);
@@ -992,7 +1016,7 @@ export default function App() {
                 <div className="text-xl font-bold text-white tracking-tight font-mono">
                   {metrics.discoveredRate} <span className="text-xs text-[#666] font-normal">harvest/hr</span>
                 </div>
-                <p className="text-[11px] text-[#777] mt-1">{metrics.routingNodes.toLocaleString()} active DHT routing nodes</p>
+                <p className="text-[11px] text-[#777] mt-1">{metrics.routingNodesStr} active DHT routing nodes</p>
                 <div className="mt-3 h-[2px] w-full bg-[#1a1a1a]">
                   <div className="h-full bg-white w-full" />
                 </div>
@@ -1001,7 +1025,7 @@ export default function App() {
               <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 hover:border-[#333] transition-colors">
                 <div className="flex items-center justify-between text-[#666] mb-2 text-xs">
                   <span className="font-mono text-[11px]">02 / Deduplication</span>
-                  <span className="text-white font-mono">{metrics.conversionRate}%</span>
+                  <span className="text-white font-mono">{metrics.conversionRate}{metrics.conversionRate !== '--' ? '%' : ''}</span>
                 </div>
                 <div className="text-xl font-bold text-white tracking-tight font-mono">
                   {metrics.fetchAttempts} <span className="text-xs text-[#666] font-normal">attempts/hr</span>
@@ -1015,15 +1039,13 @@ export default function App() {
               <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 hover:border-[#333] transition-colors">
                 <div className="flex items-center justify-between text-[#666] mb-2 text-xs">
                   <span className="font-mono text-[11px]">03 / Wire Handshake</span>
-                  <span className="text-white font-mono">
-                    {metrics.fetchAttemptsNum > 0 ? ((metrics.connectOkNum / metrics.fetchAttemptsNum) * 100).toFixed(1) : '6.1'}%
-                  </span>
+                  <span className="text-white font-mono">{metrics.handshakeRate}</span>
                 </div>
                 <div className="text-xl font-bold text-white tracking-tight font-mono">
                   {metrics.connectOk} <span className="text-xs text-[#666] font-normal">conn/hr</span>
                 </div>
                 <p className="text-[11px] text-[#777] mt-1">
-                  TCP {(metrics.tcpOk / 1000).toFixed(1)}k · uTP {(metrics.utpOk / 1000).toFixed(1)}k
+                  TCP {metrics.tcpOkStr} · uTP {metrics.utpOkStr}
                 </p>
                 <div className="mt-3 h-[2px] w-full bg-[#1a1a1a]">
                   <div className="h-full bg-white w-[28%]" />
