@@ -123,6 +123,10 @@ impl RoutingTable {
         self.tables.iter().map(|t| t.len()).sum()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn buckets_used(&self) -> usize {
         self.tables.iter().map(|t| t.buckets_used()).sum()
     }

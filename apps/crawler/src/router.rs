@@ -9,7 +9,7 @@ use crate::krpc::{Infohash, NodeId};
 use crate::metrics::{Add1, Metrics};
 use bytes::Bytes;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
@@ -926,16 +926,17 @@ impl Router {
     }
 
     pub fn register(&self, method: &[u8]) -> (Bytes, oneshot::Receiver<Bytes>) {
-        for _ in 0..32 {
-            let txid = Bytes::copy_from_slice(&rand::random::<[u8; 2]>());
-            let kind = match method {
-                PING => TxKind::Ping,
-                FIND_NODE => TxKind::FindNode,
-                GET_PEERS => TxKind::GetPeers,
-                ANNOUNCE_PEER => TxKind::AnnouncePeer,
-                crate::krpc::message::SAMPLE_INFOHASHES => TxKind::SampleInfohashes,
-                _ => TxKind::Ping,
-            };
+        let kind = match method {
+            PING => TxKind::Ping,
+            FIND_NODE => TxKind::FindNode,
+            GET_PEERS => TxKind::GetPeers,
+            ANNOUNCE_PEER => TxKind::AnnouncePeer,
+            crate::krpc::message::SAMPLE_INFOHASHES => TxKind::SampleInfohashes,
+            _ => TxKind::Ping,
+        };
+
+        for _ in 0..64 {
+            let txid = Bytes::copy_from_slice(&rand::random::<[u8; 4]>());
             let (tx, rx) = oneshot::channel();
             let entry = TxEntry {
                 kind,
@@ -946,7 +947,20 @@ impl Router {
                 return (txid, rx);
             }
         }
-        unreachable!("txid space exhausted")
+
+        // Monotonic fallback to guarantee zero panics under high concurrency
+        static SEQ: AtomicU64 = AtomicU64::new(1);
+        let id = SEQ.fetch_add(1, AtomicOrdering::Relaxed);
+        let txid = Bytes::copy_from_slice(&id.to_be_bytes());
+        let (tx, rx) = oneshot::channel();
+        let entry = TxEntry {
+            kind,
+            sent: Instant::now(),
+            reply: Some(tx),
+        };
+        self.tx.take(&txid);
+        self.tx.insert(txid.clone(), entry);
+        (txid, rx)
     }
 
     pub fn record_query(&self, id: &crate::krpc::NodeId, useful: bool, failed: bool) {

@@ -34,10 +34,14 @@ def get_pool() -> pool.ThreadedConnectionPool:
     return _connection_pool
 
 def release_conn(p: pool.ThreadedConnectionPool, conn: Any, close: bool = False) -> None:
-    """Safely roll back any uncommitted transaction before returning connection to pool."""
+    """Safely roll back any uncommitted transaction and ensure autocommit mode before returning connection to pool."""
     if conn and not getattr(conn, "closed", False):
         try:
             conn.rollback()
+        except Exception:
+            pass
+        try:
+            conn.autocommit = True
         except Exception:
             pass
     if conn:
@@ -83,6 +87,7 @@ def get_torrents(
     p = get_pool()
     conn = p.getconn()
     try:
+        conn.autocommit = True
         with conn.cursor() as cur:
             if search and len(search.strip()) == 40:
                 try:
@@ -222,6 +227,7 @@ def get_torrent_by_infohash(hex_infohash: str) -> Optional[Dict[str, Any]]:
     p = get_pool()
     conn = p.getconn()
     try:
+        conn.autocommit = True
         with conn.cursor() as cur:
             ih_bytes = hex_to_bytea(hex_infohash)
             cur.execute(
@@ -376,6 +382,7 @@ def fetch_recent_canary_slice(limit: int = 1000) -> List[Dict[str, Any]]:
     p = get_pool()
     conn = p.getconn()
     try:
+        conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute("SET statement_timeout = 30000;")
             cur.execute(
@@ -420,6 +427,7 @@ def fetch_review_queue_slice(limit: int = 2000) -> List[Dict[str, Any]]:
     p = get_pool()
     conn = p.getconn()
     try:
+        conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute("SET statement_timeout = 30000;")
             cur.execute(
@@ -465,6 +473,7 @@ def fetch_unclassified_batch(limit: int = 2000) -> List[Dict[str, Any]]:
     p = get_pool()
     conn = p.getconn()
     try:
+        conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute("SET statement_timeout = 30000;")
 
@@ -523,6 +532,7 @@ def get_disabled_categories() -> set:
     p = get_pool()
     conn = p.getconn()
     try:
+        conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute("SELECT category FROM category_policies WHERE is_enabled = false;")
             rows = cur.fetchall()
@@ -612,6 +622,7 @@ def bulk_update_classifications(records: List[Dict[str, Any]], max_retries: int 
     for attempt in range(max_retries):
         conn = p.getconn()
         try:
+            conn.autocommit = False
             conn.set_session(readonly=False)
             with conn.cursor() as cur:
                 cur.execute("SET statement_timeout = 30000;")
@@ -666,6 +677,7 @@ def upsert_label(
     p = get_pool()
     conn = p.getconn()
     try:
+        conn.autocommit = False
         conn.set_session(readonly=False)
         with conn.cursor() as cur:
             # 1. Upsert into labeled_results
@@ -727,6 +739,7 @@ def get_queue_metrics() -> Dict[str, Any]:
     conn = None
     try:
         conn = p.getconn()
+        conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute("SELECT reltuples::bigint FROM pg_class WHERE relname = 'torrents';")
             total = cur.fetchone()[0] or 0
