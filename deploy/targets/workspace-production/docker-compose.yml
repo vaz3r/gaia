@@ -103,6 +103,8 @@ services:
       WORKER_POLL_INTERVAL: 15
     volumes:
       - /home/${DEPLOY_USER:-core}/gaia-data/classifier/models:/app/models
+    mem_limit: 1500m
+    memswap_limit: 1500m
     command: ["python", "scripts/entrypoint.py"]
 
   gaia-ml:
@@ -113,6 +115,8 @@ services:
     container_name: gaia-ml
     restart: unless-stopped
     network_mode: host
+    mem_limit: 1500m
+    memswap_limit: 1500m
     environment:
       DB_HOST: localhost
       PG_PORT: ${PG_PORT:-5432}
