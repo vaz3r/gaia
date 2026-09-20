@@ -470,6 +470,7 @@ public class DashboardRepository
                     WHERE m.metric_name = c.metric_name
                       AND m.ts <= c.ts - interval '1 hour'
                       AND m.ts >= NOW() - interval '3 hours'
+                      AND m.ts >= (SELECT ts FROM session_start)
                     ORDER BY m.ts DESC LIMIT 1
                 ) prev ON true
                 LEFT JOIN LATERAL (

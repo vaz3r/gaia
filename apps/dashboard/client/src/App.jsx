@@ -527,7 +527,9 @@ export default function App() {
     const rates = serverMetrics?.rates || {};
     const snap = serverMetrics?.snapshot || {};
 
-    const verifiedRateVal = rates.verify_success ?? (serverStats?.verified_last_1h ?? 31400);
+    const verifiedRateVal = (serverStats?.verified_last_1h && serverStats.verified_last_1h > 0)
+      ? serverStats.verified_last_1h
+      : (rates.verify_success ?? 31400);
     const discoveredRateVal = rates.infohashes_harvested ?? (serverStats?.seen_last_1h ?? 2320000);
     const fetchAttemptsVal = rates.fetch_attempts ?? 824000;
     const connectOkVal = (rates.tcp_connect_ok ?? 26200) + (rates.utp_connect_ok ?? 24100);
