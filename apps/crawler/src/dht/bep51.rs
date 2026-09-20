@@ -22,22 +22,24 @@ pub async fn run_bep51_worker(
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                let nodes = router.random_routing_nodes(10);
-                for node in nodes {
-                    let r = router.clone();
-                    let tx = fresh_verify_tx.clone();
-                    let pw = pending_writer.clone();
-                    let m = metrics.clone();
-                    set.spawn(async move {
-                        if let Ok(infohashes) = send_sample_infohashes(&r, node).await {
-                            for ih in infohashes {
-                                if tx.try_send(ih).is_err() {
-                                    pw.push(ih, "bep51");
-                                    m.fresh_channel_dropped.add(1);
+                if set.len() < 150 {
+                    let nodes = router.random_routing_nodes(25);
+                    for node in nodes {
+                        let r = router.clone();
+                        let tx = fresh_verify_tx.clone();
+                        let pw = pending_writer.clone();
+                        let m = metrics.clone();
+                        set.spawn(async move {
+                            if let Ok(infohashes) = send_sample_infohashes(&r, node).await {
+                                for ih in infohashes {
+                                    if tx.try_send(ih).is_err() {
+                                        pw.push(ih, "bep51");
+                                        m.fresh_channel_dropped.add(1);
+                                    }
                                 }
                             }
-                        }
-                    });
+                        });
+                    }
                 }
             }
             Some(_) = set.join_next() => {

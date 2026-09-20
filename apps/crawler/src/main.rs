@@ -725,7 +725,7 @@ async fn spawn_node(
     });
     tokio::spawn(crate::dht::bep51::run_bep51_worker(
         router.clone(),
-        Duration::from_secs(10),
+        Duration::from_secs(1),
         fresh_verify_tx.clone(),
         pending_writer.clone(),
         metrics.clone(),

@@ -69,6 +69,8 @@ RE_JAV = re.compile(
 RE_AUDIOBOOK = re.compile(
     r'(\b(audiobook|audio\s*book|audiolibro[s]?|livre\s*audio|hörbuch|hörspiel|narrat(ed|or)|unabridged|abridged|read\s*by|performed\s*by|voiced\s*by|'
     r'audible|audio\s*drama|full[\s\-]cast|\.m4b\b|\.aax\b|аудиокнига|читает|озвучка|'
+    r'audio\s*edition|graphic\s*audio|tantor(\s*audio)?|recorded\s*books|blackstone\s*audio|brilliance\s*audio|'
+    r'harperaudio|macmillan\s*audio|penguin\s*audio|podium\s*audio|bolinda|hachette\s*audio|'
     r'автор|исполнитель)\b|\b\d+h\d+m\b|\([A-Za-zА-Яа-я]+[_\s]+[A-Za-zА-Яа-я]\.?\))',
     re.IGNORECASE
 )
@@ -80,8 +82,10 @@ RE_BOOK = re.compile(
     re.IGNORECASE
 )
 RE_DOCU = re.compile(
-    r'\b(bbc|pbs|national\s*geographic|nat\s*geo|discovery(\s*channel)?|docu|documentary|docuseries|'
+    r'\b(bbc(\s*earth|\s*horizon)?|pbs(\s*frontline)?|national\s*geographic|nat\s*geo|discovery(\s*channel)?|docu|documentary|docuseries|'
     r'nature|history\s*channel|attenborough|planet\s*earth|blue\s*planet|curiositystream|novafilm|imax|mvgroup|'
+    r'frontline|ken\s*burns|arte[\s\-_]*(tv)?|dw\s*documentary|storyville|disneynature|smithsonian(\s*channel)?|'
+    r'american\s*experience|louis\s*theroux|werner\s*herzog|errol\s*morris|al\s*jazeera\s*investigates|investigative\s*documentary|'
     r'документальный|документалка|д\/ф|докфильм|dokumentation|doku|documentaire)\b',
     re.IGNORECASE
 )

@@ -277,6 +277,7 @@ class ScoringWorker:
                 LIMIT %s;
             """, (self.batch_size,))
             unscored_rows = cur.fetchall()
+            conn.commit()
 
         if unscored_rows:
             return self.run_scoring_batch(conn, unscored_rows, is_refresh=False)
@@ -305,6 +306,7 @@ class ScoringWorker:
                 LIMIT %s;
             """, (str(self.availability_refresh_hours), self.batch_size))
             stale_rows = cur.fetchall()
+            conn.commit()
 
         if stale_rows:
             return self.run_scoring_batch(conn, stale_rows, is_refresh=True)

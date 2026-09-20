@@ -513,10 +513,15 @@ def get_disabled_categories() -> set:
         with conn.cursor() as cur:
             cur.execute("SELECT category FROM category_policies WHERE is_enabled = false;")
             rows = cur.fetchall()
+            conn.commit()
             disabled = {r[0] for r in rows}
             _DISABLED_CAT_CACHE = {"ts": now, "cats": disabled}
             return disabled
     except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         return _DISABLED_CAT_CACHE["cats"]
     finally:
         p.putconn(conn)

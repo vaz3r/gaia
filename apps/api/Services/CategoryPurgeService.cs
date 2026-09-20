@@ -168,7 +168,7 @@ public class CategoryPurgeService
             {
                 int chunkProcessed = 0;
                 var batchSw = Stopwatch.StartNew();
-                const int maxRetries = 5;
+                const int maxRetries = 10;
                 int retryCount = 0;
 
                 while (true)
@@ -230,8 +230,8 @@ public class CategoryPurgeService
                     catch (Exception ex) when (IsTransientException(ex) && retryCount < maxRetries && !ct.IsCancellationRequested)
                     {
                         retryCount++;
-                        var backoffMs = (int)(Math.Pow(2, retryCount) * 100) + Random.Shared.Next(50, 250);
-                        _logger.LogWarning(ex, "Transient database contention/deadlock ({Message}) in purge worker for '{Category}'. Retrying batch ({Retry}/{Max}) in {Backoff}ms...",
+                        var backoffMs = Math.Min(15000, (int)(Math.Pow(2, retryCount) * 500)) + Random.Shared.Next(100, 500);
+                        _logger.LogWarning(ex, "Transient database contention or timeout ({Message}) in purge worker for '{Category}'. Retrying batch ({Retry}/{Max}) in {Backoff}ms...",
                             ex.Message, category, retryCount, maxRetries, backoffMs);
                         await Task.Delay(backoffMs, ct);
                     }
@@ -353,6 +353,11 @@ public class CategoryPurgeService
 
     private static bool IsTransientException(Exception ex)
     {
+        if (ex is TimeoutException || ex.InnerException is TimeoutException)
+        {
+            return true;
+        }
+
         if (ex is PostgresException pex)
         {
             return pex.SqlState is PostgresErrorCodes.DeadlockDetected       // 40P01
@@ -360,15 +365,25 @@ public class CategoryPurgeService
                                 or PostgresErrorCodes.LockNotAvailable;       // 55P03
         }
 
-        if (ex is NpgsqlException && ex.InnerException is PostgresException innerPex)
+        if (ex is NpgsqlException nex)
         {
-            return innerPex.SqlState is PostgresErrorCodes.DeadlockDetected
-                                     or PostgresErrorCodes.SerializationFailure
-                                     or PostgresErrorCodes.LockNotAvailable;
+            if (nex.InnerException is PostgresException innerPex)
+            {
+                return innerPex.SqlState is PostgresErrorCodes.DeadlockDetected
+                                         or PostgresErrorCodes.SerializationFailure
+                                         or PostgresErrorCodes.LockNotAvailable;
+            }
+
+            if (nex.InnerException is System.IO.IOException || nex.InnerException is System.Net.Sockets.SocketException)
+            {
+                return true;
+            }
         }
 
         return ex.Message.Contains("40P01", StringComparison.OrdinalIgnoreCase)
             || ex.Message.Contains("deadlock", StringComparison.OrdinalIgnoreCase)
-            || ex.Message.Contains("lock", StringComparison.OrdinalIgnoreCase);
+            || ex.Message.Contains("lock", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("timed out", StringComparison.OrdinalIgnoreCase);
     }
 }
