@@ -39,7 +39,7 @@ WORKER_REGISTRY: Dict[str, Dict[str, Any]] = {
         "cwd": BASE_DIR / "scoring",
         "cmd": [sys.executable, "src/worker.py"],
         "heartbeat_file": Path("/tmp/scoring_worker_heartbeat"),
-        "max_heartbeat_age_sec": 180,
+        "max_heartbeat_age_sec": 600,
         "env_overrides": {
             "HEARTBEAT_PATH": "/tmp/scoring_worker_heartbeat",
         },

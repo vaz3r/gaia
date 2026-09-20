@@ -33,6 +33,19 @@ def get_pool() -> pool.ThreadedConnectionPool:
         )
     return _connection_pool
 
+def release_conn(p: pool.ThreadedConnectionPool, conn: Any, close: bool = False) -> None:
+    """Safely roll back any uncommitted transaction before returning connection to pool."""
+    if conn and not getattr(conn, "closed", False):
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    if conn:
+        try:
+            p.putconn(conn, close=close)
+        except Exception:
+            pass
+
 def hex_to_bytea(hex_str: str) -> bytes:
     cleaned = hex_str.strip().lower()
     if cleaned.startswith("0x"):
@@ -202,7 +215,7 @@ def get_torrents(
                 "limit": limit
             }
     finally:
-        p.putconn(conn)
+        release_conn(p, conn)
 
 def get_torrent_by_infohash(hex_infohash: str) -> Optional[Dict[str, Any]]:
     """Retrieve full details of a specific torrent by infohash."""
@@ -261,7 +274,7 @@ def get_torrent_by_infohash(hex_infohash: str) -> Optional[Dict[str, Any]]:
                 "classification_meta": classification_meta
             }
     finally:
-        p.putconn(conn)
+        release_conn(p, conn)
 
 def fetch_training_data(min_confidence: str = 'medium', limit: Optional[int] = None) -> List[Dict[str, Any]]:
     """Query ground truth dataset directly from labeled_results joined with torrents.
@@ -356,7 +369,7 @@ def fetch_training_data(min_confidence: str = 'medium', limit: Optional[int] = N
             cur.close()
         except Exception:
             pass
-        p.putconn(conn)
+        release_conn(p, conn)
 
 def fetch_recent_canary_slice(limit: int = 1000) -> List[Dict[str, Any]]:
     """Fetch a slice of recent torrents for shadow/canary distribution testing."""
@@ -400,7 +413,7 @@ def fetch_recent_canary_slice(limit: int = 1000) -> List[Dict[str, Any]]:
                 })
             return items
     finally:
-        p.putconn(conn)
+        release_conn(p, conn)
 
 def fetch_review_queue_slice(limit: int = 2000) -> List[Dict[str, Any]]:
     """Fetch torrents that currently require review (needs_review = true) for model validation."""
@@ -445,7 +458,7 @@ def fetch_review_queue_slice(limit: int = 2000) -> List[Dict[str, Any]]:
                 })
             return items
     finally:
-        p.putconn(conn)
+        release_conn(p, conn)
 
 def fetch_unclassified_batch(limit: int = 2000) -> List[Dict[str, Any]]:
     """Fetch unclassified batch using FOR UPDATE SKIP LOCKED to prevent multi-worker collisions."""
@@ -497,7 +510,7 @@ def fetch_unclassified_batch(limit: int = 2000) -> List[Dict[str, Any]]:
             pass
         raise
     finally:
-        p.putconn(conn)
+        release_conn(p, conn)
 
 _DISABLED_CAT_CACHE: Dict[str, Any] = {"ts": 0.0, "cats": set()}
 
@@ -524,7 +537,7 @@ def get_disabled_categories() -> set:
             pass
         return _DISABLED_CAT_CACHE["cats"]
     finally:
-        p.putconn(conn)
+        release_conn(p, conn)
 
 def bulk_update_classifications(records: List[Dict[str, Any]], max_retries: int = 3) -> int:
     """Execute high-speed single-statement bulk update via UNNEST with deadlock retry.
@@ -576,7 +589,7 @@ def bulk_update_classifications(records: List[Dict[str, Any]], max_retries: int 
                 except Exception:
                     pass
             finally:
-                p.putconn(conn)
+                release_conn(p, conn)
 
         records = allowed_records
         if not records:
@@ -636,11 +649,7 @@ def bulk_update_classifications(records: List[Dict[str, Any]], max_retries: int 
                 continue
             raise
         finally:
-            if conn:
-                try:
-                    p.putconn(conn, close=conn.closed)
-                except Exception:
-                    pass
+            release_conn(p, conn, close=conn.closed if conn else False)
 
     return 0
 
@@ -702,7 +711,7 @@ def upsert_label(
                 "status": "upserted"
             }
     finally:
-        p.putconn(conn)
+        release_conn(p, conn)
 
 _metrics_cache: Optional[Dict[str, Any]] = None
 _metrics_cache_ts: float = 0.0
@@ -793,8 +802,4 @@ def get_queue_metrics() -> Dict[str, Any]:
             return _metrics_cache
         raise e
     finally:
-        if conn:
-            try:
-                p.putconn(conn)
-            except Exception:
-                pass
+        release_conn(p, conn)

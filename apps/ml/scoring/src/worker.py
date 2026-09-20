@@ -77,6 +77,8 @@ class ScoringWorker:
         if not rows:
             return 0
 
+        self.touch_heartbeat()
+
         # 1. Vectorized feature extraction
         feat_matrix = []
         for r in rows:
