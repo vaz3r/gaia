@@ -1,23 +1,42 @@
+const inFlightRequests = new Map();
+
 export async function api(path, options = {}) {
-  const fetchOptions = { ...options };
-  fetchOptions.headers = { ...(fetchOptions.headers || {}) };
-  const adminToken = typeof window !== 'undefined' ? (localStorage.getItem('gaia_admin_token') || window.__GAIA_ADMIN_TOKEN__) : null;
-  if (adminToken) {
-    fetchOptions.headers['X-Gaia-Admin-Token'] = adminToken;
+  const method = (options.method || 'GET').toUpperCase();
+  const isGet = method === 'GET';
+  const cacheKey = isGet ? path : null;
+
+  if (cacheKey && inFlightRequests.has(cacheKey)) {
+    return inFlightRequests.get(cacheKey);
   }
-  if (fetchOptions.body && typeof fetchOptions.body === 'string' && !fetchOptions.headers['Content-Type']) {
-    fetchOptions.headers['Content-Type'] = 'application/json';
-  }
-  const r = await fetch(path, fetchOptions);
-  if (!r.ok) {
-    let msg = `HTTP ${r.status}`;
+
+  const promise = (async () => {
     try {
-      const j = await r.json();
-      msg = j.error || j.detail || msg;
-    } catch {}
-    throw new Error(msg);
-  }
-  return r.json();
+      const fetchOptions = { ...options };
+      fetchOptions.headers = { ...(fetchOptions.headers || {}) };
+      const adminToken = typeof window !== 'undefined' ? (localStorage.getItem('gaia_admin_token') || window.__GAIA_ADMIN_TOKEN__) : null;
+      if (adminToken) {
+        fetchOptions.headers['X-Gaia-Admin-Token'] = adminToken;
+      }
+      if (fetchOptions.body && typeof fetchOptions.body === 'string' && !fetchOptions.headers['Content-Type']) {
+        fetchOptions.headers['Content-Type'] = 'application/json';
+      }
+      const r = await fetch(path, fetchOptions);
+      if (!r.ok) {
+        let msg = `HTTP ${r.status}`;
+        try {
+          const j = await r.json();
+          msg = j.error || j.detail || msg;
+        } catch {}
+        throw new Error(msg);
+      }
+      return await r.json();
+    } finally {
+      if (cacheKey) inFlightRequests.delete(cacheKey);
+    }
+  })();
+
+  if (cacheKey) inFlightRequests.set(cacheKey, promise);
+  return promise;
 }
 
 let cachedTrackers = ''

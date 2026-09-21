@@ -779,8 +779,36 @@ public class DashboardRepository
 
         var where = $"WHERE {string.Join(" AND ", whereClauses)}";
 
-        var countSql = $"SELECT count(*) FROM dht_surveillance_nodes {where}";
-        var total = await conn.ExecuteScalarAsync<long>(countSql, builder);
+        const string statsCacheKey = "dashboard:surveillance:global_stats";
+        if (!_memoryCache.TryGetValue(statsCacheKey, out dynamic? stats) || stats == null)
+        {
+            const string statsSql = @"
+                SELECT 
+                    COUNT(*) AS total_surveillance_nodes,
+                    COUNT(*) FILTER (WHERE is_blocked = TRUE) AS blocked_nodes,
+                    COUNT(*) FILTER (WHERE abuse_category = 'Sybil Node Rotator' OR distinct_node_ids > 1) AS sybil_nodes,
+                    COUNT(*) FILTER (WHERE abuse_category = 'Passive Swarm Monitor' OR (get_peers_count >= 10 AND announce_peer_count = 0)) AS passive_monitors,
+                    COUNT(*) FILTER (WHERE abuse_category = 'DHT Table Scraper' OR find_node_count >= 20) AS dht_scrapers,
+                    COUNT(*) FILTER (WHERE abuse_category = 'Unreciprocating Leecher' OR (query_count >= 10 AND announce_peer_count = 0)) AS unreciprocating_leechers,
+                    COALESCE(SUM(query_count), 0) AS total_intercepted_queries,
+                    COALESCE(SUM(bep42_violations), 0) AS total_bep42_violations
+                FROM dht_surveillance_nodes";
+
+            stats = await conn.QuerySingleAsync(statsSql);
+            _memoryCache.Set(statsCacheKey, (object)stats, TimeSpan.FromMinutes(5));
+        }
+
+        var isDefaultFilter = whereClauses.Count == 1 && minScore <= 0;
+        long total;
+        if (isDefaultFilter && stats != null)
+        {
+            total = (long)(stats.total_surveillance_nodes ?? 0);
+        }
+        else
+        {
+            var countSql = $"SELECT count(*) FROM dht_surveillance_nodes {where}";
+            total = await conn.ExecuteScalarAsync<long>(countSql, builder);
+        }
 
         var dataSql = $@"
             SELECT host(ip) AS ip, asn, org, score, query_count, distinct_hashes,
@@ -799,25 +827,6 @@ public class DashboardRepository
             LIMIT {safeLimit} OFFSET {offset}";
 
         var nodes = (await conn.QueryAsync(dataSql, builder)).ToList();
-
-        const string statsCacheKey = "dashboard:surveillance:global_stats";
-        if (!_memoryCache.TryGetValue(statsCacheKey, out object? stats) || stats == null)
-        {
-            const string statsSql = @"
-                SELECT 
-                    COUNT(*) AS total_surveillance_nodes,
-                    COUNT(*) FILTER (WHERE is_blocked = TRUE) AS blocked_nodes,
-                    COUNT(*) FILTER (WHERE abuse_category = 'Sybil Node Rotator' OR distinct_node_ids > 1) AS sybil_nodes,
-                    COUNT(*) FILTER (WHERE abuse_category = 'Passive Swarm Monitor' OR (get_peers_count >= 10 AND announce_peer_count = 0)) AS passive_monitors,
-                    COUNT(*) FILTER (WHERE abuse_category = 'DHT Table Scraper' OR find_node_count >= 20) AS dht_scrapers,
-                    COUNT(*) FILTER (WHERE abuse_category = 'Unreciprocating Leecher' OR (query_count >= 10 AND announce_peer_count = 0)) AS unreciprocating_leechers,
-                    COALESCE(SUM(query_count), 0) AS total_intercepted_queries,
-                    COALESCE(SUM(bep42_violations), 0) AS total_bep42_violations
-                FROM dht_surveillance_nodes";
-
-            stats = await conn.QuerySingleAsync(statsSql);
-            _memoryCache.Set(statsCacheKey, (object)stats, TimeSpan.FromSeconds(60));
-        }
 
         return new
         {
@@ -1339,26 +1348,66 @@ public class DashboardRepository
 
     private static AnalysisTelemetry? _lastAnalysisTelemetry;
 
+    public async Task PreWarmAnalysisTelemetryAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            const string telemetryCacheKey = "dashboard:analysis:telemetry";
+            if (!_memoryCache.TryGetValue(telemetryCacheKey, out AnalysisTelemetry? _))
+            {
+                _logger.LogInformation("Pre-warming dashboard analysis telemetry in background...");
+                var telemetry = await ComputeAnalysisTelemetryAsync(ct);
+                _lastAnalysisTelemetry = telemetry;
+                _memoryCache.Set(telemetryCacheKey, telemetry, TimeSpan.FromMinutes(15));
+                _logger.LogInformation("Dashboard analysis telemetry pre-warmed successfully.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Background pre-warm of analysis telemetry encountered non-fatal error");
+        }
+    }
+
     public async Task<object> GetAnalysisDataAsync(string? selectedCategory, CancellationToken ct)
     {
         var category = string.IsNullOrWhiteSpace(selectedCategory) || selectedCategory.Equals("All", StringComparison.OrdinalIgnoreCase)
             ? null
             : selectedCategory.Trim();
 
-        // 1. Global Telemetry (cached for 15 minutes with resilient fallback)
+        // 1. Global Telemetry (cached for 15 minutes with stale-while-revalidate)
         const string telemetryCacheKey = "dashboard:analysis:telemetry";
         if (!_memoryCache.TryGetValue(telemetryCacheKey, out AnalysisTelemetry? telemetry) || telemetry == null)
         {
-            try
+            if (_lastAnalysisTelemetry != null)
             {
-                telemetry = await ComputeAnalysisTelemetryAsync(ct);
-                _lastAnalysisTelemetry = telemetry;
-                _memoryCache.Set(telemetryCacheKey, telemetry, TimeSpan.FromMinutes(15));
-            }
-            catch (Exception ex) when (_lastAnalysisTelemetry != null)
-            {
-                _logger.LogWarning(ex, "Failed to compute fresh analysis telemetry; serving cached fallback telemetry.");
+                // Stale-while-revalidate: return previous cached snapshot immediately, recompute in background
                 telemetry = _lastAnalysisTelemetry;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var fresh = await ComputeAnalysisTelemetryAsync(CancellationToken.None);
+                        _lastAnalysisTelemetry = fresh;
+                        _memoryCache.Set(telemetryCacheKey, fresh, TimeSpan.FromMinutes(15));
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Background recomputation of analysis telemetry failed");
+                    }
+                });
+            }
+            else
+            {
+                try
+                {
+                    telemetry = await ComputeAnalysisTelemetryAsync(ct);
+                    _lastAnalysisTelemetry = telemetry;
+                    _memoryCache.Set(telemetryCacheKey, telemetry, TimeSpan.FromMinutes(15));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to compute fresh analysis telemetry");
+                }
             }
         }
 

@@ -137,12 +137,14 @@ builder.Services.AddOutputCache(opts =>
 
 var app = builder.Build();
 
-// Warm up the Npgsql connection pool on startup (eliminates cold-start P99 spikes)
+// Warm up the Npgsql connection pool and heavy dashboard aggregates on startup
 var db = app.Services.GetRequiredService<DatabaseService>();
+var repo = app.Services.GetRequiredService<DashboardRepository>();
 _ = Task.Run(async () =>
 {
     await Task.Delay(500);
     try { await db.WarmUpAsync(); } catch { /* non-fatal */ }
+    try { await repo.PreWarmAnalysisTelemetryAsync(); } catch { /* non-fatal */ }
 });
 
 app.UseCors("AllowAll");

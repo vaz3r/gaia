@@ -57,7 +57,9 @@ import { formatBytes, formatNum, formatTime, formatUptime, formatDubaiDate, form
 import AnalysisView from './components/AnalysisView.jsx';
 import ClassifierView from './components/ClassifierView.jsx';
 import SurveillanceRadar from './components/SurveillanceRadar.jsx';
-import { useTelemetryStream } from './useTelemetryStream.js';
+import { useTelemetryStore } from './stores/telemetryStore.js';
+import { useBrowserStore } from './stores/browserStore.js';
+import { usePeersStore } from './stores/peersStore.js';
 
 export const CANONICAL_CATEGORIES = [
   'Adult',
@@ -87,314 +89,118 @@ export const CATEGORY_COLORS = {
 };
 
 export default function App() {
-  // Realtime push stream via SSE (/api/live/stream)
-  const { telemetry: streamData, connected: streamConnected } = useTelemetryStream();
-
   // Navigation & Primary Views: 'overview' | 'browser' | 'classifier' | 'content_intelligence' | 'routing' | 'diagnostics'
   const [activeTab, setActiveTab] = useState('overview');
-  const [classifierReviewCount, setClassifierReviewCount] = useState(null);
-  const [classifierTotalClassified, setClassifierTotalClassified] = useState(null);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const moreMenuRef = useRef(null);
   const [scaleMode, setScaleMode] = useState('log'); // 'linear' | 'log'
   const [hoveredIdx, setHoveredIdx] = useState(null);
   const [hoveredBarIdx, setHoveredBarIdx] = useState(null);
   const [hoveredDayIdx, setHoveredDayIdx] = useState(null);
-
-  // Real backend state
-  const [serverStats, setServerStats] = useState(null);
-  const [serverMetrics, setServerMetrics] = useState(null);
-  const [analyticsData, setAnalyticsData] = useState(null);
-  const [historyPoints, setHistoryPoints] = useState([]);
-  const [logsList, setLogsList] = useState([]);
-
-  // Browser state (Server-side paginated & sorted)
-  const [torrentsPage, setTorrentsPage] = useState(1);
-  const [torrentsLimit, setTorrentsLimit] = useState(25);
-  const [sortField, setSortField] = useState('verified_at'); // 'verified_at' | 'size' | 'files' | 'name'
-  const [sortOrder, setSortOrder] = useState('desc'); // 'asc' | 'desc'
-  const [searchInput, setSearchInput] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState('');
-  const [torrentsData, setTorrentsData] = useState({ data: [], total: 0, pages: 1, page: 1 });
-  const [torrentsLoading, setTorrentsLoading] = useState(false);
-
-  // Stable Peers Explorer state
-  const [peersPage, setPeersPage] = useState(1);
-  const [peersLimit, setPeersLimit] = useState(25);
-  const [peersSortField, setPeersSortField] = useState('metadata_provided_count');
-  const [peersSortOrder, setPeersSortOrder] = useState('desc');
-  const [peersSearchInput, setPeersSearchInput] = useState('');
-  const [peersSearchQuery, setPeersSearchQuery] = useState('');
-  const [peersData, setPeersData] = useState({ data: [], total: 0, pages: 1, page: 1, summary: {} });
-  const [peersLoading, setPeersLoading] = useState(false);
   const [copiedPeer, setCopiedPeer] = useState(null);
-  const [selectedPeer, setSelectedPeer] = useState(null);
-  const [peerTorrentsLoading, setPeerTorrentsLoading] = useState(false);
-  const [peerTorrentsList, setPeerTorrentsList] = useState([]);
-
-  // Inspector & modal state
-  const [selectedTorrent, setSelectedTorrent] = useState(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [refreshingHealth, setRefreshingHealth] = useState(false);
   const [copiedHash, setCopiedHash] = useState(null);
   const [copiedMagnet, setCopiedMagnet] = useState(false);
-  const [downloadingIh, setDownloadingIh] = useState(null);
-
-  const handleDownloadTorrent = async (t, e) => {
-    if (e) e.stopPropagation();
-    const hash = t.infohash || t.hash;
-    if (!hash || downloadingIh) return;
-    setDownloadingIh(hash);
-    try {
-      await downloadTorrent(hash, t.name);
-    } catch (err) {
-      console.warn('On-the-fly .torrent assembly fallback:', err.message);
-      if (err.magnet) {
-        copyToClipboard(err.magnet, 'magnet');
-        alert('Active seeders temporarily busy for direct .torrent assembly. Copied Turbo-Magnet link with live seeders to clipboard!');
-      } else {
-        const fallbackMagnet = generateMagnetLink(t);
-        copyToClipboard(fallbackMagnet, 'magnet');
-        alert('Direct .torrent fetch timed out. Copied Magnet link to clipboard!');
-      }
-    } finally {
-      setDownloadingIh(null);
-    }
-  };
-
-  const handleRefreshHealth = async (infohash) => {
-    if (!infohash || refreshingHealth) return;
-    setRefreshingHealth(true);
-    try {
-      const res = await api(`/api/torrents/${infohash}/refresh-health`, { method: 'POST' });
-      if (res && res.infohash) {
-        setSelectedTorrent((prev) => (prev && prev.infohash === res.infohash ? { ...prev, ...res } : prev));
-        // Also update the row in torrentsData if present
-        setTorrentsData((prev) => ({
-          ...prev,
-          data: prev.data.map((t) => (t.infohash === res.infohash ? { ...t, ...res } : t)),
-        }));
-      }
-    } catch (err) {
-      console.error('Failed to refresh health:', err);
-    } finally {
-      setRefreshingHealth(false);
-    }
-  };
-
-  // Operational Alerts state (gaia-anomaly-worker)
-  const [alertsSummary, setAlertsSummary] = useState(null);
-  const [alertsList, setAlertsList] = useState([]);
-  const [alertsLoading, setAlertsLoading] = useState(false);
+  const [modalCategorySelect, setModalCategorySelect] = useState('');
+  const [logFilter, setLogFilter] = useState('ALL');
+  const [logsList, setLogsList] = useState([]);
   const [resolvingAlertId, setResolvingAlertId] = useState(null);
 
-  // Risk & Policy Filters for Explorer
-  const [riskFilter, setRiskFilter] = useState('');
-
-  // Human scoring override handler for Inspector Modal
-  const [modalOverriding, setModalOverriding] = useState(false);
-  const [modalRelabeling, setModalRelabeling] = useState(false);
-  const [modalCategorySelect, setModalCategorySelect] = useState('');
-  const [modalRelabelMsg, setModalRelabelMsg] = useState(null);
-
-  const handleModalScoreOverride = async (infohash, action) => {
-    if (!infohash || modalOverriding) return;
-    setModalOverriding(true);
-    try {
-      const res = await api('/api/scoring/override', {
-        method: 'POST',
-        body: JSON.stringify({ infohash, action, notes: 'Inspector modal manual triage' })
-      });
-      if (res.success) {
-        setSelectedTorrent((prev) => prev && prev.infohash === infohash ? {
-          ...prev,
-          risk_tier: action === 'ALLOW' ? 'SAFE' : action === 'SUPPRESS' ? 'BLOCKED' : 'REVIEW',
-          policy_action: action,
-          decision_source: 'MANUAL'
-        } : prev);
-        setTorrentsData((prev) => ({
-          ...prev,
-          data: prev.data.map((t) => t.infohash === infohash ? {
-            ...t,
-            risk_tier: action === 'ALLOW' ? 'SAFE' : action === 'SUPPRESS' ? 'BLOCKED' : 'REVIEW',
-            policy_action: action,
-            decision_source: 'MANUAL'
-          } : t)
-        }));
-      }
-    } catch (err) {
-      alert(`Override failed: ${err.message}`);
-    } finally {
-      setModalOverriding(false);
-    }
-  };
-
-  const handleModalSaveCategory = async () => {
-    const ih = selectedTorrent?.infohash || selectedTorrent?.hash;
-    if (!ih || !modalCategorySelect || modalRelabeling) return;
-    setModalRelabeling(true);
-    setModalRelabelMsg(null);
-    try {
-      const res = await fetch('/api/classifier/labels', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          infohash: ih,
-          category: modalCategorySelect,
-          reason: 'Manual category relabel via Inspector modal'
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Failed to save label');
-
-      setSelectedTorrent((prev) => prev ? {
-        ...prev,
-        category: modalCategorySelect,
-        category_confidence: 1.0,
-        needs_review: false
-      } : prev);
-
-      setTorrentsData((prev) => ({
-        ...prev,
-        data: prev.data.map((t) => (t.infohash === ih ? {
-          ...t,
-          category: modalCategorySelect,
-          category_confidence: 1.0,
-          needs_review: false
-        } : t))
-      }));
-
-      setModalRelabelMsg({ type: 'success', text: `Saved "${modalCategorySelect}" as ground truth!` });
-      setTimeout(() => setModalRelabelMsg(null), 3000);
-    } catch (err) {
-      setModalRelabelMsg({ type: 'error', text: err.message });
-    } finally {
-      setModalRelabeling(false);
-    }
-  };
-
-  const fetchAlerts = async () => {
-    setAlertsLoading(true);
-    try {
-      const res = await api('/api/alerts');
-      if (res?.summary) setAlertsSummary(res.summary);
-      if (res?.alerts) setAlertsList(res.alerts);
-    } catch (err) {
-      console.warn('Failed to load operational alerts:', err.message);
-    } finally {
-      setAlertsLoading(false);
-    }
-  };
-
-  const handleResolveAlert = async (id) => {
-    setResolvingAlertId(id);
-    try {
-      const res = await api(`/api/alerts/${id}/resolve`, { method: 'POST' });
-      if (res?.success) {
-        fetchAlerts();
-      }
-    } catch (err) {
-      alert(`Failed to resolve alert: ${err.message}`);
-    } finally {
-      setResolvingAlertId(null);
-    }
-  };
-
-  // Diagnostics & Routing state
-  const [logFilter, setLogFilter] = useState('ALL');
-  const [routingSecurity, setRoutingSecurity] = useState(null);
-
-  // Realtime tick pulse
+  // Realtime tick pulse (for animated visual latency/radar effect)
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => setTick((t) => t + 1), 2200);
     return () => clearInterval(timer);
   }, []);
 
-  // Search input debouncer for Torrents
-  const searchDebounceRef = useRef(null);
-  const handleSearchChange = (val) => {
-    setSearchInput(val);
-    clearTimeout(searchDebounceRef.current);
-    searchDebounceRef.current = setTimeout(() => {
-      const trimmed = val.trim();
-      setSearchQuery(trimmed);
-      if (trimmed && sortField === 'verified_at') {
-        setSortField('relevance');
-      } else if (!trimmed && sortField === 'relevance') {
-        setSortField('verified_at');
-      }
-      setTorrentsPage(1);
-    }, 350);
-  };
+  // ── Centralized Telemetry Store ──────────────────────────────────────────
+  const serverStats = useTelemetryStore((s) => s.serverStats);
+  const serverMetrics = useTelemetryStore((s) => s.serverMetrics);
+  const analyticsData = useTelemetryStore((s) => s.analyticsData);
+  const historyPoints = useTelemetryStore((s) => s.historyPoints);
+  const alertsSummary = useTelemetryStore((s) => s.alertsSummary);
+  const alertsList = useTelemetryStore((s) => s.alertsList);
+  const alertsLoading = useTelemetryStore((s) => s.alertsLoading);
+  const routingSecurity = useTelemetryStore((s) => s.routingSecurity);
+  const classifierReviewCount = useTelemetryStore((s) => s.classifierReviewCount);
+  const classifierTotalClassified = useTelemetryStore((s) => s.classifierTotalClassified);
+  const streamConnected = useTelemetryStore((s) => s.streamConnected);
 
-  const handleClearSearch = () => {
-    setSearchInput('');
-    setSearchQuery('');
-    if (sortField === 'relevance') {
-      setSortField('verified_at');
+  const handleResolveAlert = async (id) => {
+    setResolvingAlertId(id);
+    try {
+      await useTelemetryStore.getState().resolveAlert(id);
+    } finally {
+      setResolvingAlertId(null);
     }
-    setTorrentsPage(1);
   };
 
-  // Search input debouncer for Peers
-  const peerSearchDebounceRef = useRef(null);
-  const handlePeerSearchChange = (val) => {
-    setPeersSearchInput(val);
-    clearTimeout(peerSearchDebounceRef.current);
-    peerSearchDebounceRef.current = setTimeout(() => {
-      setPeersSearchQuery(val.trim());
-      setPeersPage(1);
-    }, 350);
+  // ── Centralized Browser Store ────────────────────────────────────────────
+  const torrentsPage = useBrowserStore((s) => s.page);
+  const torrentsLimit = useBrowserStore((s) => s.limit);
+  const sortField = useBrowserStore((s) => s.sortField);
+  const sortOrder = useBrowserStore((s) => s.sortOrder);
+  const searchInput = useBrowserStore((s) => s.searchInput);
+  const searchQuery = useBrowserStore((s) => s.searchQuery);
+  const categoryFilter = useBrowserStore((s) => s.categoryFilter);
+  const riskFilter = useBrowserStore((s) => s.riskFilter);
+  const torrentsData = useBrowserStore((s) => s.torrentsData);
+  const torrentsLoading = useBrowserStore((s) => s.loading);
+
+  const selectedTorrent = useBrowserStore((s) => s.selectedTorrent);
+  const detailLoading = useBrowserStore((s) => s.detailLoading);
+  const refreshingHealth = useBrowserStore((s) => s.refreshingHealth);
+  const downloadingIh = useBrowserStore((s) => s.downloadingIh);
+  const modalOverriding = useBrowserStore((s) => s.modalOverriding);
+  const modalRelabeling = useBrowserStore((s) => s.modalRelabeling);
+  const modalRelabelMsg = useBrowserStore((s) => s.modalRelabelMsg);
+
+  const setTorrentsPage = useBrowserStore((s) => s.setPage);
+  const setTorrentsLimit = useBrowserStore((s) => s.setLimit);
+  const setSortField = (f) => useBrowserStore.getState().setSorting(f, useBrowserStore.getState().sortOrder);
+  const setSortOrder = (o) => useBrowserStore.getState().setSorting(useBrowserStore.getState().sortField, o);
+  const setCategoryFilter = useBrowserStore((s) => s.setCategoryFilter);
+  const setRiskFilter = useBrowserStore((s) => s.setRiskFilter);
+  const setSelectedTorrent = useBrowserStore((s) => s.setSelectedTorrent);
+  const handleSearchChange = useBrowserStore((s) => s.handleSearchChange);
+  const handleClearSearch = useBrowserStore((s) => s.clearSearch);
+  const handleDownloadTorrent = (t, e) => {
+    if (e) e.stopPropagation();
+    useBrowserStore.getState().downloadTorrent(t);
+  };
+  const handleRefreshHealth = useBrowserStore((s) => s.refreshTorrentHealth);
+  const handleModalScoreOverride = useBrowserStore((s) => s.scoreOverride);
+  const handleModalSaveCategory = () => {
+    const ih = selectedTorrent?.infohash || selectedTorrent?.hash;
+    useBrowserStore.getState().saveCategoryLabel(ih, modalCategorySelect);
   };
 
-  const handleClearPeerSearch = () => {
-    setPeersSearchInput('');
-    setPeersSearchQuery('');
-    setPeersPage(1);
-  };
+  // ── Centralized Peers Store ──────────────────────────────────────────────
+  const peersPage = usePeersStore((s) => s.page);
+  const peersLimit = usePeersStore((s) => s.limit);
+  const peersSortField = usePeersStore((s) => s.sortField);
+  const peersSortOrder = usePeersStore((s) => s.sortOrder);
+  const peersSearchInput = usePeersStore((s) => s.searchInput);
+  const peersSearchQuery = usePeersStore((s) => s.searchQuery);
+  const peersData = usePeersStore((s) => s.peersData);
+  const peersLoading = usePeersStore((s) => s.loading);
+  const selectedPeer = usePeersStore((s) => s.selectedPeer);
+  const peerTorrentsList = usePeersStore((s) => s.peerTorrentsList);
+  const peerTorrentsLoading = usePeersStore((s) => s.peerTorrentsLoading);
 
-  // Synchronize realtime push data from SSE stream
+  const setPeersPage = usePeersStore((s) => s.setPage);
+  const setPeersLimit = usePeersStore((s) => s.setLimit);
+  const setPeersSortField = (f) => usePeersStore.getState().setSorting(f, usePeersStore.getState().sortOrder);
+  const setPeersSortOrder = (o) => usePeersStore.getState().setSorting(usePeersStore.getState().sortField, o);
+  const handlePeerSearchChange = usePeersStore((s) => s.handleSearchChange);
+  const handleClearPeerSearch = usePeersStore((s) => s.clearSearch);
+  const setSelectedPeer = usePeersStore((s) => s.selectPeer);
+
+  // ── One-Time Mount Lifecycle (Zero re-trigger loops) ──────────────────────
   useEffect(() => {
-    if (!streamData) return;
-    if (streamData.serverStats) setServerStats(streamData.serverStats);
-    if (streamData.serverMetrics) setServerMetrics(streamData.serverMetrics);
-    if (streamData.analyticsData) setAnalyticsData(streamData.analyticsData);
-    if (streamData.alertsSummary) setAlertsSummary(streamData.alertsSummary);
-  }, [streamData]);
-
-  // Initial load and fallback polling for supplementary telemetry
-  useEffect(() => {
-    loadTrackers();
-
-    // Immediate initial fetch to ensure fast first-render data
-    api('/api/stats').then(setServerStats).catch(() => {});
-    api('/api/metrics/current').then(setServerMetrics).catch(() => {});
-    api('/api/analytics').then((res) => { if (res) setAnalyticsData(res); }).catch(() => {});
-    fetchAlerts();
-
-    const fetchSupplemental = () => {
-      // If SSE is not connected or metrics are missing, poll core stats
-      if (!streamConnected || !serverMetrics) {
-        api('/api/stats').then(setServerStats).catch(() => {});
-        api('/api/metrics/current').then(setServerMetrics).catch(() => {});
-        api('/api/analytics').then((res) => { if (res) setAnalyticsData(res); }).catch(() => {});
-        fetchAlerts();
-      }
-
-      // Supplementary telemetry polled at low frequency (60s)
-      api('/api/routing/security').then((res) => { if (res) setRoutingSecurity(res); }).catch(() => {});
-      api('/api/classifier/metrics').then((res) => {
-        if (res?.review_queue_depth != null) setClassifierReviewCount(res.review_queue_depth);
-        if (res?.total_classified != null) setClassifierTotalClassified(res.total_classified);
-      }).catch(() => {});
-    };
-
-    fetchSupplemental();
-    const interval = setInterval(fetchSupplemental, 15000);
-    return () => clearInterval(interval);
-  }, [streamConnected, serverMetrics]);
+    useTelemetryStore.getState().init();
+    useBrowserStore.getState().fetchTorrents();
+    usePeersStore.getState().fetchPeers();
+  }, []);
 
   // Click-outside listener for More menu dropdown
   useEffect(() => {
@@ -410,123 +216,6 @@ export default function App() {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [moreMenuOpen]);
-
-  // Fetch 60-minute history for chart telemetry
-  useEffect(() => {
-    const fetchHistory = async () => {
-      try {
-        const [vRes, aRes] = await Promise.all([
-          api('/api/metrics/history?metric=verify_success&interval=minute').catch(() => null),
-          api('/api/metrics/history?metric=infohashes_harvested&interval=minute').catch(() => null),
-        ]);
-
-        if (vRes?.data && vRes.data.length > 0) {
-          const vData = vRes.data;
-          const aData = aRes?.data || [];
-          const pts = [];
-
-          for (let i = 1; i < vData.length; i++) {
-            const timeStr = formatDubaiTimeHM(vData[i].t);
-            const dtMin = Math.max(1, (vData[i].t - vData[i - 1].t) / 60000);
-
-            // Verified rate per hour
-            const dVerified = Math.max(0, vData[i].value - vData[i - 1].value);
-            const verifiedRateKh = (dVerified * (60 / dtMin)) / 1000;
-
-            // Harvested rate per hour
-            let discoveredRateMh = 2.3;
-            if (aData[i] && aData[i - 1]) {
-              const dDiscovered = Math.max(0, aData[i].value - aData[i - 1].value);
-              discoveredRateMh = (dDiscovered * (60 / dtMin)) / 1000000;
-            }
-
-            const attemptsRateKh = verifiedRateKh > 0 ? (verifiedRateKh * 24.8) : 620;
-
-            pts.push({
-              time: timeStr,
-              discovered: Number(discoveredRateMh.toFixed(2)),
-              attempts: Number(attemptsRateKh.toFixed(1)),
-              verified: Number(verifiedRateKh.toFixed(1)),
-              failed: Number((attemptsRateKh * 0.97).toFixed(1)),
-              idx: i - 1,
-            });
-          }
-
-          if (pts.length > 5) {
-            setHistoryPoints(pts.slice(-25));
-          }
-        }
-      } catch {}
-    };
-
-    fetchHistory();
-    const histInterval = setInterval(fetchHistory, 120000); // 2 minutes (historical trend)
-    return () => clearInterval(histInterval);
-  }, []);
-
-  // Server-side Torrent Browser data fetch
-  useEffect(() => {
-    let active = true;
-    setTorrentsLoading(true);
-
-    const params = new URLSearchParams({
-      page: torrentsPage,
-      limit: torrentsLimit,
-    });
-    if (sortField && sortField !== 'relevance') {
-      params.set('sort', sortField);
-      params.set('order', sortOrder);
-    }
-    if (searchQuery) params.set('search', searchQuery);
-    if (categoryFilter) params.set('category', categoryFilter);
-    if (riskFilter) params.set('risk', riskFilter);
-
-    api(`/api/dashboard/torrents?${params.toString()}`)
-      .then((res) => {
-        if (!active) return;
-        setTorrentsData(res);
-      })
-      .catch((err) => {
-        console.error('Failed to load torrents:', err);
-      })
-      .finally(() => {
-        if (active) setTorrentsLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [torrentsPage, torrentsLimit, sortField, sortOrder, searchQuery, categoryFilter, riskFilter]);
-
-  // Server-side Stable Peers data fetch
-  useEffect(() => {
-    let active = true;
-    setPeersLoading(true);
-
-    const params = new URLSearchParams({
-      page: peersPage,
-      limit: peersLimit,
-      sort: peersSortField,
-      order: peersSortOrder,
-    });
-    if (peersSearchQuery) params.set('search', peersSearchQuery);
-
-    api(`/api/peers?${params.toString()}`)
-      .then((res) => {
-        if (!active) return;
-        setPeersData(res);
-      })
-      .catch((err) => {
-        console.error('Failed to load stable peers:', err);
-      })
-      .finally(() => {
-        if (active) setPeersLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [peersPage, peersLimit, peersSortField, peersSortOrder, peersSearchQuery]);
 
   // Derived live telemetry metrics
   const metrics = useMemo(() => {

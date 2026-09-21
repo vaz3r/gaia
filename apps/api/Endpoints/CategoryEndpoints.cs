@@ -2,6 +2,7 @@ using System.Text.Json;
 using Dapper;
 using Gaia.Api.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace Gaia.Api.Endpoints;
 
@@ -10,14 +11,23 @@ public record StartPurgeRequest(int? ChunkSize, int? DelayMs);
 
 public static class CategoryEndpoints
 {
+    private const string CacheKey = "admin:categories:summary";
+
     public static void MapCategoryEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/admin/categories")
             .WithTags("Category Governance & Policies");
 
-        // 1. List all category policies with live torrent & tombstone counts
-        group.MapGet("/", async ([FromServices] DatabaseService db) =>
+        // 1. List all category policies with live torrent & tombstone counts (cached for 60s)
+        group.MapGet("/", async (
+            [FromServices] DatabaseService db,
+            [FromServices] IMemoryCache cache) =>
         {
+            if (cache.TryGetValue(CacheKey, out IEnumerable<dynamic>? cached) && cached != null)
+            {
+                return Results.Ok(cached);
+            }
+
             await using var conn = await db.DataSource.OpenConnectionAsync();
             const string sql = @"
                 SELECT 
@@ -49,7 +59,8 @@ public static class CategoryEndpoints
                     CASE WHEN cp.category = 'Adult' THEN 1 ELSE 2 END,
                     tc.torrent_count DESC NULLS LAST;";
 
-            var categories = await conn.QueryAsync(sql);
+            var categories = (await conn.QueryAsync(sql)).ToList();
+            cache.Set(CacheKey, categories, TimeSpan.FromSeconds(60));
             return Results.Ok(categories);
         });
 
@@ -59,8 +70,10 @@ public static class CategoryEndpoints
             [FromBody] UpdateCategoryPolicyRequest req,
             [FromServices] DatabaseService db,
             [FromServices] CacheService redis,
+            [FromServices] IMemoryCache cache,
             [FromServices] ILogger<DatabaseService> logger) =>
         {
+            cache.Remove(CacheKey);
             if (string.IsNullOrWhiteSpace(category))
                 return Results.BadRequest(new { error = "Category parameter cannot be empty" });
 
@@ -106,8 +119,10 @@ public static class CategoryEndpoints
         group.MapPost("/{category}/purge", async (
             string category,
             [FromBody] StartPurgeRequest? req,
-            [FromServices] CategoryPurgeService purgeService) =>
+            [FromServices] CategoryPurgeService purgeService,
+            [FromServices] IMemoryCache cache) =>
         {
+            cache.Remove(CacheKey);
             try
             {
                 var chunkSize = req?.ChunkSize ?? 250;
