@@ -53,7 +53,7 @@ public class MeiliClient
             searchableAttributes = new[] { "name_clean", "name" },
             filterableAttributes = new[] { "category", "risk_tier", "policy_action", "availability_state", "verified_at" },
             sortableAttributes = new[] { "total_size", "verified_at" },
-            rankingRules = new[] { "words", "typo", "proximity", "attribute", "exactness", "verified_at:desc" },
+            rankingRules = new[] { "words", "typo", "proximity", "attribute", "sort", "exactness" },
             distinctAttribute = (string?)null,
             typoTolerance = new
             {
