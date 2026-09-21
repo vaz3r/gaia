@@ -186,6 +186,80 @@ def diagnose():
                 "remediation": "Run `top -b -n 1` or inspect container CPU percentages."
             })
 
+        # Check root disk space utilization
+        disk_str = h.get("disk_root", "")
+        if "%" in disk_str:
+            try:
+                pct = int([x for x in disk_str.split() if "%" in x][0].replace("%", ""))
+                if pct >= 90:
+                    set_status("CRITICAL")
+                    findings.append({
+                        "subsystem": "Host Storage",
+                        "component": f"{target} ({h.get('hostname')})",
+                        "severity": "CRITICAL",
+                        "title": f"Root Disk Space Critical ({pct}% used)",
+                        "evidence": f"Root filesystem on `{target}` is {pct}% full: {disk_str}.",
+                        "root_cause": "Unchecked accumulation of log files, temporary dumps, or bloat.",
+                        "remediation": "Clean stale logs and check disk usage: `sudo du -sh /home/core/gaia-data/*`."
+                    })
+                elif pct >= 80:
+                    set_status("WARNING")
+                    findings.append({
+                        "subsystem": "Host Storage",
+                        "component": f"{target} ({h.get('hostname')})",
+                        "severity": "WARNING",
+                        "title": f"Root Disk Space Elevated ({pct}% used)",
+                        "evidence": f"Root filesystem on `{target}` is {pct}% full: {disk_str}.",
+                        "root_cause": "High disk utilization approaching capacity threshold.",
+                        "remediation": "Audit and prune old logs and container layers."
+                    })
+            except Exception:
+                pass
+
+    # ── Dashboard HTTP Reachability & Service Health ──
+    try:
+        dash_res = subprocess.run(
+            "curl -s -w '%{http_code}:%{time_total}' -m 5 -o /dev/null http://workspace-production:3000/",
+            shell=True, capture_output=True, text=True, timeout=8
+        )
+        dash_out = dash_res.stdout.strip()
+        if dash_out:
+            code, latency = dash_out.split(":")
+            latency_f = float(latency)
+            if code != "200":
+                set_status("CRITICAL")
+                findings.append({
+                    "subsystem": "Dashboard Service",
+                    "component": "gaia-dashboard",
+                    "severity": "CRITICAL",
+                    "title": f"Dashboard HTTP Endpoint Error (HTTP {code})",
+                    "evidence": f"HTTP GET http://workspace-production:3000/ returned status {code}.",
+                    "root_cause": "Dashboard application error or Kestrel backend exception.",
+                    "remediation": "Inspect container logs: `docker logs gaia-dashboard --tail 50`."
+                })
+            elif latency_f > 3.0:
+                set_status("WARNING")
+                findings.append({
+                    "subsystem": "Dashboard Service",
+                    "component": "gaia-dashboard",
+                    "severity": "WARNING",
+                    "title": f"Slow Dashboard Response ({latency_f:.2f}s latency)",
+                    "evidence": f"HTTP GET http://workspace-production:3000/ took {latency_f:.2f}s to respond.",
+                    "root_cause": "Host I/O wait, CPU throttling, or slow database queries.",
+                    "remediation": "Check database load and host CPU/disk utilization."
+                })
+    except Exception as e:
+        set_status("CRITICAL")
+        findings.append({
+            "subsystem": "Dashboard Service",
+            "component": "gaia-dashboard",
+            "severity": "CRITICAL",
+            "title": "Dashboard HTTP Endpoint Unreachable",
+            "evidence": f"Failed to connect to http://workspace-production:3000/ within 5s: {e}",
+            "root_cause": "Container unmapped, network/Tailscale routing failure, or process hang.",
+            "remediation": "Check container state (`docker ps | grep dashboard`) and Tailscale status (`tailscale status`)."
+        })
+
     # ── 4. Ingestion & Crawler Dynamics ──
     ingest_anomaly = crawler_data.get("ingestion_anomaly", "NONE")
     rate_delta = crawler_data.get("rate_delta_pct", 0.0)
