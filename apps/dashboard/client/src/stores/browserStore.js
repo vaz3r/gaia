@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { api, downloadTorrent, magnetFrom } from '../api.js';
+import { formatBytes } from '../utils.js';
 
 let abortController = null;
 let searchDebounceTimeout = null;
@@ -115,6 +116,42 @@ export const useBrowserStore = create((set, get) => ({
 
   setSelectedTorrent: (torrent) => {
     set({ selectedTorrent: torrent, modalRelabelMsg: null });
+  },
+
+  setDetailLoading: (detailLoading) => set({ detailLoading }),
+
+  inspectTorrent: async (torrent) => {
+    if (!torrent) {
+      set({ selectedTorrent: null, modalRelabelMsg: null });
+      return;
+    }
+    const hash = torrent.infohash || torrent.hash;
+    set({
+      selectedTorrent: { ...torrent, hash, files: [] },
+      detailLoading: Boolean(hash),
+      modalRelabelMsg: null,
+    });
+    if (hash) {
+      try {
+        const full = await api(`/api/torrents/${hash}`);
+        if (full) {
+          set((state) => ({
+            selectedTorrent: {
+              ...state.selectedTorrent,
+              ...full,
+              hash,
+              pieceLength: formatBytes(full.piece_length),
+              pieceCount: full.file_count || full.files?.length || 1,
+              files: Array.isArray(full.files) ? full.files : [],
+            },
+          }));
+        }
+      } catch (err) {
+        console.warn('Failed to load torrent details:', err);
+      } finally {
+        set({ detailLoading: false });
+      }
+    }
   },
 
   // Action: Refresh health metadata

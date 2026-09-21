@@ -115,11 +115,13 @@ export default function App() {
   // ── Centralized Telemetry Store ──────────────────────────────────────────
   const serverStats = useTelemetryStore((s) => s.serverStats);
   const serverMetrics = useTelemetryStore((s) => s.serverMetrics);
+  const scoringStats = useTelemetryStore((s) => s.scoringStats);
   const analyticsData = useTelemetryStore((s) => s.analyticsData);
   const historyPoints = useTelemetryStore((s) => s.historyPoints);
   const alertsSummary = useTelemetryStore((s) => s.alertsSummary);
   const alertsList = useTelemetryStore((s) => s.alertsList);
   const alertsLoading = useTelemetryStore((s) => s.alertsLoading);
+  const fetchAlerts = useTelemetryStore((s) => s.fetchAlerts);
   const routingSecurity = useTelemetryStore((s) => s.routingSecurity);
   const classifierReviewCount = useTelemetryStore((s) => s.classifierReviewCount);
   const classifierTotalClassified = useTelemetryStore((s) => s.classifierTotalClassified);
@@ -392,30 +394,7 @@ export default function App() {
 
   // Inspect torrent handler (load verified file list from Postgres)
   const handleInspectTorrent = (t) => {
-    const hash = t.infohash || t.hash;
-    setSelectedTorrent({
-      ...t,
-      hash,
-      files: [],
-    });
-    if (hash) {
-      setDetailLoading(true);
-      api(`/api/torrents/${hash}`)
-        .then((full) => {
-          if (full) {
-            setSelectedTorrent((prev) => ({
-              ...prev,
-              ...full,
-              hash,
-              pieceLength: formatBytes(full.piece_length),
-              pieceCount: full.file_count || full.files?.length || 1,
-              files: Array.isArray(full.files) ? full.files : [],
-            }));
-          }
-        })
-        .catch(() => {})
-        .finally(() => setDetailLoading(false));
-    }
+    useBrowserStore.getState().inspectTorrent(t);
   };
 
   // Toggle column sorting for Torrents
@@ -447,21 +426,7 @@ export default function App() {
   };
 
   const handleInspectPeer = (peer) => {
-    setSelectedPeer(peer);
-    setPeerTorrentsLoading(true);
-    setPeerTorrentsList([]);
-    api(`/api/peers/${peer.ip}/${peer.port}/torrents`)
-      .then((res) => {
-        if (res?.torrents) {
-          setPeerTorrentsList(res.torrents);
-        }
-      })
-      .catch((err) => {
-        console.error('Failed to load peer torrents:', err);
-      })
-      .finally(() => {
-        setPeerTorrentsLoading(false);
-      });
+    usePeersStore.getState().selectPeer(peer);
   };
 
   // Kademlia routing table buckets (keyspace fill based on 82.4% table density)
@@ -2514,7 +2479,7 @@ export default function App() {
             onInspectTorrent={(t) => {
               handleInspectTorrent(t);
             }}
-            streamScoringStats={streamData?.scoringStats}
+            streamScoringStats={scoringStats}
           />
         )}
 
