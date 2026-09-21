@@ -81,9 +81,17 @@ LLMNR=no
 Cache=yes
 EOF
 
-    # If Tailscale is running, disable its MagicDNS resolv.conf clobbering
+    # If Tailscale is running, configure supplementary group & disable MagicDNS resolv.conf clobbering
     if command -v tailscale >/dev/null 2>&1; then
         tailscale set --accept-dns=false 2>/dev/null || true
+        groupadd -r -f tailscale
+        mkdir -p /etc/systemd/system/tailscaled.service.d
+        cat > /etc/systemd/system/tailscaled.service.d/override.conf << 'TS_EOF'
+[Service]
+SupplementaryGroups=tailscale
+TS_EOF
+        systemctl daemon-reload
+        systemctl restart tailscaled
     fi
 
     # Ensure /etc/resolv.conf points to systemd-resolved stub listener
@@ -119,13 +127,19 @@ iptables -A OUTPUT -o lo -j ACCEPT
 # 2. Established / Related connection tracking
 iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-# 3. Private RFC1918 subnets (LAN SSH, intra-host communication, router)
+# 3. Private RFC1918 subnets (LAN SSH, intra-host communication, router) & Tailscale CGNAT
 iptables -A OUTPUT -d 192.168.0.0/16 -j ACCEPT
 iptables -A OUTPUT -d 10.0.0.0/8 -j ACCEPT
 iptables -A OUTPUT -d 172.16.0.0/12 -j ACCEPT
+iptables -A OUTPUT -d 100.64.0.0/10 -j ACCEPT
 
-# 4. Tailscale mesh interface (if present)
+# 4. Tailscale mesh interface and daemon coordination/relay
 iptables -A OUTPUT -o tailscale0 -j ACCEPT
+if getent group tailscale >/dev/null 2>&1; then
+    iptables -A OUTPUT -m owner --gid-owner tailscale --suppl-groups -j ACCEPT
+fi
+iptables -A OUTPUT -p udp --dport 41641 -j ACCEPT
+iptables -A OUTPUT -p udp --sport 41641 -j ACCEPT
 
 # 5. WireGuard virtual tunnel interface (encrypted internal traffic)
 iptables -A OUTPUT -o wg0 -j ACCEPT
