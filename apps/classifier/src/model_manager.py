@@ -73,10 +73,10 @@ def list_available_models() -> List[Dict[str, Any]]:
     history_by_file = {h.get("filename"): h for h in history_entries if isinstance(h, dict) and h.get("filename")}
 
     models = []
-    for p in sorted(MODELS_DIR.glob("torrent_classifier_*.joblib")):
-        size_mb = p.stat().st_size / (1024 * 1024)
+    candidates = sorted(list(MODELS_DIR.glob("torrent_classifier_*.joblib")))
+    for p in candidates:
         fname = p.name
-        # extract version string
+        size_mb = p.stat().st_size / (1024 * 1024)
         v_name = fname.replace("torrent_classifier_", "").replace(".joblib", "")
         is_active = (fname == active_filename)
 
@@ -86,10 +86,11 @@ def list_available_models() -> List[Dict[str, Any]]:
         num_samples = None
         trained_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(p.stat().st_mtime))
 
+
         if is_active and info.get("metrics"):
             m = info["metrics"]
-            macro_f1 = m.get("macro_f1")
-            accuracy = m.get("accuracy")
+            macro_f1 = m.get("macro_f1", macro_f1)
+            accuracy = m.get("accuracy", accuracy)
 
         hist = history_by_file.get(fname)
         if hist:

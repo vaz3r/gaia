@@ -1,68 +1,22 @@
 {
-  "version": "v8",
-  "filename": "torrent_classifier_v8_20260912_212717.joblib",
-  "model_path": "/app/models/torrent_classifier_v8_20260912_212717.joblib",
-  "activated_at": "2026-09-12T17:27:20Z",
+  "version": "v9_20260921_112306",
+  "filename": "torrent_classifier_v9_20260921_112306.joblib",
+  "model_path": "/Users/oussamarahmani/Documents/GitHub/gaia/apps/classifier/models/torrent_classifier_v9_20260921_112306.joblib",
+  "activated_at": "2026-09-21T12:11:38Z",
   "metrics": {
-    "macro_f1": 0.8597,
-    "accuracy": 0.8641,
-    "gating_precision": 0.9399,
-    "gating_auto_accept_rate": 0.7707,
+    "macro_f1": 0.8034,
+    "accuracy": 0.9073,
     "per_class_f1": {
-      "Adult": 0.8893,
-      "Anime": 0.8631,
-      "Applications": 0.8414,
-      "Audiobooks": 0.9465,
-      "Books & Learning": 0.9023,
-      "Documentaries": 0.7649,
-      "Games": 0.8456,
-      "Movies": 0.8232,
-      "Music": 0.886,
-      "Television": 0.8348
-    },
-    "gate_passed": true,
-    "forced": false
-  },
-  "canary_stats": {
-    "Adult": {
-      "active_share": 0.345,
-      "candidate_share": 0.307
-    },
-    "Anime": {
-      "active_share": 0.069,
-      "candidate_share": 0.072
-    },
-    "Applications": {
-      "active_share": 0.026,
-      "candidate_share": 0.054
-    },
-    "Audiobooks": {
-      "active_share": 0.038,
-      "candidate_share": 0.012
-    },
-    "Books & Learning": {
-      "active_share": 0.063,
-      "candidate_share": 0.055
-    },
-    "Documentaries": {
-      "active_share": 0.006,
-      "candidate_share": 0.006
-    },
-    "Games": {
-      "active_share": 0.057,
-      "candidate_share": 0.071
-    },
-    "Movies": {
-      "active_share": 0.157,
-      "candidate_share": 0.18
-    },
-    "Music": {
-      "active_share": 0.069,
-      "candidate_share": 0.064
-    },
-    "Television": {
-      "active_share": 0.17,
-      "candidate_share": 0.179
+      "Adult": 0.7477,
+      "Anime": 0.7233,
+      "Applications": 0.7222,
+      "Audiobooks": 0.8276,
+      "Books & Learning": 0.7658,
+      "Documentaries": 0.6462,
+      "Games": 0.6799,
+      "Movies": 0.6903,
+      "Music": 0.7048,
+      "Television": 0.7337
     }
   },
   "history": [
@@ -373,6 +327,68 @@
           "candidate_share": 0.179
         }
       }
+    },
+    {
+      "version": "v9",
+      "filename": "torrent_classifier_v9_20260921_112306.joblib",
+      "activated_at": "2026-09-21T07:23:08Z",
+      "macro_f1": 0.8034,
+      "canary_stats": {
+        "Adult": {
+          "active_share": 0.223,
+          "candidate_share": 0.215
+        },
+        "Anime": {
+          "active_share": 0.1,
+          "candidate_share": 0.101
+        },
+        "Applications": {
+          "active_share": 0.037,
+          "candidate_share": 0.047
+        },
+        "Audiobooks": {
+          "active_share": 0.025,
+          "candidate_share": 0.044
+        },
+        "Books & Learning": {
+          "active_share": 0.06,
+          "candidate_share": 0.051
+        },
+        "Documentaries": {
+          "active_share": 0.015,
+          "candidate_share": 0.017
+        },
+        "Games": {
+          "active_share": 0.073,
+          "candidate_share": 0.061
+        },
+        "Movies": {
+          "active_share": 0.203,
+          "candidate_share": 0.21
+        },
+        "Music": {
+          "active_share": 0.087,
+          "candidate_share": 0.072
+        },
+        "Television": {
+          "active_share": 0.177,
+          "candidate_share": 0.182
+        }
+      }
+    },
+    {
+      "version": "v10",
+      "filename": "torrent_classifier_v10_20260921_160102",
+      "activated_at": "2026-09-21T12:02:09Z",
+      "macro_f1": 0.7242,
+      "canary_stats": null
+    },
+    {
+      "version": "v9_20260921_112306",
+      "filename": "torrent_classifier_v9_20260921_112306.joblib",
+      "activated_at": "2026-09-21T12:11:38Z",
+      "macro_f1": 0.8034,
+      "rollback": true
     }
   ]
 }

@@ -204,13 +204,14 @@ def process_batch(service, batch_items, old_categories, category_shifts, dry_run
     return accepted, flagged
 
 
-def bulk_update_classifications(records: List[Dict[str, Any]]):
-    """Execute fast execute_values bulk update in PostgreSQL."""
+def bulk_update_classifications(records: List[Dict[str, Any]], chunk_size: int = 500):
+    """Execute fast execute_values bulk update in PostgreSQL in controlled sub-batches."""
     import psycopg2.extras
     p = db.get_pool()
     conn = p.getconn()
     try:
         with conn.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = 60000;")
             query = """
                 UPDATE torrents AS t
                 SET 
@@ -221,17 +222,19 @@ def bulk_update_classifications(records: List[Dict[str, Any]]):
                 FROM (VALUES %s) AS v(infohash, category, category_confidence, needs_review)
                 WHERE t.infohash = v.infohash;
             """
-            template = "(%s, %s, %s, %s)"
-            vals = [
-                (
-                    r["infohash"],
-                    r["category"],
-                    r["category_confidence"],
-                    r["needs_review"]
-                )
-                for r in records
-            ]
-            psycopg2.extras.execute_values(cur, query, vals, template=template, page_size=2000)
+            template = "(%s::bytea, %s::text, %s::double precision, %s::boolean)"
+            for idx in range(0, len(records), chunk_size):
+                chunk = records[idx:idx + chunk_size]
+                vals = [
+                    (
+                        r["infohash"],
+                        r["category"],
+                        r["category_confidence"],
+                        r["needs_review"]
+                    )
+                    for r in chunk
+                ]
+                psycopg2.extras.execute_values(cur, query, vals, template=template, page_size=chunk_size)
             conn.commit()
     finally:
         p.putconn(conn)

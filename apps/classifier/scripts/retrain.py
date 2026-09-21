@@ -39,54 +39,12 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
         t0 = time.time()
         records = joblib.load(cache_path)
         print(f"      Loaded {len(records):,} records from cache in {time.time() - t0:.2f}s", flush=True)
-        # Refresh domain anchors and regex features in cached records
-        import re
-        from feature_extractor import (
-            RE_ADULT, RE_JAV, RE_ANIME, RE_DOCU, RE_AUDIOBOOK, RE_BOOK,
-            RE_APP, RE_GAME, RE_TV, RE_MOVIE, RE_MUSIC
-        )
+        # Refresh clean text and dense features with deep manifest extraction and dense_version=3
+        from feature_extractor import get_text_and_features
         for r in records:
-            orig = r.get("clean_text", "")
-            raw = re.sub(r'\bdom(adult|anime|docu|tv|audiobook|book|game|app|movie|music)\b', '', orig)
-            raw = re.sub(r'\s+', ' ', raw).strip()
-            has_adult = bool(RE_ADULT.search(raw)) or bool(RE_JAV.search(raw))
-            has_anime = bool(RE_ANIME.search(raw))
-            has_docu = bool(RE_DOCU.search(raw))
-            has_audiobook = bool(RE_AUDIOBOOK.search(raw))
-            has_book = bool(RE_BOOK.search(raw)) and (not has_audiobook)
-            has_app = bool(RE_APP.search(raw))
-            has_game = bool(RE_GAME.search(raw)) and (not has_app)
-            has_tv = bool(RE_TV.search(raw)) and (not has_anime) and (not has_docu) and (not has_game)
-            has_movie = bool(RE_MOVIE.search(raw)) and (not has_tv) and (not has_docu) and (not has_anime) and (not has_game)
-            has_music = bool(RE_MUSIC.search(raw)) and (not has_audiobook) and (not has_game)
-
-            anchors = []
-            if has_adult: anchors.extend(["domadult", "domadult"])
-            if has_anime: anchors.extend(["domanime", "domanime"])
-            if has_docu: anchors.extend(["domdocu", "domdocu", "domdocu"])
-            if has_tv: anchors.extend(["domtv", "domtv"])
-            if has_audiobook: anchors.extend(["domaudiobook", "domaudiobook"])
-            if has_book: anchors.extend(["dombook", "dombook"])
-            if has_game: anchors.extend(["domgame", "domgame"])
-            if has_app: anchors.extend(["domapp", "domapp"])
-            if has_movie: anchors.extend(["dommovie", "dommovie"])
-            if has_music: anchors.extend(["dommusic", "dommusic"])
-            r["clean_text"] = (raw + " " + " ".join(anchors)).strip()
-
-            if "dense_vector" in r and len(r["dense_vector"]) >= 21:
-                rf = [
-                    1.0 if has_tv else 0.0,
-                    1.0 if has_anime else 0.0,
-                    1.0 if has_adult else 0.0,
-                    1.0 if has_audiobook else 0.0,
-                    1.0 if has_book else 0.0,
-                    1.0 if has_docu else 0.0,
-                    1.0 if has_game else 0.0,
-                    1.0 if has_app else 0.0,
-                    1.0 if has_movie else 0.0,
-                    1.0 if has_music else 0.0,
-                ]
-                r["dense_vector"] = r["dense_vector"][:11] + [f * 2.0 for f in rf] + r["dense_vector"][21:]
+            txt, d_vec = get_text_and_features(r, normalize_dense=True, dense_version=3)
+            r["clean_text"] = txt
+            r["dense_vector"] = d_vec
     else:
         print("\n[1/6] Extracting labels from PostgreSQL (labeled_results JOIN torrents)...", flush=True)
         t0 = time.time()
@@ -136,7 +94,7 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
     # 3. Fit Candidate Feature Extractor and Search for Best Regularization
     print("\n[3/6] Fitting candidate feature extractor and searching hyperparameter space...", flush=True)
     t1 = time.time()
-    extractor = TorrentFeatureExtractor(max_features=250000, normalize_dense=True, dense_version=2)
+    extractor = TorrentFeatureExtractor(max_features=250000, normalize_dense=True, dense_version=3)
     X_train = extractor.fit_transform(train_records)
     print(f"      Extracted {X_train.shape[1]:,} features in {time.time() - t1:.1f}s", flush=True)
 
@@ -244,6 +202,19 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
     gating_model.fit(X_gate_train, y_gate_train)
     print(f"      ✓ Gating ML Model fitted in {time.time() - t_gate:.1f}s", flush=True)
 
+    # Inspect top positive word features for Adult to confirm packaging noise elimination
+    try:
+        adult_idx = classes.index("Adult")
+        char_vocab_len = len(extractor.char_vectorizer.vocabulary_)
+        word_feature_names = extractor.word_vectorizer.get_feature_names_out()
+        adult_coefs = clf.coef_[adult_idx]
+        word_coefs = adult_coefs[char_vocab_len:char_vocab_len + len(word_feature_names)]
+        top_word_indices = np.argsort(word_coefs)[::-1][:10]
+        top_adult_words = [(word_feature_names[idx], round(float(word_coefs[idx]), 3)) for idx in top_word_indices]
+        print(f"\n      [Hygiene Audit] Top 10 Positive Words for 'Adult': {top_adult_words}", flush=True)
+    except Exception as e:
+        print(f"      Feature hygiene audit note: {e}", flush=True)
+
     # 4. Evaluate Candidate vs Active Model on EXACT same validation set
     print("\n[4/6] Evaluating candidate model vs currently active model on validation holdout...", flush=True)
     val_preds = clf.predict(X_val)
@@ -276,14 +247,16 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
         X_gate_val.append([top1_p, m1_2, m2_3, ent, log_s, log_c, is_s, integ, safe_p, meta_q])
 
     p_correct_val = gating_model.predict_proba(X_gate_val)[:, 1]
-    gating_accepted = p_correct_val >= 0.95
+    val_margins = np.sort(val_probas, axis=1)[:, -1] - np.sort(val_probas, axis=1)[:, -2]
+    val_top1s = np.max(val_probas, axis=1)
+    gating_accepted = (p_correct_val >= 0.85) | ((val_top1s >= 0.60) & (val_margins >= 0.25))
     gate_acc_count = int(np.sum(gating_accepted))
     correct_accepted = sum(1 for i in range(len(val_records)) if gating_accepted[i] and val_preds[i] == y_val[i])
     gate_prec = correct_accepted / max(gate_acc_count, 1)
     gate_acc_rate = gate_acc_count / len(val_records)
     print(f"\n      --- Gating ML Evaluation on Holdout ---", flush=True)
-    print(f"      * Auto-Accepted by Gating ML (P >= 0.95): {gate_acc_count:,} ({gate_acc_rate*100:.1f}%) with {gate_prec*100:.2f}% Precision", flush=True)
-    print(f"      * Filtered for Review Queue: {len(val_records)-gate_acc_count:,} ({(1-gate_acc_rate)*100:.1f}%) [Queue Reduced by >85%]", flush=True)
+    print(f"      * Auto-Accepted by Gating: {gate_acc_count:,} ({gate_acc_rate*100:.1f}%) with {gate_prec*100:.2f}% Precision", flush=True)
+    print(f"      * Filtered for Review Queue: {len(val_records)-gate_acc_count:,} ({(1-gate_acc_rate)*100:.1f}%)", flush=True)
 
     active_info = get_active_model_info()
     stored_metrics = active_info.get("metrics", {})
@@ -309,7 +282,9 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
             active_clf = active_payload["classifier"]
             active_classes = list(active_payload["classes"])
 
-            X_val_active = active_ext.transform(val_records)
+            # Ensure records are transformed using active model's own extractor version
+            active_val_records = [{k: v for k, v in r.items() if k not in ('clean_text', 'dense_vector')} for r in val_records]
+            X_val_active = active_ext.transform(active_val_records)
             act_preds_raw = active_clf.predict(X_val_active)
             act_pred_labels = [active_classes[i] for i in act_preds_raw]
             val_labels_str = [classes[i] for i in y_val]
@@ -426,34 +401,25 @@ def run_retraining(dry_run: bool = False, force: bool = False, max_samples: int 
                 X_gate_queue.append([top1_p, m1_2, m2_3, ent, log_s, log_c, is_s, integ, safe_p, meta_q])
 
             p_correct_queue = gating_model.predict_proba(X_gate_queue)[:, 1]
-            from feature_extractor import CATEGORY_REGEX_RULES, RE_JAV
-
-            q_auto_accepted_strict = sum(1 for p in p_correct_queue if p >= 0.95)
-            q_auto_accepted_rule = 0
+            q_auto_accepted = 0
             q_cat_counts = Counter()
 
             for i in range(len(queue_slice)):
                 p_c = float(p_correct_queue[i])
                 pred_c = q_preds[i]
-                r = queue_slice[i]
-                nm = r.get("name", "")
+                p = q_probas[i]
+                top1_p = float(np.max(p))
+                sorted_p = np.sort(p)
+                m1_2 = float(sorted_p[-1] - sorted_p[-2])
 
-                rule = CATEGORY_REGEX_RULES.get(pred_c)
-                rule_matched = bool(rule and rule.search(nm))
-                if pred_c == "Adult" and not rule_matched and RE_JAV.search(nm):
-                    rule_matched = True
-
-                thresh = 0.85 if rule_matched else 0.95
-                if p_c >= thresh:
-                    q_auto_accepted_rule += 1
+                is_acc = (p_c >= 0.85) or (top1_p >= 0.60 and m1_2 >= 0.25)
+                if is_acc:
+                    q_auto_accepted += 1
                     q_cat_counts[pred_c] += 1
 
-            q_accept_rate_strict = q_auto_accepted_strict / len(queue_slice)
-            q_accept_rate_rule = q_auto_accepted_rule / len(queue_slice)
-
-            print(f"      * Queue Auto-Acceptance Rate (Strict P >= 0.95): {q_auto_accepted_strict}/{len(queue_slice)} ({q_accept_rate_strict*100:.1f}%)", flush=True)
-            print(f"      * Queue Auto-Acceptance Rate (Rule-Aware P >= 0.85): {q_auto_accepted_rule}/{len(queue_slice)} ({q_accept_rate_rule*100:.1f}%)", flush=True)
-            print(f"      * Auto-Accepted by Category (Rule-Aware): {dict(q_cat_counts.most_common())}", flush=True)
+            q_accept_rate = q_auto_accepted / len(queue_slice)
+            print(f"      * Queue Auto-Acceptance Rate: {q_auto_accepted}/{len(queue_slice)} ({q_accept_rate*100:.1f}%)", flush=True)
+            print(f"      * Auto-Accepted by Category: {dict(q_cat_counts.most_common())}", flush=True)
     except Exception as e:
         print(f"      Review queue benchmark skipped: {e}", flush=True)
 

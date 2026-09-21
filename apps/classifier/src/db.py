@@ -350,7 +350,7 @@ def fetch_training_data(min_confidence: str = 'medium', limit: Optional[int] = N
                 "total_size": size,
                 "file_count": count_val,
                 "files": files,
-            }, normalize_dense=True, dense_version=2)
+            }, normalize_dense=True, dense_version=3)
 
             records.append({
                 "infohash": ih,
@@ -371,6 +371,68 @@ def fetch_training_data(min_confidence: str = 'medium', limit: Optional[int] = N
             if count % 10000 == 0:
                 print(f"      Loaded and extracted {count:,} records from database...", flush=True)
         cur.close()
+
+        # Supplement Adult class if severely truncated by purge policies
+        adult_count = sum(1 for r in records if r["label_category"] == "Adult")
+        if adult_count < 5000:
+            target_supplement = 7500 - adult_count
+            print(f"      Supplementing Adult class ({adult_count:,} found in joined labels) with {target_supplement:,} verified accepted Adult torrents...", flush=True)
+            supp_query = """
+                SELECT 
+                    t.infohash,
+                    t.name,
+                    t.total_size,
+                    t.file_count,
+                    t.files,
+                    t.first_seen,
+                    t.integrity_score,
+                    t.model_safe_probability,
+                    t.metadata_quality_score,
+                    t.policy_action
+                FROM torrents t
+                WHERE t.category = 'Adult' 
+                  AND t.needs_review = false 
+                  AND t.category_confidence >= 0.75
+                LIMIT %s
+            """
+            with conn.cursor() as supp_cur:
+                supp_cur.execute(supp_query, (target_supplement,))
+                for r in supp_cur:
+                    ih = bytea_to_hex(r[0])
+                    name = r[1]
+                    size = r[2] or 0
+                    count_val = r[3] or 1
+                    files = r[4]
+                    labeled_at = r[5].isoformat() if len(r) > 5 and r[5] else None
+                    integrity_score = r[6] if len(r) > 6 and r[6] is not None else 100
+                    model_safe_probability = r[7] if len(r) > 7 and r[7] is not None else 1.0
+                    metadata_quality_score = r[8] if len(r) > 8 and r[8] is not None else 100
+                    policy_action = str(r[9]) if len(r) > 9 and r[9] else 'ALLOW'
+
+                    clean_text, dense_vec = get_text_and_features({
+                        "name": name,
+                        "total_size": size,
+                        "file_count": count_val,
+                        "files": files,
+                    }, normalize_dense=True, dense_version=3)
+
+                    records.append({
+                        "infohash": ih,
+                        "label_category": "Adult",
+                        "confidence": "high",
+                        "source": "verified_accepted_corpus",
+                        "name": name,
+                        "clean_text": clean_text,
+                        "dense_vector": dense_vec,
+                        "total_size": size,
+                        "file_count": count_val,
+                        "labeled_at": labeled_at,
+                        "integrity_score": integrity_score,
+                        "model_safe_probability": model_safe_probability,
+                        "metadata_quality_score": metadata_quality_score,
+                        "policy_action": policy_action
+                    })
+
         conn.commit()
         return records
     finally:

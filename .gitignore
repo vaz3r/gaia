@@ -54,3 +54,5 @@ apps/dashboard/logs/
 /apps/crawler/.env
 /benchmark_results.json
 apps/api/publish/
+apps/classifier/.venv312/
+apps/classifier/*.sh

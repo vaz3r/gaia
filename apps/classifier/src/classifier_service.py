@@ -1,5 +1,6 @@
 import sys
 import re
+import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import joblib
@@ -10,6 +11,7 @@ from feature_extractor import (
     TorrentFeatureExtractor,
     explain_features,
     extract_extension,
+    compute_modality_mask,
     EXT_CATEGORIES,
     RE_TV,
     RE_ANIME,
@@ -144,13 +146,17 @@ class TorrentClassifierService:
         self._load_model()
 
     def _load_model(self):
+        self.active_info = get_active_model_info()
         payload = joblib.load(self.model_path)
         self.extractor: TorrentFeatureExtractor = payload["extractor"]
         self.classifier = payload["classifier"]
         self.gating_model = payload.get("gating_model")
         self.classes = [str(c) for c in payload["classes"]]
         self.metadata = payload.get("metadata", {})
-        self.active_info = get_active_model_info()
+
+    def _predict_probas(self, items: List[Dict[str, Any]]) -> np.ndarray:
+        X = self.extractor.transform(items)
+        return self.classifier.predict_proba(X)
 
     def check_reload(self):
         """Hot-reload if active model path or timestamp changed."""
@@ -196,8 +202,14 @@ class TorrentClassifierService:
                 "model_classes": self.classes,
             }
 
-        X = self.extractor.transform([item])
-        probas = self.classifier.predict_proba(X)[0]
+        probas = self._predict_probas([item])[0]
+
+        # Apply structural modality constraints
+        mask = compute_modality_mask(item, self.classes)
+        probas = probas * mask
+        sum_p = float(np.sum(probas))
+        if sum_p > 0:
+            probas = probas / sum_p
 
         ranked = [
             {"category": str(cat), "probability": round(float(prob), 4)}
@@ -209,53 +221,34 @@ class TorrentClassifierService:
         margin = round(top1["probability"] - top2["probability"], 4)
         name = str(item.get("name") or "")
 
-        # 2. Gating ML decision vs legacy threshold rules
+        # 2. Calibrated Gating decision (no synthetic regex lock)
         if self.gating_model is not None:
             g_vec = extract_gating_vector(probas, item)
             p_correct = float(self.gating_model.predict_proba([g_vec])[0, 1])
 
-            rule = CATEGORY_REGEX_RULES.get(top1["category"])
-            rule_matched = bool(rule and rule.search(name))
-            if top1["category"] == "Adult" and not rule_matched and RE_JAV.search(name):
-                rule_matched = True
+            # Calibrated Auto-Acceptance: Gating certitude >= 85% OR (top1 >= 60% and margin >= 25%)
+            is_auto_accepted = (p_correct >= 0.85) or (top1["probability"] >= 0.60 and margin >= 0.25)
 
-            # Adult Sanity Lock: Prevent clean foreign titles from defaulting to Adult
-            if top1["category"] == "Adult" and not rule_matched:
-                p_correct = min(p_correct, 0.40)
-
-            cert_threshold = 0.85 if rule_matched else 0.95
-
-            if p_correct >= cert_threshold:
+            if is_auto_accepted:
                 needs_review = False
                 review_reason = None
                 review_type = "accepted"
             else:
                 needs_review = True
-                review_reason = f"Gating ML flagged: P(Correct) is {p_correct*100:.1f}% (below {cert_threshold*100:.0f}% certitude threshold)."
-                review_type = "low_confidence"
-            eff_conf, eff_margin = cert_threshold, 0.0
+                review_reason = f"Flagged for Review: Gating certitude {p_correct*100:.1f}%, top confidence {top1['probability']*100:.1f}%, margin {margin*100:.1f}%."
+                review_type = "low_confidence" if top1["probability"] < 0.60 else "ambiguous"
+            eff_conf, eff_margin = 0.60, 0.25
             has_manifest = bool(item.get("files"))
+            rule_matched = False
         else:
             p_correct = None
-            if adaptive_thresholds:
-                eff_conf, eff_margin, has_manifest, rule_matched = compute_effective_thresholds(
-                    item, top1["category"], confidence_threshold, margin_threshold
-                )
-            else:
-                eff_conf, eff_margin = confidence_threshold, margin_threshold
-                has_manifest, rule_matched = bool(item.get("files")), False
-
-            is_low_conf = top1["probability"] < eff_conf
-            is_ambiguous = (not is_low_conf) and (margin < eff_margin)
-            needs_review = is_low_conf or is_ambiguous
-
-            if is_low_conf:
-                review_reason = f"Low Confidence: Top probability is {top1['probability']*100:.1f}% (below threshold {eff_conf*100:.0f}%)."
-            elif is_ambiguous:
-                review_reason = f"Ambiguous Boundary: Margin is only {margin*100:.1f}% between '{top1['category']}' and '{top2['category']}'."
-            else:
-                review_reason = None
-            review_type = "low_confidence" if is_low_conf else ("ambiguous" if is_ambiguous else "accepted")
+            is_auto_accepted = top1["probability"] >= 0.60 and margin >= 0.25
+            needs_review = not is_auto_accepted
+            review_type = "accepted" if is_auto_accepted else ("low_confidence" if top1["probability"] < 0.60 else "ambiguous")
+            review_reason = None if is_auto_accepted else f"Flagged for Review: Top confidence {top1['probability']*100:.1f}%, margin {margin*100:.1f}%."
+            eff_conf, eff_margin = 0.60, 0.25
+            has_manifest = bool(item.get("files"))
+            rule_matched = False
 
         feature_info = explain_features(item)
 
@@ -293,8 +286,15 @@ class TorrentClassifierService:
             return []
 
         self.check_reload()
-        X = self.extractor.transform(items)
-        probas = self.classifier.predict_proba(X)
+        probas = self._predict_probas(items)
+
+        # Apply structural modality constraints per item
+        for idx_i, item in enumerate(items):
+            m = compute_modality_mask(item, self.classes)
+            probas[idx_i] = probas[idx_i] * m
+            sum_p = float(np.sum(probas[idx_i]))
+            if sum_p > 0:
+                probas[idx_i] = probas[idx_i] / sum_p
 
         results = []
         classes_arr = np.array(self.classes)
@@ -324,7 +324,7 @@ class TorrentClassifierService:
                         "margin": 1.0,
                         "review_type": "suppressed_by_integrity",
                         "top2": {"category": "None", "confidence": 0.0},
-                        "model_version": self.active_info.get("version", "v5"),
+                        "model_version": self.active_info.get("version", "v6"),
                     },
                 })
                 continue
@@ -343,34 +343,20 @@ class TorrentClassifierService:
 
             if p_correct_batch is not None:
                 p_corr = float(p_correct_batch[i])
-                rule = CATEGORY_REGEX_RULES.get(top1_cat)
-                rule_matched = bool(rule and rule.search(name))
-                if top1_cat == "Adult" and not rule_matched and RE_JAV.search(name):
-                    rule_matched = True
-
-                # Adult Sanity Lock
-                if top1_cat == "Adult" and not rule_matched:
-                    p_corr = min(p_corr, 0.40)
-
-                cert_threshold = 0.85 if rule_matched else 0.95
-                needs_review = p_corr < cert_threshold
-                review_type = "accepted" if not needs_review else "low_confidence"
-                eff_conf = cert_threshold
-                eff_margin = 0.0
+                is_auto_accepted = (p_corr >= 0.85) or (top1_p >= 0.60 and margin >= 0.25)
+                needs_review = not is_auto_accepted
+                review_type = "accepted" if is_auto_accepted else ("low_confidence" if top1_p < 0.60 else "ambiguous")
+                eff_conf, eff_margin = 0.60, 0.25
                 has_manifest = bool(item.get("files"))
+                rule_matched = False
             else:
-                if adaptive_thresholds:
-                    eff_conf, eff_margin, has_manifest, rule_matched = compute_effective_thresholds(
-                        item, top1_cat, confidence_threshold, margin_threshold
-                    )
-                else:
-                    eff_conf, eff_margin = confidence_threshold, margin_threshold
-                    has_manifest, rule_matched = bool(item.get("files")), False
-
-                is_low_conf = top1_p < eff_conf
-                is_ambiguous = (not is_low_conf) and (margin < eff_margin)
-                needs_review = is_low_conf or is_ambiguous
-                review_type = "low_confidence" if is_low_conf else ("ambiguous" if is_ambiguous else "accepted")
+                p_corr = None
+                is_auto_accepted = top1_p >= 0.60 and margin >= 0.25
+                needs_review = not is_auto_accepted
+                review_type = "accepted" if is_auto_accepted else ("low_confidence" if top1_p < 0.60 else "ambiguous")
+                eff_conf, eff_margin = 0.60, 0.25
+                has_manifest = bool(item.get("files"))
+                rule_matched = False
 
             results.append({
                 "predicted_category": top1_cat,
