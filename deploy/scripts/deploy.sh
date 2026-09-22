@@ -27,7 +27,7 @@ health_check_cmd() {
     case "$1" in
         gaia-gateway)       echo "nc -z 127.0.0.1 8443 && curl -sk -o /dev/null https://127.0.0.1/" ;;
         gaia-portal)        echo "docker inspect gaia-portal-wstunnel-client --format '{{.State.Health.Status}}' 2>/dev/null | grep -q healthy" ;;
-        workspace-production) echo "docker exec gaia-postgres pg_isready -U crawler -d craw 2>/dev/null" ;;
+        workspace-production) echo "docker exec gaia-postgres pg_isready -U crawler -d craw 2>/dev/null && docker inspect gaia-health-scorer --format '{{.State.Status}}' 2>/dev/null | grep -q running" ;;
         gaia-node)          echo "docker inspect gaia-crawler --format '{{.State.Status}}' 2>/dev/null | grep -q running" ;;
         *)                  echo "" ;;
     esac
@@ -160,7 +160,7 @@ $SSH "cd $DEPLOY_REMOTE_GIT && git fetch origin && git checkout $TAG"
 
 # ── 3. Ensure data directories exist ──
 echo "[3/4] Ensuring data directories..."
-$SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S mkdir -p ${DEPLOY_REMOTE_DATA}/crawler ${DEPLOY_REMOTE_DATA}/postgres ${DEPLOY_REMOTE_DATA}/logs ${DEPLOY_REMOTE_DATA}/classifier/models ${DEPLOY_REMOTE_DATA}/anomalies/models ${DEPLOY_REMOTE_DATA}/anomalies/data /mnt/gaia/logs/crawler && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R 10001:10001 ${DEPLOY_REMOTE_DATA}/crawler /mnt/gaia/logs && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R $DEPLOY_USER:$DEPLOY_USER ${DEPLOY_REMOTE_DATA}/classifier ${DEPLOY_REMOTE_DATA}/anomalies && echo '${DEPLOY_PASSWORD:-}' | sudo -S chmod -R 777 ${DEPLOY_REMOTE_DATA}/classifier ${DEPLOY_REMOTE_DATA}/anomalies || true"
+$SSH "echo '${DEPLOY_PASSWORD:-}' | sudo -S mkdir -p ${DEPLOY_REMOTE_DATA}/crawler ${DEPLOY_REMOTE_DATA}/postgres ${DEPLOY_REMOTE_DATA}/logs ${DEPLOY_REMOTE_DATA}/classifier/models ${DEPLOY_REMOTE_DATA}/anomalies/models ${DEPLOY_REMOTE_DATA}/anomalies/data ${DEPLOY_REMOTE_DATA}/health-scorer /mnt/gaia/logs/crawler && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R 10001:10001 ${DEPLOY_REMOTE_DATA}/crawler /mnt/gaia/logs && echo '${DEPLOY_PASSWORD:-}' | sudo -S chown -R $DEPLOY_USER:$DEPLOY_USER ${DEPLOY_REMOTE_DATA}/classifier ${DEPLOY_REMOTE_DATA}/anomalies ${DEPLOY_REMOTE_DATA}/health-scorer && echo '${DEPLOY_PASSWORD:-}' | sudo -S chmod -R 777 ${DEPLOY_REMOTE_DATA}/classifier ${DEPLOY_REMOTE_DATA}/anomalies || true"
 
 # Ensure active classifier model and metadata exist on remote host
 ACTIVE_JSON="$REPO_ROOT/apps/classifier/models/active_model.json"

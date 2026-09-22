@@ -1,0 +1,4 @@
+# GAIA Health Scorer - Test Dependencies
+psycopg2-binary==2.9.9
+pytest==8.3.4
+pytest-timeout==2.3.1

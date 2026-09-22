@@ -147,6 +147,30 @@ services:
       - /home/${DEPLOY_USER:-core}/gaia-data/anomalies/models:/app/anomalies/models_storage
       - /home/${DEPLOY_USER:-core}/gaia-data/anomalies/data:/app/anomalies/data
 
+  health-scorer:
+    build:
+      context: ../../../apps/health-scorer
+      dockerfile: Dockerfile
+    image: gaia-health-scorer:${GIT_COMMIT:-latest}
+    container_name: gaia-health-scorer
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      DB_HOST: localhost
+      PG_PORT: ${PG_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-crawler}
+      POSTGRES_DB: ${POSTGRES_DB:-craw}
+      PG_PASSWORD: ${PG_PASSWORD}
+      BATCH_SIZE: ${HEALTH_SCORER_BATCH_SIZE:-500}
+      POLL_INTERVAL: ${HEALTH_SCORER_POLL_INTERVAL:-5}
+      STATEMENT_TIMEOUT: ${HEALTH_SCORER_STATEMENT_TIMEOUT:-30}
+      LOG_LEVEL: INFO
+    volumes:
+      - /home/${DEPLOY_USER:-core}/gaia-data/health-scorer:/app/data
+    mem_limit: 1500m
+    memswap_limit: 1500m
+    command: ["python", "scripts/worker.py"]
+
   pgbouncer:
     image: bitnami/pgbouncer:latest
     container_name: gaia-pgbouncer

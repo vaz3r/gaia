@@ -1,0 +1,3 @@
+apps/health-scorer/__pycache__/
+apps/health-scorer/src/__pycache__/
+apps/health-scorer/tests/__pycache__/
