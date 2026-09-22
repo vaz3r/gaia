@@ -335,7 +335,7 @@ public class DashboardRepository
         }
 
         var unifiedHealth = (short)Math.Clamp(sSeed + sPeer + sRecency + sFetch, 0, 100);
-        var newAvailState = unifiedHealth >= 60 ? "ACTIVE" : (unifiedHealth >= 25 ? "DEGRADED" : (unifiedHealth > 0 ? "STALE" : "UNKNOWN"));
+        var newAvailState = unifiedHealth >= 70 ? "VERIFIED" : (unifiedHealth >= 25 ? "UNVERIFIED" : (unifiedHealth > 0 ? "STALE" : "UNKNOWN"));
 
         const string updateSql = @"
             UPDATE torrents 
@@ -344,6 +344,32 @@ public class DashboardRepository
             WHERE infohash = decode(@ih, 'hex')";
 
         await conn.ExecuteAsync(updateSql, new { h = unifiedHealth, p = newPop, sc = seedConfirmed, av = newAvailState, ih });
+
+        // Dual-write: also update canonical health_scores table
+        var evidenceSummary = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            evidence_source = "dashboard_refresh",
+            direct_component = 0,
+            seed_component = sSeed,
+            peer_component = sPeer,
+            dht_component = 0,
+            failure_penalty = 0
+        });
+        var healthConf = unifiedHealth > 0 ? Math.Min(1.0, unifiedHealth / 100.0) : 0.0;
+
+        const string canonicalSql = @"
+            INSERT INTO health_scores (infohash, health_score, health_state, confidence,
+                                       algorithm_version, evidence_summary, health_calculated_at)
+            VALUES (@ih, @h, @state, @conf, '2.0.0_refresh', @evidence::jsonb, now())
+            ON CONFLICT (infohash) DO UPDATE SET
+                health_score = EXCLUDED.health_score,
+                health_state = EXCLUDED.health_state,
+                confidence = EXCLUDED.confidence,
+                evidence_summary = EXCLUDED.evidence_summary,
+                algorithm_version = EXCLUDED.algorithm_version,
+                health_calculated_at = now()";
+
+        await conn.ExecuteAsync(canonicalSql, new { ih, h = unifiedHealth, state = newAvailState, conf = healthConf, evidence = evidenceSummary });
 
         return await GetTorrentDetailsAsync(ih, ct);
     }

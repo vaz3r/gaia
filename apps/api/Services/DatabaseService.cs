@@ -100,8 +100,13 @@ public class DatabaseService
                 t.metadata_quality_score, 
                 t.availability_score, 
                 t.availability_state, 
-                t.scored_at
+                t.scored_at,
+                hs.health_score AS canonical_health_score,
+                hs.confidence AS health_confidence,
+                hs.health_state AS canonical_health_state,
+                hs.algorithm_version, hs.evidence_summary, hs.health_calculated_at AS canonical_scored_at
             FROM torrents t
+            LEFT JOIN health_scores hs ON hs.infohash = encode(t.infohash, 'hex')
             WHERE t.infohash = decode(@ih, 'hex')
             LIMIT 1;
         """;

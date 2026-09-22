@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import { api, downloadTorrent, magnetFrom } from '../api.js'
 import { formatBytes, formatTime } from '../utils.js'
+import { HealthBar, PopularityBar, HealthStatePill, EvidenceBreakdown, getHealthColor, getPopularityColor } from './HealthScoreDisplay.jsx'
 
 export const CANONICAL_CATEGORIES = [
   'Adult',
@@ -466,51 +467,11 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                     </td>
 
                     <td className="py-3 px-4 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
-                        {t.health_score !== null && t.health_score !== undefined ? (
-                          <>
-                            <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
-                              <div
-                                className={`h-full rounded-full ${
-                                  t.health_score >= 70
-                                    ? 'bg-emerald-400'
-                                    : t.health_score >= 40
-                                    ? 'bg-amber-400'
-                                    : 'bg-rose-500'
-                                }`}
-                                style={{ width: `${Math.min(100, Math.max(0, t.health_score))}%` }}
-                              />
-                            </div>
-                            <span
-                              className={`text-[11px] font-mono font-semibold ${
-                                t.health_score >= 70
-                                  ? 'text-emerald-400'
-                                  : t.health_score >= 40
-                                  ? 'text-amber-400'
-                                  : 'text-rose-400'
-                              }`}
-                            >
-                              {t.health_score}%
-                            </span>
-                          </>
-                        ) : (
-                          <span className="text-[11px] font-mono text-zinc-500" title="Unprobed">—</span>
-                        )}
-                      </div>
+                      <HealthBar score={t.canonical_health_score ?? t.health_score} />
                     </td>
 
                     <td className="py-3 px-4 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
-                        <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-cyan-400"
-                            style={{ width: `${Math.min(100, Math.max(0, t.popularity_score ?? 0))}%` }}
-                          />
-                        </div>
-                        <span className="text-[11px] font-mono text-cyan-400 font-semibold">
-                          {t.popularity_score ?? 0}%
-                        </span>
-                      </div>
+                      <PopularityBar score={t.popularity_score} />
                     </td>
 
                     <td className="py-3 px-4 whitespace-nowrap">
@@ -524,17 +485,7 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                         }`}>
                           {t.risk_tier || 'SAFE'}
                         </span>
-                        {t.availability_state && (
-                          <span className={`text-[9px] font-mono px-1 py-0.5 rounded border ${
-                            t.availability_state === 'ACTIVE'
-                              ? 'bg-emerald-950/30 text-emerald-400 border-emerald-800/30'
-                              : t.availability_state === 'SPARSE'
-                              ? 'bg-amber-950/30 text-amber-300 border-amber-800/30'
-                              : 'bg-rose-950/30 text-rose-400 border-rose-800/30'
-                          }`}>
-                            {t.availability_state}
-                          </span>
-                        )}
+                        <HealthStatePill state={t.canonical_health_state ?? t.availability_state} />
                       </div>
                     </td>
 
@@ -748,53 +699,38 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                     <Activity className="w-3.5 h-3.5 text-emerald-400" />
                     <span>Swarm Health & Availability</span>
                   </span>
-                  <span
-                    className={`font-bold ${
-                      selectedTorrent.health_score === null || selectedTorrent.health_score === undefined
-                        ? 'text-zinc-500'
-                        : selectedTorrent.health_score >= 70
-                        ? 'text-emerald-400'
-                        : selectedTorrent.health_score >= 40
-                        ? 'text-amber-400'
-                        : 'text-rose-400'
-                    }`}
-                  >
-                    {selectedTorrent.health_score !== null && selectedTorrent.health_score !== undefined
-                      ? `${selectedTorrent.health_score}% (${selectedTorrent.availability_state || 'ACTIVE'})`
-                      : `— (${selectedTorrent.availability_state || 'UNPROBED'})`}
-                  </span>
+                  {(() => {
+                    const displayScore = selectedTorrent.canonical_health_score ?? selectedTorrent.health_score
+                    const displayState = selectedTorrent.canonical_health_state ?? selectedTorrent.availability_state
+                    const c = getHealthColor(displayScore)
+                    return (
+                      <span className={`font-bold ${c.text}`}>
+                        {displayScore != null
+                          ? `${displayScore}% (${displayState || 'UNKNOWN'})`
+                          : `— (${displayState || 'UNKNOWN'})`}
+                      </span>
+                    )
+                  })()}
                 </div>
 
                 <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      selectedTorrent.health_score === null || selectedTorrent.health_score === undefined
-                        ? 'bg-zinc-700'
-                        : selectedTorrent.health_score >= 70
-                        ? 'bg-emerald-400'
-                        : selectedTorrent.health_score >= 40
-                        ? 'bg-amber-400'
-                        : 'bg-rose-500'
-                    }`}
-                    style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.health_score ?? 0))}%` }}
-                  />
+                  {(() => {
+                    const displayScore = selectedTorrent.canonical_health_score ?? selectedTorrent.health_score
+                    const c = getHealthColor(displayScore)
+                    return (
+                      <div
+                        className={`h-full rounded-full transition-all ${c.bar}`}
+                        style={{ width: `${Math.min(100, Math.max(0, displayScore ?? 0))}%` }}
+                      />
+                    )
+                  })()}
                 </div>
 
-                {/* Mathematical Point Breakdown Audit */}
-                <div className="pt-2 border-t border-[#141414] space-y-1 font-mono text-[10px]">
-                  <div className="flex items-center justify-between text-[#777]">
-                    <span>Seed Presence (Active Swarm):</span>
-                    <span className={(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? 'text-emerald-400' : 'text-[#666]'}>
-                      {(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? '+50 pts' : '+0 pts'}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-[#777]">
-                    <span>Connected DHT Peers ({selectedTorrent.swarm_peers || 0} nodes):</span>
-                    <span className={(selectedTorrent.swarm_peers || 0) > 0 ? 'text-cyan-400' : 'text-[#666]'}>
-                      +{(selectedTorrent.swarm_peers || 0) > 0 ? Math.min(30, Math.floor(6.0 * Math.log2(1.0 + (selectedTorrent.swarm_peers || 0)))) : 0} pts
-                    </span>
-                  </div>
-                </div>
+                {/* Evidence Breakdown from canonical scorer */}
+                <EvidenceBreakdown
+                  evidence={selectedTorrent.evidence_summary}
+                  healthScore={selectedTorrent.canonical_health_score ?? selectedTorrent.health_score}
+                />
 
                 <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1.5 border-t border-[#141414]">
                   <span className={(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? 'text-emerald-400 font-semibold' : 'text-[#777]'}>
@@ -809,21 +745,28 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
               </div>
 
               <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 space-y-2">
-                <div className="flex items-center justify-between text-xs font-mono">
-                  <span className="text-[#888] flex items-center gap-1.5">
-                    <TrendingUp className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Popularity</span>
-                  </span>
-                  <span className="text-cyan-400 font-bold font-mono">
-                    {selectedTorrent.popularity_score ?? 0}%
-                  </span>
-                </div>
-                <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-cyan-400 transition-all"
-                    style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.popularity_score ?? 0))}%` }}
-                  />
-                </div>
+                {(() => {
+                  const c = getPopularityColor(selectedTorrent.popularity_score)
+                  return (
+                    <>
+                      <div className="flex items-center justify-between text-xs font-mono">
+                        <span className="text-[#888] flex items-center gap-1.5">
+                          <TrendingUp className={`w-3.5 h-3.5 ${c.text}`} />
+                          <span>Popularity</span>
+                        </span>
+                        <span className={`${c.text} font-bold font-mono`}>
+                          {selectedTorrent.popularity_score ?? 0}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${c.bar}`}
+                          style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.popularity_score ?? 0))}%` }}
+                        />
+                      </div>
+                    </>
+                  )
+                })()}
                 <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1 border-t border-[#141414]">
                   <span>Velocity: Active</span>
                   <span>{Number(selectedTorrent.total_seen || 1).toLocaleString()} Hits</span>
@@ -867,15 +810,20 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                 </div>
                 <div className="p-2 rounded bg-[#141414] border border-[#222]">
                   <div className="text-[10px] text-[#777] uppercase">Availability</div>
-                  <div className={`text-sm font-bold mt-0.5 ${
-                    (selectedTorrent.availability_state === 'ACTIVE' || (selectedTorrent.availability_score ?? 100) >= 60)
+                  {(() => {
+                    const availState = selectedTorrent.canonical_health_state ?? selectedTorrent.availability_state
+                    const availScore = selectedTorrent.availability_score ?? 100
+                    const availColor = (availState === 'VERIFIED' || availScore >= 60)
                       ? 'text-emerald-400'
-                      : (selectedTorrent.availability_state === 'DEGRADED' || (selectedTorrent.availability_score ?? 0) >= 25)
+                      : (availState === 'UNVERIFIED' || availScore >= 25)
                       ? 'text-amber-400'
                       : 'text-rose-400'
-                  }`}>
-                    {selectedTorrent.availability_score ?? 100}% ({selectedTorrent.availability_state || 'ACTIVE'})
-                  </div>
+                    return (
+                      <div className={`text-sm font-bold mt-0.5 ${availColor}`}>
+                        {availScore}% ({availState || 'UNKNOWN'})
+                      </div>
+                    )
+                  })()}
                 </div>
               </div>
             </div>
