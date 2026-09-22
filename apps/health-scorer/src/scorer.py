@@ -230,9 +230,18 @@ class HealthScorer:
             upper_bound = cursor.get_batch_upper_bound()
 
             if after_id >= upper_bound:
-                logger.debug(
-                    "No new observations (cursor=%d, upper=%d)", after_id, upper_bound
-                )
+                # When observation table is empty, also try legacy fallback
+                if LEGACY_ADAPTER_ENABLED and upper_bound == 0:
+                    legacy_count = self._process_legacy_fallback(batch_size=min(batch_size, 100))
+                    if legacy_count > 0:
+                        logger.info(
+                            "Legacy fallback: scored %d records from torrents table",
+                            legacy_count,
+                        )
+                else:
+                    logger.debug(
+                        "No new observations (cursor=%d, upper=%d)", after_id, upper_bound
+                    )
                 return 0
 
             # 2. Fetch new observations
