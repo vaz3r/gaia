@@ -158,6 +158,7 @@ class HealthScorer:
 
     def __init__(self, shadow_mode: bool = SHADOW_MODE):
         self.shadow_mode = shadow_mode
+        self._legacy_offset = 0
         self._stats = {
             "batches_processed": 0,
             "observations_processed": 0,
@@ -232,7 +233,7 @@ class HealthScorer:
             if after_id >= upper_bound:
                 # When observation table is empty, also try legacy fallback
                 if LEGACY_ADAPTER_ENABLED and upper_bound == 0:
-                    legacy_count = self._process_legacy_fallback(batch_size=min(batch_size, 100))
+                    legacy_count = self._process_legacy_fallback(batch_size=batch_size)
                     if legacy_count > 0:
                         logger.info(
                             "Legacy fallback: scored %d records from torrents table",
@@ -250,7 +251,7 @@ class HealthScorer:
                 # Dual-source fallback: when observations are empty and legacy
                 # adapter is enabled, process a small batch of legacy records.
                 if LEGACY_ADAPTER_ENABLED:
-                    legacy_count = self._process_legacy_fallback(batch_size=min(batch_size, 100))
+                    legacy_count = self._process_legacy_fallback(batch_size=batch_size)
                     if legacy_count > 0:
                         logger.info(
                             "Dual-source: fell back to legacy adapter (%d records)",
@@ -349,14 +350,15 @@ class HealthScorer:
         """Process a small batch of legacy records as dual-source fallback.
 
         This is called from process_batch() when observations are empty and
-        LEGACY_ADAPTER_ENABLED is true. Uses offset=0 to always process
-        the most recent legacy records.
+        LEGACY_ADAPTER_ENABLED is true. Progresses through all torrents
+        sequentially, wrapping around when the end is reached.
 
         Returns:
             Number of legacy records processed.
         """
-        records = fetch_legacy_records(limit=batch_size, offset=0)
+        records = fetch_legacy_records(limit=batch_size, offset=self._legacy_offset)
         if not records:
+            self._legacy_offset = 0
             return 0
 
         current_scores = _fetch_current_scores([r.infohash for r in records])
@@ -377,6 +379,7 @@ class HealthScorer:
 
             self._stats["legacy_records_scored"] += 1
 
+        self._legacy_offset += len(records)
         return len(records)
 
     @property
