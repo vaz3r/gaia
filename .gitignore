@@ -8,6 +8,10 @@ dist/
 bin/
 obj/
 
+# Python
+*.pyc
+__pycache__/
+
 # Data backups
 backup-*.sql
 

@@ -10,6 +10,7 @@ use crate::krpc::Infohash;
 use crate::metrics::{Add1, Metrics};
 use crate::router::Router;
 use crate::storage::batch_writer::BatchWriter;
+use crate::storage::observations::ObservationWriter;
 use crate::verify::fetch_pool::{FetchParams, VerifyResult, verify_infohash};
 use crate::verify::peer_cache::PeerCache;
 use crate::verify::verify::check;
@@ -240,6 +241,7 @@ pub async fn run_pipeline(
     ip_cooldown: Arc<crate::net::ip_cooldown::IpCooldownCache>,
     config: VerifyConfig,
     stable_peers: Arc<Vec<SocketAddr>>,
+    observations: Arc<ObservationWriter>,
 ) {
     let pipeline_limit = Arc::new(Semaphore::new(config.pipeline_limit.max(1)));
     let fetch_limit = Arc::new(Semaphore::new(config.fetch_limit.max(1)));
@@ -365,6 +367,7 @@ pub async fn run_pipeline(
         let fetch_limit = fetch_limit.clone();
         let ip_cooldown = ip_cooldown.clone();
         let stable_peers = stable_peers.clone();
+        let observations = observations.clone();
         tokio::spawn(async move {
             let _pipeline_permit = _pipeline_permit;
             metrics.pipeline_spawned_total.add(1);
@@ -429,6 +432,7 @@ pub async fn run_pipeline(
                         metrics.announce_success.add(1);
                     }
                     batch_writer.push_torrent(ih, &meta, peer_addr);
+                    observations.push_metadata_success(ih.as_slice().to_vec(), None);
                     crate::trace_lifecycle!(
                         &ih,
                         "persist_torrents",
@@ -447,6 +451,7 @@ pub async fn run_pipeline(
                     metrics.sha1_mismatch.add(1);
                     metrics.verify_fail.add(1);
                     batch_writer.push_failed(ih, "sha1_mismatch");
+                    observations.push_metadata_failure(ih.as_slice().to_vec(), "sha1_mismatch".to_string());
                 }
                 VerifyResult::NoPeers => {
                     crate::trace_lifecycle!(
@@ -469,6 +474,7 @@ pub async fn run_pipeline(
                     );
                     metrics.verify_fail.add(1);
                     batch_writer.push_failed(ih, "source_timeout");
+                    observations.push_metadata_failure(ih.as_slice().to_vec(), "source_timeout".to_string());
                 }
                 VerifyResult::MetadataFailed => {
                     crate::trace_lifecycle!(
@@ -479,6 +485,7 @@ pub async fn run_pipeline(
                     );
                     metrics.verify_fail.add(1);
                     batch_writer.push_failed(ih, "no_metadata");
+                    observations.push_metadata_failure(ih.as_slice().to_vec(), "no_metadata".to_string());
                 }
             }
             let handling_us = handling_start.elapsed().as_micros().min(u64::MAX as u128) as u64;

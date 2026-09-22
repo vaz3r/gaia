@@ -15,7 +15,8 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 try:
-    from .config import ALGORITHM_VERSION, SHADOW_MODE
+    from . import db
+    from .config import ALGORITHM_VERSION, LEGACY_ADAPTER_ENABLED, SHADOW_MODE
     from .cursor import ScorerCursor
     from .evidence_aggregator import Observation, aggregate_observations
     from .formula import HealthScoreResult, HealthState, compute_health_score
@@ -29,7 +30,8 @@ try:
         group_observations_by_infohash,
     )
 except ImportError:
-    from config import ALGORITHM_VERSION, SHADOW_MODE
+    import db
+    from config import ALGORITHM_VERSION, LEGACY_ADAPTER_ENABLED, SHADOW_MODE
     from cursor import ScorerCursor
     from evidence_aggregator import Observation, aggregate_observations
     from formula import HealthScoreResult, HealthState, compute_health_score
@@ -150,8 +152,8 @@ class HealthScorer:
     """Orchestrates evidence reading, aggregation, scoring, and logging.
 
     In shadow mode (default), computes scores and logs them without writing
-    to the torrents table or Redis. In production mode (M2+), writes canonical
-    scores atomically.
+    to the health_scores table. In production mode (M2.3+), writes canonical
+    scores atomically via upsert.
     """
 
     def __init__(self, shadow_mode: bool = SHADOW_MODE):
@@ -161,7 +163,48 @@ class HealthScorer:
             "observations_processed": 0,
             "infohashes_scored": 0,
             "legacy_records_scored": 0,
+            "canonical_writes": 0,
         }
+
+    def _write_canonical_score(
+        self,
+        infohash: bytes,
+        result: HealthScoreResult,
+        evidence_source: str,
+    ) -> None:
+        """Write a canonical health score to the health_scores table.
+
+        Only called when shadow_mode is False. Logs success/failure but
+        does not raise on write errors.
+        """
+        if self.shadow_mode:
+            return
+
+        try:
+            from .db import write_health_score
+        except ImportError:
+            from db import write_health_score
+
+        success = write_health_score(
+            infohash=infohash,
+            health_score=result.health_score,
+            health_confidence=result.health_confidence,
+            health_state=result.health_state.value,
+            algorithm_version=result.algorithm_version,
+            evidence_source=evidence_source,
+            direct_component=result.direct_component,
+            seed_component=result.seed_component,
+            peer_component=result.peer_component,
+            dht_component=result.dht_component,
+            failure_penalty=result.failure_penalty,
+        )
+        if success:
+            self._stats["canonical_writes"] += 1
+        else:
+            logger.warning(
+                "Failed to write canonical score for %s",
+                bytea_to_hex(infohash) if infohash else "?",
+            )
 
     def process_batch(self, batch_size: int = 500, cursor: Optional[ScorerCursor] = None) -> int:
         """Process a batch of observations through the scoring pipeline.
@@ -195,6 +238,15 @@ class HealthScorer:
             # 2. Fetch new observations
             observations = fetch_observations_batch(after_id, upper_bound, batch_size)
             if not observations:
+                # Dual-source fallback: when observations are empty and legacy
+                # adapter is enabled, process a small batch of legacy records.
+                if LEGACY_ADAPTER_ENABLED:
+                    legacy_count = self._process_legacy_fallback(batch_size=min(batch_size, 100))
+                    if legacy_count > 0:
+                        logger.info(
+                            "Dual-source: fell back to legacy adapter (%d records)",
+                            legacy_count,
+                        )
                 cursor.advance(upper_bound)
                 return 0
 
@@ -216,6 +268,9 @@ class HealthScorer:
                 _log_shadow_result(
                     infohash, result, current, "observations", evidence
                 )
+
+                if not self.shadow_mode:
+                    self._write_canonical_score(infohash, result, "observations")
 
                 max_obs_id = max(max_obs_id, max(o.id for o in obs_list))
                 self._stats["infohashes_scored"] += 1
@@ -269,12 +324,49 @@ class HealthScorer:
                 record.infohash, result, current, "legacy_adapter", evidence
             )
 
+            if not self.shadow_mode:
+                self._write_canonical_score(record.infohash, result, "legacy_adapter")
+
             self._stats["legacy_records_scored"] += 1
 
         elapsed = time.time() - t0
         logger.info(
             "Legacy batch processed: %d records, %.3fs", len(records), elapsed
         )
+
+        return len(records)
+
+    def _process_legacy_fallback(self, batch_size: int = 100) -> int:
+        """Process a small batch of legacy records as dual-source fallback.
+
+        This is called from process_batch() when observations are empty and
+        LEGACY_ADAPTER_ENABLED is true. Uses offset=0 to always process
+        the most recent legacy records.
+
+        Returns:
+            Number of legacy records processed.
+        """
+        records = fetch_legacy_records(limit=batch_size, offset=0)
+        if not records:
+            return 0
+
+        current_scores = _fetch_current_scores([r.infohash for r in records])
+
+        for record in records:
+            evidence = derive_evidence_from_legacy(record)
+            result = compute_health_score(
+                evidence, algorithm_version=ALGORITHM_VERSION
+            )
+            current = current_scores.get(record.infohash)
+
+            _log_shadow_result(
+                record.infohash, result, current, "legacy_adapter", evidence
+            )
+
+            if not self.shadow_mode:
+                self._write_canonical_score(record.infohash, result, "legacy_adapter")
+
+            self._stats["legacy_records_scored"] += 1
 
         return len(records)
 

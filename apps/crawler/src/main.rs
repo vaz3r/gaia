@@ -25,6 +25,7 @@ use crate::router::Router;
 use crate::storage::batch_writer::BatchWriter;
 use crate::storage::janitor::JanitorConfig;
 use crate::storage::jobs::{RetryConfig as JobRetryConfig, VerifyStore};
+use crate::storage::observations::ObservationWriter;
 use crate::storage::pending_infohashes::{PendingInfohashScheduler, PendingInfohashWriter};
 use crate::storage::pg::PoolConfig;
 use crate::storage::tombstone_filter::TombstoneFilter;
@@ -322,6 +323,14 @@ async fn main() {
         config.storage.peer_outcomes_flush_interval_secs,
     ));
 
+    let observations = Arc::new(ObservationWriter::new(
+        pool.clone(),
+        config.storage.sighting_chunk_size,
+    ));
+    let observations_run = observations.clone().run(Duration::from_millis(
+        config.storage.sighting_flush_interval_ms,
+    ));
+
     let stable_peers = Arc::new(crate::storage::jobs::get_stable_peers(&pool).await.unwrap_or_default());
     tracing::info!("Loaded {} stable peers for fast-lane", stable_peers.len());
     for sp in stable_peers.iter() {
@@ -369,6 +378,7 @@ async fn main() {
             },
         },
         stable_peers,
+        observations.clone(),
     );
 
     let report = report_loop(
@@ -456,6 +466,7 @@ async fn main() {
         ip_cooldown.clone(),
         crate::verify::health_prober::HealthProberConfig::default(),
         redis_conn,
+        observations.clone(),
     ));
     let health_prober_run = health_prober.run();
 
@@ -469,6 +480,7 @@ async fn main() {
     tokio::select! {
         _ = sightings_run => { eprintln!("[DBG] select: sightings_run resolved"); }
         _ = sightings_flush => { eprintln!("[DBG] select: sightings_flush resolved"); }
+        _ = observations_run => { eprintln!("[DBG] select: observations_run resolved"); }
         _ = retry_run => { eprintln!("[DBG] select: retry_run resolved"); }
         _ = buffer_run => { eprintln!("[DBG] select: buffer_run resolved"); }
         _ = batch_run => { eprintln!("[DBG] select: batch_run resolved"); }
@@ -485,6 +497,7 @@ async fn main() {
     tracing::info!("shutdown: draining pending writes");
     batch_writer.flush().await;
     sightings.flush().await;
+    observations.flush().await;
     pending_writer.flush().await;
     tracing::info!("shutdown complete");
 

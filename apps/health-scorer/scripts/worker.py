@@ -28,6 +28,7 @@ from config import (
     WORKER_DRY_RUN,
     HEARTBEAT_PATH,
     SHADOW_MODE,
+    LEGACY_ADAPTER_ENABLED,
     LOG_LEVEL,
 )
 from cursor import ScorerCursor
@@ -76,7 +77,7 @@ def run_worker(
     print(
         f"Batch Size: {batch_size} | Poll Interval: {poll_interval}s | "
         f"Dry Run: {dry_run} | Once: {once} | Shadow: {SHADOW_MODE} | "
-        f"Legacy Only: {legacy_only}",
+        f"Legacy Adapter: {LEGACY_ADAPTER_ENABLED} | Legacy Only: {legacy_only}",
         flush=True,
     )
     print("=" * 80, flush=True)
@@ -117,15 +118,9 @@ def run_worker(
                 )
                 legacy_offset += count
             else:
-                # Process new observations
+                # Process new observations (dual-source: falls back to legacy
+                # internally when LEGACY_ADAPTER_ENABLED and observations empty)
                 count = scorer.process_batch(batch_size=batch_size)
-
-                # Also process legacy records as a fallback when observations are sparse
-                if count == 0:
-                    legacy_count = scorer.process_legacy_batch(
-                        batch_size=min(batch_size, 100),
-                        offset=0,
-                    )
 
             total_processed += count or 0
 
@@ -150,7 +145,8 @@ def run_worker(
         f"\nWorker Summary: Batches: {stats['batches_processed']:,} | "
         f"Observations: {stats['observations_processed']:,} | "
         f"Infohashes Scored: {stats['infohashes_scored']:,} | "
-        f"Legacy Records: {stats['legacy_records_scored']:,}",
+        f"Legacy Records: {stats['legacy_records_scored']:,} | "
+        f"Canonical Writes: {stats['canonical_writes']:,}",
         flush=True,
     )
 

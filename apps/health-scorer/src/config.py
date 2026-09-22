@@ -17,6 +17,10 @@ WORKER_DRY_RUN = os.environ.get("WORKER_DRY_RUN", "false").lower() == "true"
 # Shadow mode: compute and log scores but do not write to torrents
 SHADOW_MODE = os.environ.get("SHADOW_MODE", "true").lower() == "true"
 
+# Legacy adapter: when enabled, fall back to legacy evidence derivation
+# when no observations are available for a batch. Disabled at M2.5 activation.
+LEGACY_ADAPTER_ENABLED = os.environ.get("LEGACY_ADAPTER_ENABLED", "true").lower() == "true"
+
 # Heartbeat file for health checks
 HEARTBEAT_PATH = os.environ.get("HEARTBEAT_PATH", "/tmp/health_scorer_heartbeat")
 

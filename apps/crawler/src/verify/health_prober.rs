@@ -1,5 +1,6 @@
 use crate::metrics::Metrics;
 use crate::router::Router;
+use crate::storage::observations::ObservationWriter;
 use crate::verify::peer_cache::PeerCache;
 use crate::verify::peer_source::{SourceResult, source_peers};
 use sqlx::PgPool;
@@ -36,6 +37,7 @@ pub struct HealthProber {
     config: HealthProberConfig,
     redis_conn: Option<redis::aio::ConnectionManager>,
     redis_sem: Arc<tokio::sync::Semaphore>,
+    observations: Arc<ObservationWriter>,
 }
 
 #[derive(Clone)]
@@ -55,6 +57,7 @@ impl HealthProber {
         ip_cooldown: Arc<crate::net::ip_cooldown::IpCooldownCache>,
         config: HealthProberConfig,
         redis_conn: Option<redis::aio::ConnectionManager>,
+        observations: Arc<ObservationWriter>,
     ) -> Self {
         HealthProber {
             pool,
@@ -65,6 +68,7 @@ impl HealthProber {
             config,
             redis_conn,
             redis_sem: Arc::new(tokio::sync::Semaphore::new(100)),
+            observations,
         }
     }
 
@@ -224,6 +228,10 @@ impl HealthProber {
                 .bind(seed_confirmed)
                 .execute(&self.pool)
                 .await;
+
+                let seed_count = if seed_confirmed { 1 } else { 0 };
+                self.observations
+                    .push_peer_seen(ih_bytes.clone(), peers_count as i32, seed_count);
 
                 if let (Some(mut conn), sem) = (self.redis_conn.clone(), self.redis_sem.clone()) {
                     if let Ok(permit) = sem.try_acquire_owned() {

@@ -51,7 +51,10 @@ public class DashboardRepository
         ["availability_score"] = "availability_score",
         ["scored_at"] = "scored_at",
         ["name"] = "name",
-        ["category"] = "category"
+        ["category"] = "category",
+        ["canonical_health_score"] = "hs.health_score",
+        ["health_confidence"] = "hs.confidence",
+        ["canonical_health_state"] = "hs.health_state"
     };
 
     public async Task<object> GetDashboardTorrentsAsync(
@@ -145,13 +148,19 @@ public class DashboardRepository
         var where = whereClauses.Count > 0 ? $"WHERE {string.Join(" AND ", whereClauses)}" : "";
 
         var dataSql = $@"
-            SELECT encode(infohash, 'hex') AS infohash, name, total_size, file_count, verified_at,
-                   first_seen, last_seen, total_seen,
-                   health_score, popularity_score, swarm_peers, seed_confirmed, last_health_check,
-                   category, category_confidence, needs_review, classified_at,
-                   integrity_score, policy_action, risk_tier, decision_source,
-                   availability_score, availability_state, scored_at
-            FROM torrents {where} {orderBy}
+            SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.total_size, t.file_count, t.verified_at,
+                   t.first_seen, t.last_seen, t.total_seen,
+                   t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed, t.last_health_check,
+                   t.category, t.category_confidence, t.needs_review, t.classified_at,
+                   t.integrity_score, t.policy_action, t.risk_tier, t.decision_source,
+                   t.availability_score, t.availability_state, t.scored_at,
+                   hs.health_score AS canonical_health_score,
+                   hs.confidence AS health_confidence,
+                   hs.health_state AS canonical_health_state,
+                   hs.algorithm_version, hs.evidence_summary, hs.health_calculated_at AS canonical_scored_at
+            FROM torrents t
+            LEFT JOIN health_scores hs ON hs.infohash = encode(t.infohash, 'hex')
+            {where} {orderBy}
             LIMIT {safeLimit} OFFSET {offset}";
 
         var rows = (await conn.QueryAsync(dataSql, builder)).ToList();
@@ -206,8 +215,13 @@ public class DashboardRepository
                    t.health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed, t.last_health_check,
                    t.category, t.category_confidence, t.needs_review, t.classified_at, t.classification_meta,
                    t.integrity_score, t.policy_action, t.risk_tier, t.decision_source,
-                   t.metadata_quality_score, t.availability_score, t.availability_state, t.scored_at
+                   t.metadata_quality_score, t.availability_score, t.availability_state, t.scored_at,
+                   hs.health_score AS canonical_health_score,
+                   hs.confidence AS health_confidence,
+                   hs.health_state AS canonical_health_state,
+                   hs.algorithm_version, hs.evidence_summary, hs.health_calculated_at AS canonical_scored_at
             FROM torrents t
+            LEFT JOIN health_scores hs ON hs.infohash = encode(t.infohash, 'hex')
             WHERE t.infohash = decode(@ih, 'hex')";
 
         return await conn.QuerySingleOrDefaultAsync(sql, new { ih = infohashHex.ToLowerInvariant() });
@@ -246,8 +260,12 @@ public class DashboardRepository
         const string sql = @"
             SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.total_size,
                    t.file_count, t.category, t.category_confidence,
-                   t.health_score, t.popularity_score, t.verified_at, t.piece_length
+                   t.health_score, t.popularity_score, t.verified_at, t.piece_length,
+                   hs.health_score AS canonical_health_score,
+                   hs.confidence AS health_confidence,
+                   hs.health_state AS canonical_health_state
             FROM torrents t
+            LEFT JOIN health_scores hs ON hs.infohash = encode(t.infohash, 'hex')
             WHERE t.infohash = ANY(ARRAY(SELECT decode(u, 'hex') FROM UNNEST(@hashes) AS u))";
 
         var rows = await conn.QueryAsync(sql, new { hashes = cleanHashes });

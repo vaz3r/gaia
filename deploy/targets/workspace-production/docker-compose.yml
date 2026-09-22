@@ -165,6 +165,8 @@ services:
       POLL_INTERVAL: ${HEALTH_SCORER_POLL_INTERVAL:-5}
       STATEMENT_TIMEOUT: ${HEALTH_SCORER_STATEMENT_TIMEOUT:-30}
       LOG_LEVEL: INFO
+      SHADOW_MODE: ${HEALTH_SCORER_SHADOW_MODE:-true}
+      LEGACY_ADAPTER_ENABLED: ${HEALTH_SCORER_LEGACY_ADAPTER_ENABLED:-true}
     volumes:
       - /home/${DEPLOY_USER:-core}/gaia-data/health-scorer:/app/data
     mem_limit: 1500m
