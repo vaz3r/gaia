@@ -233,7 +233,7 @@ class HealthScorer:
             if after_id >= upper_bound:
                 # When observation table is empty, also try legacy fallback
                 if LEGACY_ADAPTER_ENABLED and upper_bound == 0:
-                    legacy_count = self._process_legacy_fallback(batch_size=batch_size)
+                    legacy_count = self._process_legacy_fallback(batch_size=min(batch_size, 200))
                     if legacy_count > 0:
                         logger.info(
                             "Legacy fallback: scored %d records from torrents table",
@@ -251,7 +251,7 @@ class HealthScorer:
                 # Dual-source fallback: when observations are empty and legacy
                 # adapter is enabled, process a small batch of legacy records.
                 if LEGACY_ADAPTER_ENABLED:
-                    legacy_count = self._process_legacy_fallback(batch_size=batch_size)
+                    legacy_count = self._process_legacy_fallback(batch_size=min(batch_size, 200))
                     if legacy_count > 0:
                         logger.info(
                             "Dual-source: fell back to legacy adapter (%d records)",
