@@ -120,7 +120,7 @@ def run_worker(
             else:
                 # Process new observations (dual-source: falls back to legacy
                 # internally when LEGACY_ADAPTER_ENABLED and observations empty)
-                count = scorer.process_batch(batch_size=batch_size)
+                count = scorer.process_batch(batch_size=batch_size, cursor=cursor)
 
             total_processed += count or 0
 
