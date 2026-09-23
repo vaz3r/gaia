@@ -1368,7 +1368,7 @@ public class DashboardRepository
             worker_status = workerStatus
         };
 
-        _memoryCache.Set(cacheKey, result, TimeSpan.FromSeconds(10));
+        _memoryCache.Set(cacheKey, result, TimeSpan.FromMinutes(2));
         return result;
     }
 

@@ -239,6 +239,7 @@ class HealthScorer:
                             "Legacy fallback: scored %d records from torrents table",
                             legacy_count,
                         )
+                        return legacy_count
                 else:
                     logger.debug(
                         "No new observations (cursor=%d, upper=%d)", after_id, upper_bound
@@ -246,7 +247,9 @@ class HealthScorer:
                 return 0
 
             # 2. Fetch new observations
-            observations = fetch_observations_batch(after_id, upper_bound, batch_size)
+            observations = fetch_observations_batch(
+                after_id=after_id, limit=batch_size, upper_bound=upper_bound
+            )
             if not observations:
                 # Dual-source fallback: when observations are empty and legacy
                 # adapter is enabled, process a small batch of legacy records.
@@ -257,6 +260,8 @@ class HealthScorer:
                             "Dual-source: fell back to legacy adapter (%d records)",
                             legacy_count,
                         )
+                        cursor.advance(upper_bound)
+                        return legacy_count
                 cursor.advance(upper_bound)
                 return 0
 
@@ -323,6 +328,7 @@ class HealthScorer:
         # Fetch current scores for comparison
         current_scores = _fetch_current_scores([r.infohash for r in records])
 
+        batch_records = []
         for record in records:
             evidence = derive_evidence_from_legacy(record)
             result = compute_health_score(
@@ -335,9 +341,33 @@ class HealthScorer:
             )
 
             if not self.shadow_mode:
-                self._write_canonical_score(record.infohash, result, "legacy_adapter")
+                ih_hex = record.infohash.hex() if isinstance(record.infohash, (bytes, memoryview)) else str(record.infohash)
+                evidence_summary = json.dumps({
+                    "evidence_source": "legacy_adapter",
+                    "direct_component": round(result.direct_component, 4),
+                    "seed_component": round(result.seed_component, 4),
+                    "peer_component": round(result.peer_component, 4),
+                    "dht_component": round(result.dht_component, 4),
+                    "failure_penalty": round(result.failure_penalty, 4),
+                })
+                batch_records.append((
+                    ih_hex,
+                    result.health_score,
+                    result.health_state.value,
+                    result.health_confidence,
+                    evidence_summary,
+                    result.algorithm_version,
+                ))
 
             self._stats["legacy_records_scored"] += 1
+
+        if batch_records and not self.shadow_mode:
+            try:
+                from .db import write_health_scores_batch
+            except ImportError:
+                from db import write_health_scores_batch
+            written = write_health_scores_batch(batch_records)
+            self._stats["canonical_writes"] += written
 
         elapsed = time.time() - t0
         logger.info(
@@ -363,6 +393,7 @@ class HealthScorer:
 
         current_scores = _fetch_current_scores([r.infohash for r in records])
 
+        batch_records = []
         for record in records:
             evidence = derive_evidence_from_legacy(record)
             result = compute_health_score(
@@ -375,9 +406,33 @@ class HealthScorer:
             )
 
             if not self.shadow_mode:
-                self._write_canonical_score(record.infohash, result, "legacy_adapter")
+                ih_hex = record.infohash.hex() if isinstance(record.infohash, (bytes, memoryview)) else str(record.infohash)
+                evidence_summary = json.dumps({
+                    "evidence_source": "legacy_adapter",
+                    "direct_component": round(result.direct_component, 4),
+                    "seed_component": round(result.seed_component, 4),
+                    "peer_component": round(result.peer_component, 4),
+                    "dht_component": round(result.dht_component, 4),
+                    "failure_penalty": round(result.failure_penalty, 4),
+                })
+                batch_records.append((
+                    ih_hex,
+                    result.health_score,
+                    result.health_state.value,
+                    result.health_confidence,
+                    evidence_summary,
+                    result.algorithm_version,
+                ))
 
             self._stats["legacy_records_scored"] += 1
+
+        if batch_records and not self.shadow_mode:
+            try:
+                from .db import write_health_scores_batch
+            except ImportError:
+                from db import write_health_scores_batch
+            written = write_health_scores_batch(batch_records)
+            self._stats["canonical_writes"] += written
 
         self._legacy_offset += len(records)
         return len(records)

@@ -147,3 +147,55 @@ def write_health_score(
         return False
     finally:
         release_conn(pool, conn)
+
+
+def write_health_scores_batch(
+    records: List[tuple],
+) -> int:
+    """Upsert a batch of canonical health scores in a single transaction.
+
+    records is a list of tuples:
+      (infohash_hex, health_score, health_state, confidence, evidence_summary_json, algorithm_version)
+
+    Returns number of successfully written records.
+    """
+    if not records:
+        return 0
+
+    from psycopg2.extras import execute_values
+
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
+        conn.autocommit = False
+        with conn.cursor() as cur:
+            execute_values(
+                cur,
+                """
+                INSERT INTO health_scores (
+                    infohash, health_score, health_state, confidence,
+                    evidence_summary, algorithm_version, health_calculated_at
+                ) VALUES %s
+                ON CONFLICT (infohash) DO UPDATE SET
+                    health_score = EXCLUDED.health_score,
+                    health_state = EXCLUDED.health_state,
+                    confidence = EXCLUDED.confidence,
+                    evidence_summary = EXCLUDED.evidence_summary,
+                    algorithm_version = EXCLUDED.algorithm_version,
+                    health_calculated_at = now()
+                """,
+                records,
+                template="(%s, %s, %s, %s, %s::jsonb, %s, now())",
+                page_size=len(records),
+            )
+        conn.commit()
+        return len(records)
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return 0
+    finally:
+        release_conn(pool, conn)
+
