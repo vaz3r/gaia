@@ -34,18 +34,37 @@ export function getAvailabilityColor(state) {
   }
 }
 
-export function HealthBar({ score, className = '' }) {
-  const c = getHealthColor(score)
+export function deriveScoreFromState(state) {
+  switch ((state || '').toUpperCase()) {
+    case 'VERIFIED':  return 72   // mid of 70-100 range
+    case 'ACTIVE':    return 55   // mid of 40-70 range
+    case 'DEGRADED':
+    case 'STALE':     return 25   // mid of 15-40 range
+    case 'DORMANT':   return 8    // below 15
+    case 'DEAD':      return 2
+    default:          return null  // truly unknown — show dash
+  }
+}
+
+export function HealthBar({ score, state, className = '' }) {
+  const effectiveScore = score ?? deriveScoreFromState(state)
+  const c = getHealthColor(effectiveScore)
+  const isEstimated = score == null && effectiveScore != null
   return (
     <div className={`flex items-center gap-2 ${className}`}>
       <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
         <div
           className={`h-full rounded-full ${c.bar}`}
-          style={{ width: `${Math.min(100, Math.max(0, score ?? 0))}%` }}
+          style={{ width: `${Math.min(100, Math.max(0, effectiveScore ?? 0))}%` }}
         />
       </div>
-      {score != null ? (
-        <span className={`text-[11px] font-mono font-semibold ${c.text}`}>{score}%</span>
+      {effectiveScore != null ? (
+        <span
+          className={`text-[11px] font-mono font-semibold ${c.text}`}
+          title={isEstimated ? 'Estimated from availability state' : undefined}
+        >
+          {isEstimated ? `~${effectiveScore}%` : `${score}%`}
+        </span>
       ) : (
         <span className="text-[11px] font-mono text-zinc-500" title="Unprobed">—</span>
       )}

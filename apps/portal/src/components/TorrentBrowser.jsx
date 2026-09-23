@@ -22,7 +22,7 @@ import {
 } from 'lucide-react'
 import { api, downloadTorrent, magnetFrom } from '../api.js'
 import { formatBytes, formatTime } from '../utils.js'
-import { HealthBar, PopularityBar, HealthStatePill, EvidenceBreakdown, SecurityShield, TrendingBadge, getHealthColor, getPopularityColor } from './HealthScoreDisplay.jsx'
+import { HealthBar, PopularityBar, HealthStatePill, EvidenceBreakdown, SecurityShield, TrendingBadge, getHealthColor, getPopularityColor, deriveScoreFromState } from './HealthScoreDisplay.jsx'
 
 export const CANONICAL_CATEGORIES = [
   'Adult',
@@ -467,13 +467,10 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                     </td>
 
                     <td className="py-3 px-4 whitespace-nowrap">
-                      <div className="flex items-center gap-1.5">
-                        <HealthBar score={t.canonical_health_score ?? t.health_score} />
-                        <HealthStatePill
-                          state={t.canonical_health_state ?? t.health_state ?? t.availability_state}
-                          score={t.canonical_health_score ?? t.health_score}
-                        />
-                      </div>
+                      <HealthBar
+                        score={t.canonical_health_score ?? t.health_score}
+                        state={t.canonical_health_state ?? t.health_state ?? t.availability_state}
+                      />
                     </td>
 
                     <td className="py-3 px-4 whitespace-nowrap">
@@ -699,25 +696,16 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                     <span>Swarm Health & Liveness</span>
                   </span>
                   {(() => {
-                    const displayScore = selectedTorrent.canonical_health_score ?? selectedTorrent.health_score
-                    let displayState = selectedTorrent.canonical_health_state ?? selectedTorrent.health_state ?? selectedTorrent.availability_state
-                    if (!displayState || displayState === 'UNKNOWN') {
-                      if (displayScore != null) {
-                        if (displayScore >= 70) displayState = 'VERIFIED'
-                        else if (displayScore >= 40) displayState = 'ACTIVE'
-                        else if (displayScore >= 15) displayState = 'DEGRADED'
-                        else if (displayScore > 0) displayState = 'DORMANT'
-                        else displayState = 'DEAD'
-                      } else {
-                        displayState = 'UNPROBED'
-                      }
-                    }
+                    const rawScore = selectedTorrent.canonical_health_score ?? selectedTorrent.health_score
+                    const state = selectedTorrent.canonical_health_state ?? selectedTorrent.health_state ?? selectedTorrent.availability_state
+                    const displayScore = rawScore ?? deriveScoreFromState(state)
                     const c = getHealthColor(displayScore)
+                    const isEstimated = rawScore == null && displayScore != null
                     return (
-                      <span className={`font-bold ${c.text}`}>
+                      <span className={`font-bold ${c.text}`} title={isEstimated ? 'Estimated from availability state' : undefined}>
                         {displayScore != null
-                          ? `${displayScore}% (${displayState})`
-                          : `— (${displayState})`}
+                          ? (isEstimated ? `~${displayScore}%` : `${displayScore}%`)
+                          : '—'}
                       </span>
                     )
                   })()}
@@ -725,7 +713,9 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
 
                 <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
                   {(() => {
-                    const displayScore = selectedTorrent.canonical_health_score ?? selectedTorrent.health_score
+                    const rawScore = selectedTorrent.canonical_health_score ?? selectedTorrent.health_score
+                    const state = selectedTorrent.canonical_health_state ?? selectedTorrent.health_state ?? selectedTorrent.availability_state
+                    const displayScore = rawScore ?? deriveScoreFromState(state)
                     const c = getHealthColor(displayScore)
                     return (
                       <div

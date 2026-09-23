@@ -57,7 +57,7 @@ import { formatBytes, formatNum, formatTime, formatUptime, formatDubaiDate, form
 import AnalysisView from './components/AnalysisView.jsx';
 import ClassifierView from './components/ClassifierView.jsx';
 import SurveillanceRadar from './components/SurveillanceRadar.jsx';
-import { HealthBar, PopularityBar, HealthStatePill, EvidenceBreakdown, SecurityShield, TrendingBadge } from './components/HealthScoreDisplay.jsx';
+import { HealthBar, PopularityBar, HealthStatePill, EvidenceBreakdown, SecurityShield, TrendingBadge, deriveScoreFromState, getHealthColor } from './components/HealthScoreDisplay.jsx';
 import { useTelemetryStore } from './stores/telemetryStore.js';
 import { useBrowserStore } from './stores/browserStore.js';
 import { usePeersStore } from './stores/peersStore.js';
@@ -1418,10 +1418,10 @@ export default function App() {
                           </td>
 
                           <td className="py-3 px-4 whitespace-nowrap">
-                            <div className="flex items-center gap-1.5">
-                              <HealthBar score={t.canonical_health_score ?? t.health_score} />
-                              <HealthStatePill state={t.canonical_health_state ?? t.health_state} score={t.canonical_health_score ?? t.health_score} />
-                            </div>
+                            <HealthBar
+                              score={t.canonical_health_score ?? t.health_score}
+                              state={t.canonical_health_state ?? t.health_state}
+                            />
                           </td>
 
                           <td className="py-3 px-4 whitespace-nowrap">
@@ -2565,17 +2565,21 @@ export default function App() {
                       <span>Swarm Health & Liveness</span>
                     </span>
                     <div className="flex items-center gap-2">
-                      <span
-                        className={`font-bold ${
-                          ((selectedTorrent.canonical_health_score ?? selectedTorrent.health_score) ?? 0) >= 70
-                            ? 'text-emerald-400'
-                            : ((selectedTorrent.canonical_health_score ?? selectedTorrent.health_score) ?? 0) >= 40
-                            ? 'text-amber-400'
-                            : 'text-rose-400'
-                        }`}
-                      >
-                        {(selectedTorrent.canonical_health_score ?? selectedTorrent.health_score) ?? 0}% ({selectedTorrent.canonical_health_state ?? selectedTorrent.availability_state ?? 'ACTIVE'})
-                      </span>
+                      {(() => {
+                        const rawScore = selectedTorrent.canonical_health_score ?? selectedTorrent.health_score;
+                        const state = selectedTorrent.canonical_health_state ?? selectedTorrent.availability_state;
+                        const displayScore = rawScore ?? deriveScoreFromState(state);
+                        const c = getHealthColor(displayScore);
+                        const isEstimated = rawScore == null && displayScore != null;
+                        return (
+                          <span
+                            className={`font-bold ${c.text}`}
+                            title={isEstimated ? 'Estimated from availability state' : undefined}
+                          >
+                            {displayScore != null ? (isEstimated ? `~${displayScore}%` : `${displayScore}%`) : '—'}
+                          </span>
+                        );
+                      })()}
                       <button
                         onClick={() => handleRefreshHealth(selectedTorrent.infohash || selectedTorrent.hash)}
                         disabled={refreshingHealth}
@@ -2589,16 +2593,18 @@ export default function App() {
                   </div>
 
                   <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all ${
-                        ((selectedTorrent.canonical_health_score ?? selectedTorrent.health_score) ?? 0) >= 70
-                          ? 'bg-emerald-400'
-                          : ((selectedTorrent.canonical_health_score ?? selectedTorrent.health_score) ?? 0) >= 40
-                          ? 'bg-amber-400'
-                          : 'bg-rose-500'
-                      }`}
-                      style={{ width: `${Math.min(100, Math.max(0, (selectedTorrent.canonical_health_score ?? selectedTorrent.health_score) ?? 0))}%` }}
-                    />
+                    {(() => {
+                      const rawScore = selectedTorrent.canonical_health_score ?? selectedTorrent.health_score;
+                      const state = selectedTorrent.canonical_health_state ?? selectedTorrent.availability_state;
+                      const displayScore = rawScore ?? deriveScoreFromState(state);
+                      const c = getHealthColor(displayScore);
+                      return (
+                        <div
+                          className={`h-full rounded-full transition-all ${c.bar}`}
+                          style={{ width: `${Math.min(100, Math.max(0, displayScore ?? 0))}%` }}
+                        />
+                      );
+                    })()}
                   </div>
 
                   {/* Canonical Bayesian Evidence Breakdown (v2.0) */}
