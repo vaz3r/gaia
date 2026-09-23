@@ -140,7 +140,7 @@ echo "=== Deploying $TAG to $TARGET ($DEPLOY_HOST) [recreate=$([ "$FORCE_RECREAT
 
 # ── Suspend egress killswitch on remote during deploy if active ──
 RESTORE_KILLSWITCH=0
-if $SSH "command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet gaia-killswitch" 2>/dev/null; then
+if $SSH "sudo iptables -C OUTPUT -p tcp -m tcp --dport 443 -j REJECT --reject-with icmp-net-unreachable 2>/dev/null || (command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet gaia-killswitch)" 2>/dev/null; then
     echo "Temporarily suspending egress killswitch on $DEPLOY_HOST for deployment..."
     $SSH "sudo iptables -D OUTPUT -p tcp -m tcp --dport 443 -j REJECT --reject-with icmp-net-unreachable 2>/dev/null || true; sudo iptables -D OUTPUT -p tcp -m tcp --dport 80 -j REJECT --reject-with icmp-net-unreachable 2>/dev/null || true"
     RESTORE_KILLSWITCH=1
