@@ -394,6 +394,15 @@ public class MeilisearchSearchProvider : ISearchProvider
             verifiedDate = dt.ToUniversalTime();
         }
 
+        string? healthState = h.HealthState;
+        if (string.IsNullOrEmpty(healthState) && h.HealthScore.HasValue)
+        {
+            var hs = h.HealthScore.Value;
+            healthState = hs >= 70 ? "VERIFIED" : hs >= 40 ? "ACTIVE" : hs >= 15 ? "DEGRADED" : hs > 0 ? "DORMANT" : "DEAD";
+        }
+
+        int? integrityScore = h.IntegrityScore ?? (h.RiskTier == "BLOCKED" ? 0 : h.RiskTier == "REVIEW" ? 45 : 100);
+
         return new SearchResultItem(
             h.Infohash,
             h.Name,
@@ -406,7 +415,9 @@ public class MeilisearchSearchProvider : ISearchProvider
             h.SwarmPeers,
             h.SeedConfirmed,
             h.RiskTier,
-            h.PolicyAction
+            h.PolicyAction,
+            healthState,
+            integrityScore
         );
     }
 }
@@ -463,4 +474,10 @@ public class MeiliTorrentHit
 
     [JsonPropertyName("policy_action")]
     public string PolicyAction { get; set; } = "ALLOW";
+
+    [JsonPropertyName("health_state")]
+    public string? HealthState { get; set; }
+
+    [JsonPropertyName("integrity_score")]
+    public int? IntegrityScore { get; set; }
 }

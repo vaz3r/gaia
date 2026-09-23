@@ -55,10 +55,13 @@ public class PostgresTrigramSearchProvider : ISearchProvider
         };
 
         var sql = $"""
-            SELECT encode(infohash, 'hex') AS infohash, name, category, total_size, file_count,
-                   verified_at, health_score, popularity_score, swarm_peers, seed_confirmed,
-                   risk_tier, policy_action
-            FROM torrents
+            SELECT encode(t.infohash, 'hex') AS infohash, t.name, t.category, t.total_size, t.file_count,
+                   t.verified_at, COALESCE(hs.health_score, t.health_score) AS health_score, t.popularity_score, t.swarm_peers, t.seed_confirmed,
+                   t.risk_tier, t.policy_action,
+                   COALESCE(hs.health_state, t.availability_state) AS health_state,
+                   t.integrity_score
+            FROM torrents t
+            LEFT JOIN health_scores hs ON hs.infohash = encode(t.infohash, 'hex')
             WHERE {string.Join(" AND ", whereClauses)}
             {orderBy}
             LIMIT @lim OFFSET @off;
@@ -78,6 +81,7 @@ public class PostgresTrigramSearchProvider : ISearchProvider
     private static SearchResultItem MapRow(dynamic r) => new(
         r.infohash, r.name, r.category ?? "Other", (long)(r.total_size ?? 0), (int)(r.file_count ?? 0),
         r.verified_at as DateTime?, (int?)r.health_score, (int)(r.popularity_score ?? 0),
-        (int)(r.swarm_peers ?? 0), (bool)(r.seed_confirmed ?? false), r.risk_tier ?? "SAFE", r.policy_action ?? "ALLOW"
+        (int)(r.swarm_peers ?? 0), (bool)(r.seed_confirmed ?? false), r.risk_tier ?? "SAFE", r.policy_action ?? "ALLOW",
+        (string?)r.health_state, (int?)r.integrity_score
     );
 }

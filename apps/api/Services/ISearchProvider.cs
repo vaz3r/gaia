@@ -14,7 +14,9 @@ public record SearchResultItem(
     [property: JsonPropertyName("swarm_peers")] int SwarmPeers,
     [property: JsonPropertyName("seed_confirmed")] bool SeedConfirmed,
     [property: JsonPropertyName("risk_tier")] string RiskTier,
-    [property: JsonPropertyName("policy_action")] string PolicyAction
+    [property: JsonPropertyName("policy_action")] string PolicyAction,
+    [property: JsonPropertyName("health_state")] string? HealthState = null,
+    [property: JsonPropertyName("integrity_score")] int? IntegrityScore = null
 );
 
 public record SearchResponse(

@@ -57,7 +57,7 @@ import { formatBytes, formatNum, formatTime, formatUptime, formatDubaiDate, form
 import AnalysisView from './components/AnalysisView.jsx';
 import ClassifierView from './components/ClassifierView.jsx';
 import SurveillanceRadar from './components/SurveillanceRadar.jsx';
-import { HealthBar, PopularityBar, HealthStatePill, EvidenceBreakdown } from './components/HealthScoreDisplay.jsx';
+import { HealthBar, PopularityBar, HealthStatePill, EvidenceBreakdown, SecurityShield, TrendingBadge } from './components/HealthScoreDisplay.jsx';
 import { useTelemetryStore } from './stores/telemetryStore.js';
 import { useBrowserStore } from './stores/browserStore.js';
 import { usePeersStore } from './stores/peersStore.js';
@@ -1337,14 +1337,14 @@ export default function App() {
                         onClick={() => handleSortToggle('popularity')}
                         className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
                       >
-                        <div className="flex items-center gap-1.5">
-                          <span>Popularity</span>
+                        <div className="flex items-center gap-1.5" title="Search Indexer Trending Score (7-Day DHT Swarm Velocity)">
+                          <span>Trending</span>
                           {sortField === 'popularity' && (
                             <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
                           )}
                         </div>
                       </th>
-                      <th className="py-3 px-4 font-normal">Trust & Avail</th>
+                      <th className="py-3 px-4 font-normal">Antivirus / Safety</th>
                       <th
                         onClick={() => handleSortToggle('verified_at')}
                         className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
@@ -1420,24 +1420,16 @@ export default function App() {
                           <td className="py-3 px-4 whitespace-nowrap">
                             <div className="flex items-center gap-1.5">
                               <HealthBar score={t.canonical_health_score ?? t.health_score} />
-                              <HealthStatePill state={t.canonical_health_state ?? t.availability_state} />
+                              <HealthStatePill state={t.canonical_health_state ?? t.health_state} score={t.canonical_health_score ?? t.health_score} />
                             </div>
                           </td>
 
                           <td className="py-3 px-4 whitespace-nowrap">
-                            <PopularityBar score={t.popularity_score} />
+                            <TrendingBadge score={t.popularity_score} />
                           </td>
 
                           <td className="py-3 px-4 whitespace-nowrap">
-                            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
-                              t.risk_tier === 'BLOCKED'
-                                ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
-                                : t.risk_tier === 'REVIEW'
-                                ? 'bg-amber-950/60 text-amber-300 border-amber-800/50'
-                                : 'bg-emerald-950/40 text-emerald-400 border-emerald-800/40'
-                            }`}>
-                              {t.risk_tier || 'SAFE'}
-                            </span>
+                            <SecurityShield score={t.integrity_score} riskTier={t.risk_tier} policyAction={t.policy_action} />
                           </td>
 
                           <td className="py-3 px-4 text-[#888] whitespace-nowrap">
@@ -2534,7 +2526,7 @@ export default function App() {
                     <div className="p-4 text-center text-[#666] flex items-center justify-center gap-2">
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Loading verified file manifest...
                     </div>
-                  ) : selectedTorrent.files && selectedTorrent.files.length > 0 ? (
+                  ) : Array.isArray(selectedTorrent.files) && selectedTorrent.files.length > 0 ? (
                     selectedTorrent.files.map((f, idx) => {
                       const filePath = Array.isArray(f.path) ? f.path.join('/') : f.path || f.name || 'file';
                       const fileLen = f.length || f.size || 0;
@@ -2697,14 +2689,6 @@ export default function App() {
                     >
                       <Check className="w-2.5 h-2.5" />
                       <span>Allow</span>
-                    </button>
-                    <button
-                      disabled={modalOverriding}
-                      onClick={() => handleModalScoreOverride(selectedTorrent.infohash || selectedTorrent.hash, 'DOWNRANK')}
-                      className="px-2 py-1 rounded bg-amber-950/60 hover:bg-amber-900 border border-amber-800/60 text-amber-300 text-[10px] flex items-center gap-1 transition-colors disabled:opacity-40"
-                    >
-                      <AlertTriangle className="w-2.5 h-2.5" />
-                      <span>Downrank</span>
                     </button>
                     <button
                       disabled={modalOverriding}

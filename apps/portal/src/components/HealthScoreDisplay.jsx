@@ -1,11 +1,12 @@
 import React from 'react'
+import { Shield, ShieldCheck, ShieldAlert, Flame, Zap, TrendingUp } from 'lucide-react'
 
 export function getHealthColor(score) {
   if (score == null) return { bar: 'bg-zinc-700', text: 'text-zinc-500', label: 'Unknown' }
   if (score >= 70) return { bar: 'bg-emerald-400', text: 'text-emerald-400', label: 'Verified' }
   if (score >= 40) return { bar: 'bg-amber-400', text: 'text-amber-400', label: 'Good' }
   if (score >= 15) return { bar: 'bg-orange-400', text: 'text-orange-400', label: 'Degraded' }
-  return { bar: 'bg-rose-400', text: 'text-rose-400', label: 'Poor' }
+  return { bar: 'bg-rose-400', text: 'text-rose-400', label: 'Dead' }
 }
 
 export function getPopularityColor(score) {
@@ -18,10 +19,18 @@ export function getPopularityColor(score) {
 
 export function getAvailabilityColor(state) {
   switch (state) {
-    case 'VERIFIED':  return { bg: 'bg-emerald-950/30', text: 'text-emerald-400', border: 'border-emerald-800/30' }
-    case 'UNVERIFIED': return { bg: 'bg-amber-950/30', text: 'text-amber-300', border: 'border-amber-800/30' }
-    case 'STALE':     return { bg: 'bg-rose-950/30', text: 'text-rose-400', border: 'border-rose-800/30' }
-    default:          return { bg: 'bg-zinc-900/30', text: 'text-zinc-500', border: 'border-zinc-800/30' }
+    case 'VERIFIED':
+    case 'HEALTHY':
+    case 'ACTIVE':     return { bg: 'bg-emerald-950/30', text: 'text-emerald-400', border: 'border-emerald-800/30' }
+    case 'GOOD':       return { bg: 'bg-sky-950/30', text: 'text-sky-400', border: 'border-sky-800/30' }
+    case 'UNVERIFIED':
+    case 'SPARSE':
+    case 'DEGRADED':   return { bg: 'bg-amber-950/30', text: 'text-amber-300', border: 'border-amber-800/30' }
+    case 'DORMANT':
+    case 'DEAD':
+    case 'POOR':
+    case 'STALE':      return { bg: 'bg-rose-950/30', text: 'text-rose-400', border: 'border-rose-800/30' }
+    default:           return { bg: 'bg-zinc-900/30', text: 'text-zinc-500', border: 'border-zinc-800/30' }
   }
 }
 
@@ -59,11 +68,100 @@ export function PopularityBar({ score, className = '' }) {
   )
 }
 
-export function HealthStatePill({ state, className = '' }) {
-  const c = getAvailabilityColor(state)
+export function HealthStatePill({ state, score, className = '' }) {
+  // Intelligent state derivation if state is missing or unknown
+  let displayState = state
+  if (!displayState || displayState === 'UNKNOWN') {
+    if (score != null) {
+      if (score >= 70) displayState = 'VERIFIED'
+      else if (score >= 40) displayState = 'ACTIVE'
+      else if (score >= 15) displayState = 'DEGRADED'
+      else if (score > 0) displayState = 'DORMANT'
+      else displayState = 'DEAD'
+    } else {
+      displayState = 'UNPROBED'
+    }
+  }
+
+  const c = getAvailabilityColor(displayState)
   return (
-    <span className={`text-[9px] font-mono px-1 py-0.5 rounded border ${c.bg} ${c.text} ${c.border} ${className}`}>
-      {state || 'UNKNOWN'}
+    <span className={`text-[9px] font-mono px-1 py-0.5 rounded border uppercase ${c.bg} ${c.text} ${c.border} ${className}`}>
+      {displayState}
+    </span>
+  )
+}
+
+/**
+ * Antivirus Security Shield Component
+ * Renders security cleanliness score (0-100) and scan verdict based on integrity_score and policy enforcement
+ */
+export function SecurityShield({ score, riskTier, policyAction, showDetails = false, className = '' }) {
+  const effectiveScore = score ?? (riskTier === 'BLOCKED' ? 0 : riskTier === 'REVIEW' ? 45 : 100)
+  
+  let verdict = 'Clean'
+  let color = 'text-emerald-400 border-emerald-800/50 bg-emerald-950/40'
+  let Icon = ShieldCheck
+
+  if (effectiveScore >= 90 && riskTier !== 'BLOCKED') {
+    verdict = 'Clean'
+    color = 'text-emerald-400 border-emerald-800/50 bg-emerald-950/40'
+    Icon = ShieldCheck
+  } else if (effectiveScore >= 60 && riskTier !== 'BLOCKED') {
+    verdict = 'Low Risk'
+    color = 'text-sky-300 border-sky-800/50 bg-sky-950/40'
+    Icon = Shield
+  } else if (effectiveScore >= 30 && riskTier !== 'BLOCKED') {
+    verdict = 'Suspicious'
+    color = 'text-amber-300 border-amber-800/50 bg-amber-950/40'
+    Icon = ShieldAlert
+  } else {
+    verdict = 'Threat Blocked'
+    color = 'text-rose-300 border-rose-800/50 bg-rose-950/60'
+    Icon = ShieldAlert
+  }
+
+  return (
+    <div className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded border font-mono text-[10px] ${color} ${className}`} title={`Antivirus Scan: ${verdict} (${effectiveScore}/100)`}>
+      <Icon className="w-3 h-3 shrink-0" />
+      <span className="font-semibold">{effectiveScore}/100</span>
+      <span className="opacity-80 uppercase text-[9px]">{verdict}</span>
+    </div>
+  )
+}
+
+/**
+ * Search Indexer Trending Badge
+ * Displays trending ranking based on search queries, sighting frequency and swarm velocity
+ */
+export function TrendingBadge({ score, className = '' }) {
+  const s = score ?? 0
+  if (s >= 80) {
+    return (
+      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-violet-950/40 text-violet-300 border border-violet-800/40 ${className}`} title={`Trending Score: ${s}% (Viral / High Query Traffic)`}>
+        <Flame className="w-3 h-3 text-violet-400" />
+        <span>Top Trend {s}%</span>
+      </span>
+    )
+  }
+  if (s >= 50) {
+    return (
+      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-blue-950/40 text-blue-300 border border-blue-800/40 ${className}`} title={`Trending Score: ${s}% (Rising Search Demand)`}>
+        <Zap className="w-3 h-3 text-blue-400" />
+        <span>Trending {s}%</span>
+      </span>
+    )
+  }
+  if (s >= 20) {
+    return (
+      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-cyan-950/30 text-cyan-400 border border-cyan-800/30 ${className}`} title={`Trending Score: ${s}% (Active)`}>
+        <TrendingUp className="w-3 h-3 text-cyan-400" />
+        <span>Active {s}%</span>
+      </span>
+    )
+  }
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-zinc-900/40 text-zinc-400 border border-zinc-800/40 ${className}`} title={`Trending Score: ${s}% (Low Activity)`}>
+      <span>Quiet {s}%</span>
     </span>
   )
 }

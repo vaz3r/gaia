@@ -22,7 +22,7 @@ import {
 } from 'lucide-react'
 import { api, downloadTorrent, magnetFrom } from '../api.js'
 import { formatBytes, formatTime } from '../utils.js'
-import { HealthBar, PopularityBar, HealthStatePill, EvidenceBreakdown, getHealthColor, getPopularityColor } from './HealthScoreDisplay.jsx'
+import { HealthBar, PopularityBar, HealthStatePill, EvidenceBreakdown, SecurityShield, TrendingBadge, getHealthColor, getPopularityColor } from './HealthScoreDisplay.jsx'
 
 export const CANONICAL_CATEGORIES = [
   'Adult',
@@ -369,7 +369,7 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                   className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
                 >
                   <div className="flex items-center gap-1.5">
-                    <span>Health</span>
+                    <span>Swarm Health</span>
                     {sortField === 'health' && (
                       <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
                     )}
@@ -380,13 +380,13 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                   className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
                 >
                   <div className="flex items-center gap-1.5">
-                    <span>Popularity</span>
+                    <span>Trending</span>
                     {sortField === 'popularity' && (
                       <span className="text-emerald-400">{sortOrder === 'asc' ? '↑' : '↓'}</span>
                     )}
                   </div>
                 </th>
-                <th className="py-3 px-4 font-normal">Trust & Safety</th>
+                <th className="py-3 px-4 font-normal">Antivirus / Safety</th>
                 <th
                   onClick={() => handleSortToggle('verified_at')}
                   className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
@@ -469,24 +469,23 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                     <td className="py-3 px-4 whitespace-nowrap">
                       <div className="flex items-center gap-1.5">
                         <HealthBar score={t.canonical_health_score ?? t.health_score} />
-                        <HealthStatePill state={t.canonical_health_state ?? t.availability_state} />
+                        <HealthStatePill
+                          state={t.canonical_health_state ?? t.health_state ?? t.availability_state}
+                          score={t.canonical_health_score ?? t.health_score}
+                        />
                       </div>
                     </td>
 
                     <td className="py-3 px-4 whitespace-nowrap">
-                      <PopularityBar score={t.popularity_score} />
+                      <TrendingBadge score={t.popularity_score} />
                     </td>
 
                     <td className="py-3 px-4 whitespace-nowrap">
-                      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
-                        t.risk_tier === 'BLOCKED'
-                          ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
-                          : t.risk_tier === 'REVIEW'
-                          ? 'bg-amber-950/60 text-amber-300 border-amber-800/50'
-                          : 'bg-emerald-950/40 text-emerald-400 border-emerald-800/40'
-                      }`}>
-                        {t.risk_tier || 'SAFE'}
-                      </span>
+                      <SecurityShield
+                        score={t.integrity_score}
+                        riskTier={t.risk_tier}
+                        policyAction={t.policy_action}
+                      />
                     </td>
 
                     <td className="py-3 px-4 text-[#888] whitespace-nowrap">
@@ -661,7 +660,7 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                   <div className="p-4 text-center text-[#666] flex items-center justify-center gap-2">
                     <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" /> Loading verified file manifest...
                   </div>
-                ) : selectedTorrent.files && selectedTorrent.files.length > 0 ? (
+                ) : Array.isArray(selectedTorrent.files) && selectedTorrent.files.length > 0 ? (
                   selectedTorrent.files.map((f, idx) => {
                     const filePath = Array.isArray(f.path) ? f.path.join('/') : f.path || f.name || 'file'
                     const fileLen = f.length || f.size || 0
@@ -701,13 +700,24 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                   </span>
                   {(() => {
                     const displayScore = selectedTorrent.canonical_health_score ?? selectedTorrent.health_score
-                    const displayState = selectedTorrent.canonical_health_state ?? selectedTorrent.availability_state
+                    let displayState = selectedTorrent.canonical_health_state ?? selectedTorrent.health_state ?? selectedTorrent.availability_state
+                    if (!displayState || displayState === 'UNKNOWN') {
+                      if (displayScore != null) {
+                        if (displayScore >= 70) displayState = 'VERIFIED'
+                        else if (displayScore >= 40) displayState = 'ACTIVE'
+                        else if (displayScore >= 15) displayState = 'DEGRADED'
+                        else if (displayScore > 0) displayState = 'DORMANT'
+                        else displayState = 'DEAD'
+                      } else {
+                        displayState = 'UNPROBED'
+                      }
+                    }
                     const c = getHealthColor(displayScore)
                     return (
                       <span className={`font-bold ${c.text}`}>
                         {displayScore != null
-                          ? `${displayScore}% (${displayState || 'UNKNOWN'})`
-                          : `— (${displayState || 'UNKNOWN'})`}
+                          ? `${displayScore}% (${displayState})`
+                          : `— (${displayState})`}
                       </span>
                     )
                   })()}
@@ -750,13 +760,11 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                   return (
                     <>
                       <div className="flex items-center justify-between text-xs font-mono">
-                        <span className="text-[#888] flex items-center gap-1.5" title="Measures 7-day DHT search frequency and swarm announcement velocity. Independent of active seeders.">
+                        <span className="text-[#888] flex items-center gap-1.5" title="Search Indexer Trending Heat: Measures 7-day query traffic and swarm announcement velocity.">
                           <TrendingUp className={`w-3.5 h-3.5 ${c.text}`} />
-                          <span>Popularity (Swarm Demand)</span>
+                          <span>Search Indexer Trending</span>
                         </span>
-                        <span className={`${c.text} font-bold font-mono`}>
-                          {selectedTorrent.popularity_score ?? 0}%
-                        </span>
+                        <TrendingBadge score={selectedTorrent.popularity_score} />
                       </div>
                       <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
                         <div
@@ -774,21 +782,17 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
               </div>
             </div>
 
-            {/* Quality, Trust & Policy Scoring */}
+            {/* Antivirus Security Shield & Policy Enforcement */}
             <div className="rounded-xl border border-[#1e1e1e] bg-[#0c0c0c] p-4 space-y-3 font-mono">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Shield className="w-4 h-4 text-emerald-400" />
-                  <span className="text-xs font-semibold text-white">Trust, Integrity & Safety Policies</span>
-                  <span className={`text-[10px] px-2 py-0.5 rounded border ${
-                    selectedTorrent.risk_tier === 'BLOCKED'
-                      ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
-                      : selectedTorrent.risk_tier === 'REVIEW'
-                      ? 'bg-amber-950/60 text-amber-300 border-amber-800/50'
-                      : 'bg-emerald-950/60 text-emerald-300 border-emerald-800/50'
-                  }`}>
-                    {selectedTorrent.risk_tier || 'SAFE'} ({selectedTorrent.policy_action || 'ALLOW'})
-                  </span>
+                  <span className="text-xs font-semibold text-white">Antivirus & Content Security Shield</span>
+                  <SecurityShield
+                    score={selectedTorrent.integrity_score}
+                    riskTier={selectedTorrent.risk_tier}
+                    policyAction={selectedTorrent.policy_action}
+                  />
                 </div>
                 <span className="text-[10px] text-[#666]">
                   Source: {selectedTorrent.decision_source || 'MODEL'}
@@ -797,13 +801,13 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
 
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="p-2 rounded bg-[#141414] border border-[#222]">
-                  <div className="text-[10px] text-[#777] uppercase">Integrity</div>
-                  <div className="text-sm font-bold text-white mt-0.5">
-                    {selectedTorrent.integrity_score ?? 100}/100
+                  <div className="text-[10px] text-[#777] uppercase">Antivirus Score</div>
+                  <div className="text-sm font-bold text-emerald-400 mt-0.5">
+                    {selectedTorrent.integrity_score ?? (selectedTorrent.risk_tier === 'BLOCKED' ? 0 : selectedTorrent.risk_tier === 'REVIEW' ? 45 : 100)}/100
                   </div>
                 </div>
                 <div className="p-2 rounded bg-[#141414] border border-[#222]">
-                  <div className="text-[10px] text-[#777] uppercase">Meta Quality</div>
+                  <div className="text-[10px] text-[#777] uppercase">Content Quality</div>
                   <div className="text-sm font-bold text-white mt-0.5">
                     {selectedTorrent.metadata_quality_score ?? 85}/100
                   </div>

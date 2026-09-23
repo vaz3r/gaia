@@ -115,7 +115,12 @@ export const useBrowserStore = create((set, get) => ({
   },
 
   setSelectedTorrent: (torrent) => {
-    set({ selectedTorrent: torrent, modalRelabelMsg: null });
+    if (!torrent) {
+      set({ selectedTorrent: null, modalRelabelMsg: null });
+      return;
+    }
+    const safeFiles = Array.isArray(torrent.files) ? torrent.files : [];
+    set({ selectedTorrent: { ...torrent, files: safeFiles }, modalRelabelMsg: null });
   },
 
   setDetailLoading: (detailLoading) => set({ detailLoading }),
@@ -135,14 +140,26 @@ export const useBrowserStore = create((set, get) => ({
       try {
         const full = await api(`/api/torrents/${hash}`);
         if (full) {
+          let normalizedFiles = [];
+          if (Array.isArray(full.files)) {
+            normalizedFiles = full.files;
+          } else if (typeof full.files === 'string') {
+            try {
+              const parsed = JSON.parse(full.files);
+              normalizedFiles = Array.isArray(parsed) ? parsed : Object.values(parsed);
+            } catch {}
+          } else if (full.files && typeof full.files === 'object') {
+            normalizedFiles = Object.values(full.files);
+          }
+
           set((state) => ({
             selectedTorrent: {
               ...state.selectedTorrent,
               ...full,
               hash,
               pieceLength: formatBytes(full.piece_length),
-              pieceCount: full.file_count || full.files?.length || 1,
-              files: Array.isArray(full.files) ? full.files : [],
+              pieceCount: full.file_count || normalizedFiles.length || 1,
+              files: normalizedFiles,
             },
           }));
         }

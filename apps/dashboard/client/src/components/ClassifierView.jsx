@@ -36,6 +36,7 @@ import {
 import { api, magnetFrom } from '../api.js';
 import { formatBytes, formatNum, formatTime, formatDubaiDate } from '../utils.js';
 import CategoryPoliciesView from './CategoryPoliciesView.jsx';
+import { SecurityShield } from './HealthScoreDisplay.jsx';
 
 const CATEGORY_COLORS = {
   Adult: 'bg-rose-500/10 text-rose-400 border-rose-500/25',
@@ -663,7 +664,7 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
           {activeStudioTab === 'category'
             ? 'Ground-truth active learning'
             : activeStudioTab === 'scoring'
-            ? 'Quality, safety & availability triage'
+            ? 'Antivirus & Threat Adjudication'
             : activeStudioTab === 'blocked'
             ? 'Catalog governance & suppressed torrent audits'
             : 'Dynamic crawl policy & database purge worker'}
@@ -800,10 +801,9 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
                 <thead>
                   <tr className="border-b border-[#181818] text-[#666] text-[10px] uppercase">
                     <th className="py-2.5 px-4 font-normal">Payload / Title</th>
-                    <th className="py-2.5 px-3 font-normal">Risk Tier</th>
-                    <th className="py-2.5 px-3 font-normal">Action</th>
+                    <th className="py-2.5 px-3 font-normal">Antivirus / Risk</th>
+                    <th className="py-2.5 px-3 font-normal">Policy Action</th>
                     <th className="py-2.5 px-3 font-normal">Integrity</th>
-                    <th className="py-2.5 px-3 font-normal">Availability</th>
                     <th className="py-2.5 px-3 font-normal">Source</th>
                     <th className="py-2.5 px-4 font-normal text-right">Human Adjudication</th>
                   </tr>
@@ -811,14 +811,14 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
                 <tbody className="divide-y divide-[#141414] text-[11px]">
                   {scoringLoading ? (
                     <tr>
-                      <td colSpan={7} className="p-12 text-center text-[#666]">
+                      <td colSpan={6} className="p-12 text-center text-[#666]">
                         <RefreshCw className="w-5 h-5 animate-spin mx-auto text-white mb-2" />
                         <span>Loading pending adjudication items...</span>
                       </td>
                     </tr>
                   ) : scoringPending.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="p-12 text-center text-[#666]">
+                      <td colSpan={6} className="p-12 text-center text-[#666]">
                         <CheckCircle className="w-8 h-8 text-emerald-500 mx-auto mb-2 opacity-80" />
                         <div className="text-white font-semibold">Queue Clean!</div>
                         <div className="text-xs text-[#777] mt-0.5">No torrents currently pending human policy review.</div>
@@ -827,12 +827,6 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
                   ) : (
                     scoringPending.map((item) => {
                       const isActing = adjudicatingHash === item.infohash;
-                      const riskColor =
-                        item.risk_tier === 'BLOCKED'
-                          ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
-                          : item.risk_tier === 'REVIEW'
-                          ? 'bg-amber-950/60 text-amber-300 border-amber-800/50'
-                          : 'bg-emerald-950/60 text-emerald-300 border-emerald-800/50';
 
                       return (
                         <tr
@@ -854,19 +848,21 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
                           </td>
 
                           <td className="py-3 px-3 whitespace-nowrap">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${riskColor}`}>
-                              {item.risk_tier || 'UNKNOWN'}
-                            </span>
+                            <SecurityShield
+                              score={item.integrity_score}
+                              riskTier={item.risk_tier}
+                              policyAction={item.policy_action}
+                            />
                           </td>
 
                           <td className="py-3 px-3 whitespace-nowrap text-[#aaa]">
-                            <span className="px-1.5 py-0.5 rounded bg-[#141414] border border-[#242424] text-[10px]">
+                            <span className="px-1.5 py-0.5 rounded bg-[#141414] border border-[#242424] text-[10px] font-mono">
                               {item.policy_action || 'ALLOW'}
                             </span>
                           </td>
 
                           <td className="py-3 px-3 whitespace-nowrap">
-                            <span className={`font-semibold ${
+                            <span className={`font-semibold font-mono ${
                               item.integrity_score >= 80
                                 ? 'text-emerald-400'
                                 : item.integrity_score >= 50
@@ -877,19 +873,7 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
                             </span>
                           </td>
 
-                          <td className="py-3 px-3 whitespace-nowrap">
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                              item.availability_state === 'ACTIVE'
-                                ? 'bg-emerald-950/40 text-emerald-300 border-emerald-800/40'
-                                : item.availability_state === 'SPARSE'
-                                ? 'bg-amber-950/40 text-amber-300 border-amber-800/40'
-                                : 'bg-rose-950/40 text-rose-300 border-rose-800/40'
-                            }`}>
-                              {item.availability_state || 'UNKNOWN'} ({item.availability_score ?? 0}%)
-                            </span>
-                          </td>
-
-                          <td className="py-3 px-3 whitespace-nowrap text-[#777] text-[10px]">
+                          <td className="py-3 px-3 whitespace-nowrap text-[#777] text-[10px] font-mono">
                             {item.decision_source || 'MODEL'}
                           </td>
 
@@ -911,16 +895,6 @@ export default function ClassifierView({ onInspectTorrent, copyToClipboard, stre
                               >
                                 <Check className="w-2.5 h-2.5" />
                                 <span>Allow</span>
-                              </button>
-
-                              <button
-                                disabled={isActing}
-                                onClick={() => handleScoringOverride(item.infohash, 'DOWNRANK', 'Downranked via Adjudication Studio')}
-                                className="px-2 py-1 rounded bg-amber-950/60 hover:bg-amber-900/60 border border-amber-800/60 text-amber-300 text-[10px] flex items-center gap-1 transition-colors disabled:opacity-40"
-                                title="Downrank in search rankings"
-                              >
-                                <AlertTriangle className="w-2.5 h-2.5" />
-                                <span>Downrank</span>
                               </button>
 
                               <button
