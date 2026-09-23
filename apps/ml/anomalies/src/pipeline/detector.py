@@ -26,6 +26,10 @@ RECOMMENDATIONS = {
     "RESTART_EVENT": (
         "Crawler restart or process crash event detected. Verify host memory limits, OOM logs, and systemd journal."
     ),
+    "CALIBRATION_DRIFT": (
+        "Empirical accuracy drift detected: high-health torrent predictions are failing direct wire verification probes at an elevated rate (>20% failure). "
+        "Inspect Bayesian model priors, verify swarm decay parameters, and confirm tracker scrape freshness."
+    ),
     "NORMAL": "All operational telemetry within normal statistical and manifold parameters.",
 }
 

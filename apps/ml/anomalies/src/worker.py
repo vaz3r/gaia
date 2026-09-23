@@ -15,7 +15,7 @@ from config import MODELS_DIR, DATA_DIR
 from src.data.postgres_extractor import PostgresExtractor
 from src.data.feature_pipeline import FeaturePipeline
 from src.data.alert_recorder import AlertRecorder
-from src.pipeline.detector import AnomalyDetector
+from src.pipeline.detector import AnomalyDetector, RECOMMENDATIONS
 from src.pipeline.train import train_all_models
 
 logging.basicConfig(
@@ -101,6 +101,40 @@ class AnomalyWorker:
                             f"ANOMALY ALERT [{sev}] #{alert_id}: {inc} (Score: {score:.3f})\n"
                             f"  Guidance: {r['actionable_guidance']}"
                         )
+
+            # 2. Empirical Ground-Truth Calibration Drift Check
+            try:
+                calib = self.pg_extractor.extract_calibration_sample(lookback_hours=24)
+                if calib.get("sample_size", 0) >= 20:
+                    acc = calib["viable_accuracy"]
+                    logger.info(f"Empirical Calibration: viable precision={acc:.3f} across {calib['sample_size']} observations")
+                    
+                    if acc < 0.80:
+                        drift_score = round(1.0 - acc, 4)
+                        sev = "CRITICAL" if acc < 0.65 else "WARNING"
+                        calib_report = {
+                            "timestamp": str(end_time),
+                            "anomaly_score": drift_score,
+                            "isolation_forest_score": drift_score,
+                            "autoencoder_score": drift_score,
+                            "severity": sev,
+                            "predicted_incident": "CALIBRATION_DRIFT",
+                            "incident_confidence": round(float(1.0 - acc), 4),
+                            "top_contributing_features": [
+                                {"feature": "viable_accuracy", "value": acc, "weight": 0.5},
+                                {"feature": "total_probes", "value": calib["total_probes"], "weight": 0.3},
+                            ],
+                            "actionable_guidance": RECOMMENDATIONS.get("CALIBRATION_DRIFT", ""),
+                        }
+                        alert_id = self.recorder.record_alert(calib_report, deduplicate=True)
+                        if alert_id:
+                            recorded_count += 1
+                            logger.warning(
+                                f"ANOMALY ALERT [{sev}] #{alert_id}: CALIBRATION_DRIFT (Precision: {acc:.1%})\n"
+                                f"  Guidance: {calib_report['actionable_guidance']}"
+                            )
+            except Exception as e:
+                logger.warning(f"Could not evaluate empirical calibration: {e}")
 
             logger.info(f"Detection cycle finished. Flagged alerts: {recorded_count}")
             return recorded_count

@@ -136,10 +136,10 @@ export default function TorrentDetail({ infohash, onClose }) {
                   <Attr label="File Count" value={tor.file_count} />
                   <Attr label="Piece Length" value={formatBytes(tor.piece_length)} />
                   <Attr label="Category" value={tor.category || 'Uncategorized'} highlight />
-                  <Attr label="Health Score" value={tor.health_score !== null && tor.health_score !== undefined ? `${tor.health_score} / 100` : '—'} highlight={tor.health_score >= 70} />
+                  <Attr label="Health Score" value={(tor.canonical_health_score ?? tor.health_score) !== null && (tor.canonical_health_score ?? tor.health_score) !== undefined ? `${tor.canonical_health_score ?? tor.health_score} / 100` : '—'} highlight={(tor.canonical_health_score ?? tor.health_score) >= 70} />
+                  <Attr label="Health State" value={tor.canonical_health_state ?? tor.health_state ?? 'ACTIVE'} />
                   <Attr label="Active Swarm" value={`${tor.swarm_peers ?? 0} peers`} />
-                  <Attr label="Seed Confirmed" value={tor.seed_confirmed ? 'YES' : 'NO'} />
-                  <Attr label="Popularity" value={`${tor.popularity_score ?? 0} pts`} />
+                  <Attr label="Popularity (Demand)" value={`${tor.popularity_score ?? 0} pts`} />
                 </div>
               </div>
 
@@ -157,7 +157,7 @@ export default function TorrentDetail({ infohash, onClose }) {
                   <Attr label="Fetch Attempts" value={tor.fetch_attempts} />
                   <Attr label="Risk Tier" value={tor.risk_tier} />
                   <Attr label="Policy Action" value={tor.policy_action} />
-                  <Attr label="Availability State" value={tor.availability_state} />
+                  <Attr label="Seed Confirmed" value={tor.seed_confirmed ? 'YES' : 'NO'} />
                 </div>
               </div>
 

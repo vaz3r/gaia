@@ -106,3 +106,46 @@ class PostgresExtractor:
         with self.get_connection() as conn:
             df = pd.read_sql_query(query, conn, params=params if params else None)
         return df
+
+    def extract_calibration_sample(self, lookback_hours: int = 24) -> Dict[str, Any]:
+        """
+        Evaluate empirical ground-truth accuracy by comparing recent wire verification
+        probe observations against predicted Bayesian health scores.
+        """
+        query = """
+            SELECT 
+                COUNT(*) as total_probes,
+                COUNT(CASE WHEN tao.observation_type IN ('metadata_fetch_success', 'seed_confirmed', 'probe_success') THEN 1 END) as successful_probes,
+                COUNT(CASE WHEN hs.health_score >= 40 THEN 1 END) as predicted_viable,
+                COUNT(CASE WHEN hs.health_score >= 40 AND tao.observation_type IN ('metadata_fetch_success', 'seed_confirmed', 'probe_success') THEN 1 END) as viable_successes,
+                COUNT(CASE WHEN hs.health_score < 20 AND tao.observation_type IN ('metadata_fetch_failure', 'probe_failure') THEN 1 END) as dead_confirmed,
+                COUNT(CASE WHEN hs.health_score < 20 THEN 1 END) as predicted_dead
+            FROM (
+                SELECT infohash, observation_type
+                FROM torrent_availability_observations
+                WHERE observed_at >= NOW() - make_interval(hours => %s)
+                  AND observation_type IN ('metadata_fetch_success', 'metadata_fetch_failure', 'seed_confirmed', 'probe_success', 'probe_failure')
+                ORDER BY observed_at DESC
+                LIMIT 5000
+            ) tao
+            JOIN health_scores hs ON hs.infohash = encode(tao.infohash, 'hex')
+        """
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (lookback_hours,))
+                row = cur.fetchone()
+                if not row or row[0] == 0:
+                    return {"total_probes": 0, "viable_accuracy": 1.0, "sample_size": 0}
+                total_probes, successful_probes, predicted_viable, viable_successes, dead_confirmed, predicted_dead = row
+                
+                # Accuracy across viable predictions
+                precision = (viable_successes / predicted_viable) if predicted_viable and predicted_viable > 0 else 1.0
+                return {
+                    "total_probes": int(total_probes or 0),
+                    "successful_probes": int(successful_probes or 0),
+                    "predicted_viable": int(predicted_viable or 0),
+                    "viable_successes": int(viable_successes or 0),
+                    "viable_accuracy": round(float(precision), 4),
+                    "sample_size": int(predicted_viable or 0),
+                }
+

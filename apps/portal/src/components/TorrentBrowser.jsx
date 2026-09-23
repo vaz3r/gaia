@@ -386,7 +386,7 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                     )}
                   </div>
                 </th>
-                <th className="py-3 px-4 font-normal">Trust & Avail</th>
+                <th className="py-3 px-4 font-normal">Trust & Safety</th>
                 <th
                   onClick={() => handleSortToggle('verified_at')}
                   className="py-3 px-4 font-normal cursor-pointer hover:text-white transition-colors"
@@ -467,7 +467,10 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                     </td>
 
                     <td className="py-3 px-4 whitespace-nowrap">
-                      <HealthBar score={t.canonical_health_score ?? t.health_score} />
+                      <div className="flex items-center gap-1.5">
+                        <HealthBar score={t.canonical_health_score ?? t.health_score} />
+                        <HealthStatePill state={t.canonical_health_state ?? t.availability_state} />
+                      </div>
                     </td>
 
                     <td className="py-3 px-4 whitespace-nowrap">
@@ -475,18 +478,15 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                     </td>
 
                     <td className="py-3 px-4 whitespace-nowrap">
-                      <div className="flex items-center gap-1.5">
-                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
-                          t.risk_tier === 'BLOCKED'
-                            ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
-                            : t.risk_tier === 'REVIEW'
-                            ? 'bg-amber-950/60 text-amber-300 border-amber-800/50'
-                            : 'bg-emerald-950/40 text-emerald-400 border-emerald-800/40'
-                        }`}>
-                          {t.risk_tier || 'SAFE'}
-                        </span>
-                        <HealthStatePill state={t.canonical_health_state ?? t.availability_state} />
-                      </div>
+                      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
+                        t.risk_tier === 'BLOCKED'
+                          ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
+                          : t.risk_tier === 'REVIEW'
+                          ? 'bg-amber-950/60 text-amber-300 border-amber-800/50'
+                          : 'bg-emerald-950/40 text-emerald-400 border-emerald-800/40'
+                      }`}>
+                        {t.risk_tier || 'SAFE'}
+                      </span>
                     </td>
 
                     <td className="py-3 px-4 text-[#888] whitespace-nowrap">
@@ -697,7 +697,7 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                 <div className="flex items-center justify-between text-xs font-mono">
                   <span className="text-[#888] flex items-center gap-1.5">
                     <Activity className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Swarm Health & Availability</span>
+                    <span>Swarm Health & Liveness</span>
                   </span>
                   {(() => {
                     const displayScore = selectedTorrent.canonical_health_score ?? selectedTorrent.health_score
@@ -750,9 +750,9 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                   return (
                     <>
                       <div className="flex items-center justify-between text-xs font-mono">
-                        <span className="text-[#888] flex items-center gap-1.5">
+                        <span className="text-[#888] flex items-center gap-1.5" title="Measures 7-day DHT search frequency and swarm announcement velocity. Independent of active seeders.">
                           <TrendingUp className={`w-3.5 h-3.5 ${c.text}`} />
-                          <span>Popularity</span>
+                          <span>Popularity (Swarm Demand)</span>
                         </span>
                         <span className={`${c.text} font-bold font-mono`}>
                           {selectedTorrent.popularity_score ?? 0}%
@@ -768,18 +768,18 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                   )
                 })()}
                 <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1 border-t border-[#141414]">
-                  <span>Velocity: Active</span>
+                  <span>Velocity: 7-Day Active</span>
                   <span>{Number(selectedTorrent.total_seen || 1).toLocaleString()} Hits</span>
                 </div>
               </div>
             </div>
 
-            {/* Tripartite Quality, Trust & Availability Scoring */}
+            {/* Quality, Trust & Policy Scoring */}
             <div className="rounded-xl border border-[#1e1e1e] bg-[#0c0c0c] p-4 space-y-3 font-mono">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Shield className="w-4 h-4 text-emerald-400" />
-                  <span className="text-xs font-semibold text-white">Trust, Integrity & Availability</span>
+                  <span className="text-xs font-semibold text-white">Trust, Integrity & Safety Policies</span>
                   <span className={`text-[10px] px-2 py-0.5 rounded border ${
                     selectedTorrent.risk_tier === 'BLOCKED'
                       ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
@@ -795,7 +795,7 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                 </span>
               </div>
 
-              <div className="grid grid-cols-3 gap-2 text-xs">
+              <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="p-2 rounded bg-[#141414] border border-[#222]">
                   <div className="text-[10px] text-[#777] uppercase">Integrity</div>
                   <div className="text-sm font-bold text-white mt-0.5">
@@ -807,23 +807,6 @@ export default function TorrentBrowser({ totalCatalogedCount = 3418496 }) {
                   <div className="text-sm font-bold text-white mt-0.5">
                     {selectedTorrent.metadata_quality_score ?? 85}/100
                   </div>
-                </div>
-                <div className="p-2 rounded bg-[#141414] border border-[#222]">
-                  <div className="text-[10px] text-[#777] uppercase">Availability</div>
-                  {(() => {
-                    const availState = selectedTorrent.canonical_health_state ?? selectedTorrent.availability_state
-                    const availScore = selectedTorrent.availability_score ?? 100
-                    const availColor = (availState === 'VERIFIED' || availScore >= 60)
-                      ? 'text-emerald-400'
-                      : (availState === 'UNVERIFIED' || availScore >= 25)
-                      ? 'text-amber-400'
-                      : 'text-rose-400'
-                    return (
-                      <div className={`text-sm font-bold mt-0.5 ${availColor}`}>
-                        {availScore}% ({availState || 'UNKNOWN'})
-                      </div>
-                    )
-                  })()}
                 </div>
               </div>
             </div>

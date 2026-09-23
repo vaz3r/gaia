@@ -57,6 +57,7 @@ import { formatBytes, formatNum, formatTime, formatUptime, formatDubaiDate, form
 import AnalysisView from './components/AnalysisView.jsx';
 import ClassifierView from './components/ClassifierView.jsx';
 import SurveillanceRadar from './components/SurveillanceRadar.jsx';
+import { HealthBar, PopularityBar, HealthStatePill, EvidenceBreakdown } from './components/HealthScoreDisplay.jsx';
 import { useTelemetryStore } from './stores/telemetryStore.js';
 import { useBrowserStore } from './stores/browserStore.js';
 import { usePeersStore } from './stores/peersStore.js';
@@ -1417,70 +1418,26 @@ export default function App() {
                           </td>
 
                           <td className="py-3 px-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
-                              <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full ${
-                                    (t.health_score ?? 0) >= 70
-                                      ? 'bg-emerald-400'
-                                      : (t.health_score ?? 0) >= 40
-                                      ? 'bg-amber-400'
-                                      : 'bg-rose-500'
-                                  }`}
-                                  style={{ width: `${Math.min(100, Math.max(0, t.health_score ?? 0))}%` }}
-                                />
-                              </div>
-                              <span
-                                className={`text-[11px] font-mono font-semibold ${
-                                  (t.health_score ?? 0) >= 70
-                                    ? 'text-emerald-400'
-                                    : (t.health_score ?? 0) >= 40
-                                    ? 'text-amber-400'
-                                    : 'text-rose-400'
-                                }`}
-                              >
-                                {t.health_score ?? 0}%
-                              </span>
-                            </div>
-                          </td>
-
-                          <td className="py-3 px-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
-                              <div className="w-12 bg-[#181818] rounded-full h-1.5 overflow-hidden">
-                                <div
-                                  className="h-full rounded-full bg-cyan-400"
-                                  style={{ width: `${Math.min(100, Math.max(0, t.popularity_score ?? 0))}%` }}
-                                />
-                              </div>
-                              <span className="text-[11px] font-mono text-cyan-400 font-semibold">
-                                {t.popularity_score ?? 0}%
-                              </span>
-                            </div>
-                          </td>
-
-                          <td className="py-3 px-4 whitespace-nowrap">
                             <div className="flex items-center gap-1.5">
-                              <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
-                                t.risk_tier === 'BLOCKED'
-                                  ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
-                                  : t.risk_tier === 'REVIEW'
-                                  ? 'bg-amber-950/60 text-amber-300 border-amber-800/50'
-                                  : 'bg-emerald-950/40 text-emerald-400 border-emerald-800/40'
-                              }`}>
-                                {t.risk_tier || 'SAFE'}
-                              </span>
-                              {t.availability_state && (
-                                <span className={`text-[9px] font-mono px-1 py-0.5 rounded border ${
-                                  t.availability_state === 'ACTIVE'
-                                    ? 'bg-emerald-950/30 text-emerald-400 border-emerald-800/30'
-                                    : t.availability_state === 'SPARSE'
-                                    ? 'bg-amber-950/30 text-amber-300 border-amber-800/30'
-                                    : 'bg-rose-950/30 text-rose-400 border-rose-800/30'
-                                }`}>
-                                  {t.availability_state}
-                                </span>
-                              )}
+                              <HealthBar score={t.canonical_health_score ?? t.health_score} />
+                              <HealthStatePill state={t.canonical_health_state ?? t.availability_state} />
                             </div>
+                          </td>
+
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <PopularityBar score={t.popularity_score} />
+                          </td>
+
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
+                              t.risk_tier === 'BLOCKED'
+                                ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
+                                : t.risk_tier === 'REVIEW'
+                                ? 'bg-amber-950/60 text-amber-300 border-amber-800/50'
+                                : 'bg-emerald-950/40 text-emerald-400 border-emerald-800/40'
+                            }`}>
+                              {t.risk_tier || 'SAFE'}
+                            </span>
                           </td>
 
                           <td className="py-3 px-4 text-[#888] whitespace-nowrap">
@@ -2613,19 +2570,19 @@ export default function App() {
                   <div className="flex items-center justify-between text-xs font-mono">
                     <span className="text-[#888] flex items-center gap-1.5">
                       <Activity className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Swarm Health & Availability</span>
+                      <span>Swarm Health & Liveness</span>
                     </span>
                     <div className="flex items-center gap-2">
                       <span
                         className={`font-bold ${
-                          (selectedTorrent.health_score ?? 0) >= 70
+                          ((selectedTorrent.canonical_health_score ?? selectedTorrent.health_score) ?? 0) >= 70
                             ? 'text-emerald-400'
-                            : (selectedTorrent.health_score ?? 0) >= 40
+                            : ((selectedTorrent.canonical_health_score ?? selectedTorrent.health_score) ?? 0) >= 40
                             ? 'text-amber-400'
                             : 'text-rose-400'
                         }`}
                       >
-                        {selectedTorrent.health_score ?? 0}% ({selectedTorrent.availability_state || 'ACTIVE'})
+                        {(selectedTorrent.canonical_health_score ?? selectedTorrent.health_score) ?? 0}% ({selectedTorrent.canonical_health_state ?? selectedTorrent.availability_state ?? 'ACTIVE'})
                       </span>
                       <button
                         onClick={() => handleRefreshHealth(selectedTorrent.infohash || selectedTorrent.hash)}
@@ -2642,37 +2599,21 @@ export default function App() {
                   <div className="w-full bg-[#161616] rounded-full h-2 overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all ${
-                        (selectedTorrent.health_score ?? 0) >= 70
+                        ((selectedTorrent.canonical_health_score ?? selectedTorrent.health_score) ?? 0) >= 70
                           ? 'bg-emerald-400'
-                          : (selectedTorrent.health_score ?? 0) >= 40
+                          : ((selectedTorrent.canonical_health_score ?? selectedTorrent.health_score) ?? 0) >= 40
                           ? 'bg-amber-400'
                           : 'bg-rose-500'
                       }`}
-                      style={{ width: `${Math.min(100, Math.max(0, selectedTorrent.health_score ?? 0))}%` }}
+                      style={{ width: `${Math.min(100, Math.max(0, (selectedTorrent.canonical_health_score ?? selectedTorrent.health_score) ?? 0))}%` }}
                     />
                   </div>
 
-                  {/* Mathematical Point Breakdown Audit */}
-                  <div className="pt-2 border-t border-[#141414] space-y-1 font-mono text-[10px]">
-                    <div className="flex items-center justify-between text-[#777]">
-                      <span>Seed Presence (Active Swarm):</span>
-                      <span className={(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? 'text-emerald-400' : 'text-[#666]'}>
-                        {(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? '+50 pts' : '+0 pts'}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-[#777]">
-                      <span>Connected DHT Peers ({selectedTorrent.swarm_peers || 0} nodes):</span>
-                      <span className={(selectedTorrent.swarm_peers || 0) > 0 ? 'text-cyan-400' : 'text-[#666]'}>
-                        +{(selectedTorrent.swarm_peers || 0) > 0 ? Math.min(30, Math.floor(6.0 * Math.log2(1.0 + (selectedTorrent.swarm_peers || 0)))) : 0} pts
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-[#777]">
-                      <span>Recency Decay:</span>
-                      <span className="text-amber-400">
-                        +{selectedTorrent.last_seen ? Math.min(20, Math.max(0, (selectedTorrent.health_score ?? 0) - ((selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? 50 : 0) - ((selectedTorrent.swarm_peers || 0) > 0 ? Math.min(30, Math.floor(6.0 * Math.log2(1.0 + (selectedTorrent.swarm_peers || 0)))) : 0))) : 0} pts
-                      </span>
-                    </div>
-                  </div>
+                  {/* Canonical Bayesian Evidence Breakdown (v2.0) */}
+                  <EvidenceBreakdown
+                    evidence={selectedTorrent.evidence_summary}
+                    healthScore={selectedTorrent.canonical_health_score ?? selectedTorrent.health_score}
+                  />
 
                   <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1.5 border-t border-[#141414]">
                     <span className={(selectedTorrent.swarm_peers || 0) > 0 && selectedTorrent.seed_confirmed ? 'text-emerald-400 font-semibold' : 'text-[#777]'}>
@@ -2688,9 +2629,9 @@ export default function App() {
 
                 <div className="rounded-lg border border-[#1a1a1a] bg-[#000] p-3 space-y-2">
                   <div className="flex items-center justify-between text-xs font-mono">
-                    <span className="text-[#888] flex items-center gap-1.5">
+                    <span className="text-[#888] flex items-center gap-1.5" title="Measures 7-day DHT search frequency and swarm announcement velocity. Independent of active seeders.">
                       <TrendingUp className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>Popularity</span>
+                      <span>Popularity (Swarm Demand)</span>
                     </span>
                     <span className="text-cyan-400 font-bold font-mono">
                       {selectedTorrent.popularity_score ?? 0}%
@@ -2703,18 +2644,18 @@ export default function App() {
                     />
                   </div>
                   <div className="flex items-center justify-between text-[10px] font-mono text-[#666] pt-1 border-t border-[#141414]">
-                    <span>Velocity: Active</span>
+                    <span>Velocity: 7-Day Active</span>
                     <span>{Number(selectedTorrent.total_seen || 1).toLocaleString()} Hits</span>
                   </div>
                 </div>
               </div>
 
-              {/* Tripartite Quality, Trust & Availability Scoring (gaia-scoring-worker) */}
+              {/* Quality, Trust & Policy Scoring */}
               <div className="rounded-xl border border-[#1e1e1e] bg-[#0c0c0c] p-4 space-y-3 font-mono">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Shield className="w-4 h-4 text-emerald-400" />
-                    <span className="text-xs font-semibold text-white">Trust, Integrity & Availability</span>
+                    <span className="text-xs font-semibold text-white">Trust, Integrity & Safety Policies</span>
                     <span className={`text-[10px] px-2 py-0.5 rounded border ${
                       selectedTorrent.risk_tier === 'BLOCKED'
                         ? 'bg-rose-950/60 text-rose-300 border-rose-800/50'
@@ -2730,7 +2671,7 @@ export default function App() {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="grid grid-cols-2 gap-2 text-xs">
                   <div className="p-2 rounded bg-[#141414] border border-[#222]">
                     <div className="text-[10px] text-[#777] uppercase">Integrity</div>
                     <div className="text-sm font-bold text-white mt-0.5">
@@ -2741,18 +2682,6 @@ export default function App() {
                     <div className="text-[10px] text-[#777] uppercase">Meta Quality</div>
                     <div className="text-sm font-bold text-white mt-0.5">
                       {selectedTorrent.metadata_quality_score ?? 85}/100
-                    </div>
-                  </div>
-                  <div className="p-2 rounded bg-[#141414] border border-[#222]">
-                    <div className="text-[10px] text-[#777] uppercase">Availability</div>
-                    <div className={`text-sm font-bold mt-0.5 ${
-                      (selectedTorrent.availability_state === 'ACTIVE' || (selectedTorrent.availability_score ?? 100) >= 60)
-                        ? 'text-emerald-400'
-                        : (selectedTorrent.availability_state === 'DEGRADED' || (selectedTorrent.availability_score ?? 0) >= 25)
-                        ? 'text-amber-400'
-                        : 'text-rose-400'
-                    }`}>
-                      {selectedTorrent.availability_score ?? 100}% ({selectedTorrent.availability_state || 'ACTIVE'})
                     </div>
                   </div>
                 </div>
