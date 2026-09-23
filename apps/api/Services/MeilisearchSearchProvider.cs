@@ -17,7 +17,9 @@ public class MeilisearchSearchProvider : ISearchProvider
     private static readonly string[] RetrievalAttributes = new[]
     {
         "infohash", "name", "category", "total_size", "file_count",
-        "verified_at", "popularity_tier", "risk_tier", "policy_action"
+        "verified_at", "popularity_tier", "risk_tier", "policy_action",
+        "availability_state", "health_score", "health_state",
+        "swarm_peers", "seed_confirmed", "popularity_score"
     };
 
     public MeilisearchSearchProvider(
@@ -400,6 +402,19 @@ public class MeilisearchSearchProvider : ISearchProvider
             var hs = h.HealthScore.Value;
             healthState = hs >= 70 ? "VERIFIED" : hs >= 40 ? "ACTIVE" : hs >= 15 ? "DEGRADED" : hs > 0 ? "DORMANT" : "DEAD";
         }
+        // Last resort: map availability_state from the Meilisearch index document
+        if (string.IsNullOrEmpty(healthState) && !string.IsNullOrEmpty(h.AvailabilityState))
+        {
+            healthState = h.AvailabilityState.ToUpperInvariant() switch
+            {
+                "STALE"    => "DEGRADED",
+                "ACTIVE"   => "ACTIVE",
+                "VERIFIED" => "VERIFIED",
+                "DEAD"     => "DEAD",
+                "DORMANT"  => "DORMANT",
+                var s      => s   // pass through any other value as-is
+            };
+        }
 
         int? integrityScore = h.IntegrityScore ?? (h.RiskTier == "BLOCKED" ? 0 : h.RiskTier == "REVIEW" ? 45 : 100);
 
@@ -477,6 +492,9 @@ public class MeiliTorrentHit
 
     [JsonPropertyName("health_state")]
     public string? HealthState { get; set; }
+
+    [JsonPropertyName("availability_state")]
+    public string? AvailabilityState { get; set; }
 
     [JsonPropertyName("integrity_score")]
     public int? IntegrityScore { get; set; }
