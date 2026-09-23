@@ -24,7 +24,10 @@ def fetch_observations_batch(
     after_id: int,
     upper_bound: int,
     batch_size: int = 500,
+    limit: Optional[int] = None,
 ) -> List[Observation]:
+    if limit is not None:
+        batch_size = limit
     """Fetch observations in the range (after_id, upper_bound].
 
     This range is consistent within a batch: rows inserted after upper_bound

@@ -248,7 +248,7 @@ class HealthScorer:
 
             # 2. Fetch new observations
             observations = fetch_observations_batch(
-                after_id=after_id, limit=batch_size, upper_bound=upper_bound
+                after_id=after_id, batch_size=batch_size, upper_bound=upper_bound
             )
             if not observations:
                 # Dual-source fallback: when observations are empty and legacy
