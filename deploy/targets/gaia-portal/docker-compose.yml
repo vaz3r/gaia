@@ -20,6 +20,7 @@ services:
       - /var/lib/redis/data:/data
     ports:
       - "127.0.0.1:6379:6379"
+    mem_limit: 3g
     healthcheck:
       test: ["CMD", "sh", "-c", "redis-cli -a \"$$REDIS_PASSWORD\" ping"]
       interval: 5s
@@ -34,11 +35,12 @@ services:
       MEILI_ENV: production
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-meili_secure_master_key_v2_modern_scaling}
       MEILI_NO_ANALYTICS: "true"
-      MEILI_MAX_INDEXING_MEMORY: 16Gb
-      MEILI_MAX_INDEXING_THREADS: 6
+      MEILI_MAX_INDEXING_MEMORY: 4Gb
+      MEILI_MAX_INDEXING_THREADS: 4
       MEILI_HTTP_ADDR: 0.0.0.0:7700
     volumes:
       - /var/lib/meilisearch/data:/meili_data
+    mem_limit: 6g
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:7700/health || exit 1"]
       interval: 5s
@@ -54,11 +56,14 @@ services:
     restart: unless-stopped
     environment:
       ASPNETCORE_URLS: http://0.0.0.0:5000
+      DOTNET_GCHeapHardLimit: "0x80000000"
+      DOTNET_GCLargeObjectHeapCompactionMode: "1"
       DATABASE_URL: ${DATABASE_URL:-Host=192.168.10.10;Port=6432;Database=craw;Username=crawler;Password=83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b;Pooling=true;Maximum Pool Size=50;Minimum Pool Size=5;Max Auto Prepare=0;No Reset On Close=true;}
       ConnectionStrings__Postgres: ${DATABASE_URL:-Host=192.168.10.10;Port=6432;Database=craw;Username=crawler;Password=83fec11c363e2e90cbea2a0303ace95a8b5d4bbaf897fc97f49195ffbbf7978b;Pooling=true;Maximum Pool Size=50;Minimum Pool Size=5;Max Auto Prepare=0;No Reset On Close=true;}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       Meilisearch__Url: http://meilisearch:7700
       Meilisearch__ApiKey: ${MEILI_MASTER_KEY:-meili_secure_master_key_v2_modern_scaling}
+    mem_limit: 2500m
     depends_on:
       redis:
         condition: service_healthy
@@ -77,6 +82,7 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       Meilisearch__Url: http://meilisearch:7700
       Meilisearch__ApiKey: ${MEILI_MASTER_KEY:-meili_secure_master_key_v2_modern_scaling}
+      DOTNET_GCHeapHardLimit: "0x80000000"
       REBUILD_CADENCE_MINUTES: ${REBUILD_CADENCE_MINUTES:-120}
       INITIAL_REBUILD_ON_STARTUP: ${INITIAL_REBUILD_ON_STARTUP:-false}
       NTFY_TOPIC: ${NTFY_TOPIC:-}
@@ -84,6 +90,7 @@ services:
       NTFY_SERVER: ${NTFY_SERVER:-https://ntfy.sh}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
       HEALTHCHECKS_URL: ${HEALTHCHECKS_URL:-}
+    mem_limit: 2500m
     depends_on:
       redis:
         condition: service_healthy
@@ -99,6 +106,7 @@ services:
     restart: unless-stopped
     ports:
       - "3005:3005"
+    mem_limit: 1g
     depends_on:
       - api
 
@@ -115,6 +123,8 @@ services:
       - "--tls-verify-certificate"
       - "--tls-sni-override"
       - "gaia-gateway"
+      - "--connection-retry-max-backoff"
+      - "10s"
       - "--http-upgrade-path-prefix"
       - "/wstunnel"
       - "-L"
@@ -122,6 +132,7 @@ services:
       - "${GATEWAY_WSTUNNEL_URL:-wss://192.168.10.111:443}"
     volumes:
       - ./wstunnel/ca.crt:/etc/ssl/certs/ca-certificates.crt:ro
+    mem_limit: 512m
     healthcheck:
       test: ["CMD-SHELL", "pidof wstunnel >/dev/null 2>&1 && ss -uln | grep -q '127.0.0.1:51820' || exit 1"]
       interval: 10s
@@ -143,9 +154,10 @@ services:
       - /dev/net/tun:/dev/net/tun
       - ./wireguard/wg0.conf:/etc/wireguard/wg0.conf:ro
     command: ["wireguard", "/etc/wireguard/wg0.conf"]
+    mem_limit: 256m
     healthcheck:
-      test: ["CMD-SHELL", "ip link show wg0 >/dev/null 2>&1 && ip addr show wg0 | grep -q 10.99.0.3"]
-      interval: 10s
+      test: ["CMD-SHELL", "ip link show wg0 >/dev/null 2>&1 && (ping -c 1 -W 2 10.99.0.1 >/dev/null 2>&1 || exit 1)"]
+      interval: 15s
       timeout: 5s
       retries: 3
       start_period: 15s
