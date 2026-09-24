@@ -4,6 +4,7 @@ use std::time::Instant;
 pub struct JanitorConfig {
     pub dead_retention_secs: u64,
     pub verified_retention_secs: u64,
+    pub failed_retention_secs: u64,
     pub peer_outcomes_retention_secs: u64,
     pub sightings_single_seen_retention_secs: u64,
     pub sightings_max_retention_secs: u64,
@@ -16,11 +17,13 @@ pub struct JanitorConfig {
 pub struct JanitorReport {
     pub dead_deleted: i64,
     pub verified_deleted: i64,
+    pub failed_deleted: i64,
     pub peer_outcomes_deleted: i64,
     pub sightings_deleted: i64,
     pub pending_infohashes_deleted: i64,
     pub dead_batches: u32,
     pub verified_batches: u32,
+    pub failed_batches: u32,
     pub peer_outcomes_batches: u32,
     pub sightings_batches: u32,
     pub pending_infohashes_batches: u32,
@@ -32,12 +35,14 @@ pub async fn run(pool: &PgPool, cfg: &JanitorConfig) -> JanitorReport {
     let mut report = JanitorReport::default();
     report.dead_deleted = cleanup_dead(pool, cfg, &mut report).await;
     report.verified_deleted = cleanup_verified(pool, cfg, &mut report).await;
+    report.failed_deleted = cleanup_failed(pool, cfg, &mut report).await;
     report.peer_outcomes_deleted = cleanup_peer_outcomes(pool, cfg, &mut report).await;
     report.sightings_deleted = cleanup_sightings(pool, cfg, &mut report).await;
     report.pending_infohashes_deleted = cleanup_pending_infohashes(pool, cfg, &mut report).await;
     report.elapsed_ms = start.elapsed().as_millis() as u64;
     if report.dead_deleted > 0
         || report.verified_deleted > 0
+        || report.failed_deleted > 0
         || report.peer_outcomes_deleted > 0
         || report.sightings_deleted > 0
         || report.pending_infohashes_deleted > 0
@@ -47,6 +52,8 @@ pub async fn run(pool: &PgPool, cfg: &JanitorConfig) -> JanitorReport {
             dead_batches = report.dead_batches,
             verified_deleted = report.verified_deleted,
             verified_batches = report.verified_batches,
+            failed_deleted = report.failed_deleted,
+            failed_batches = report.failed_batches,
             peer_outcomes_deleted = report.peer_outcomes_deleted,
             peer_outcomes_batches = report.peer_outcomes_batches,
             sightings_deleted = report.sightings_deleted,
@@ -200,6 +207,42 @@ async fn cleanup_verified(pool: &PgPool, cfg: &JanitorConfig, report: &mut Janit
             }
             Err(e) => {
                 tracing::warn!(error = %e, "janitor: delete verified failed");
+                break;
+            }
+        }
+    }
+    total
+}
+
+async fn cleanup_failed(pool: &PgPool, cfg: &JanitorConfig, report: &mut JanitorReport) -> i64 {
+    let mut total: i64 = 0;
+    loop {
+        let sql = format!(
+            "DELETE FROM verification_jobs \
+             WHERE ctid = ANY( \
+                 SELECT ctid FROM verification_jobs \
+                 WHERE status = 'failed' AND updated_at < now() - interval '{} seconds' \
+                 LIMIT $1 \
+             )",
+            cfg.failed_retention_secs
+        );
+        let result = sqlx::query(&sql).bind(cfg.batch_size).execute(pool).await;
+
+        match result {
+            Ok(r) => {
+                let n = r.rows_affected() as i64;
+                total += n;
+                report.failed_batches += 1;
+                if n == 0 {
+                    break;
+                }
+                if n < cfg.batch_size {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(cfg.batch_sleep_ms)).await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "janitor: delete failed failed");
                 break;
             }
         }

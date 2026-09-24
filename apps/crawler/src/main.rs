@@ -269,6 +269,7 @@ async fn main() {
     let janitor_config = JanitorConfig {
         dead_retention_secs: config.storage.janitor_dead_retention_secs,
         verified_retention_secs: config.storage.janitor_verified_retention_secs,
+        failed_retention_secs: config.storage.janitor_failed_retention_secs,
         peer_outcomes_retention_secs: config.storage.janitor_peer_outcomes_retention_secs,
         sightings_single_seen_retention_secs: config.storage.janitor_sightings_single_seen_retention_secs,
         sightings_max_retention_secs: config.storage.janitor_sightings_max_retention_secs,
@@ -280,6 +281,7 @@ async fn main() {
         let report = storage::janitor::run(&janitor_pool, &janitor_config).await;
         if report.dead_deleted == 0
             && report.verified_deleted == 0
+            && report.failed_deleted == 0
             && report.peer_outcomes_deleted == 0
             && report.sightings_deleted == 0
         {
@@ -295,7 +297,7 @@ async fn main() {
                  VALUES (now(), 'janitor_deleted', $1) \
                  ON CONFLICT (ts, metric_name) DO UPDATE SET metric_value = EXCLUDED.metric_value",
             )
-            .bind(report.dead_deleted + report.verified_deleted)
+            .bind(report.dead_deleted + report.verified_deleted + report.failed_deleted)
             .execute(&janitor_pool)
             .await;
         }
