@@ -81,7 +81,7 @@ public static class ClassifierEndpoints
             {
                 var bodyBytes = await response.Content.ReadAsByteArrayAsync(ctx.RequestAborted);
                 var cType = response.Content.Headers.ContentType?.ToString() ?? "application/json";
-                cache.Set(cacheKey, (cType, bodyBytes), TimeSpan.FromSeconds(10));
+                cache.Set(cacheKey, (cType, bodyBytes), TimeSpan.FromMinutes(2));
                 await ctx.Response.Body.WriteAsync(bodyBytes, ctx.RequestAborted);
             }
             else

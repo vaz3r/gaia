@@ -83,7 +83,7 @@ var classifierUrl = builder.Configuration["CLASSIFIER_API_URL"]
 builder.Services.AddHttpClient("Classifier", client =>
 {
     client.BaseAddress = new Uri(classifierUrl.TrimEnd('/') + "/");
-    client.Timeout     = TimeSpan.FromSeconds(30);
+    client.Timeout     = TimeSpan.FromSeconds(5);
 });
 
 if (string.Equals(searchProviderSetting, "PostgreSQL", StringComparison.OrdinalIgnoreCase))

@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
     network_mode: host
     environment:
-      DATABASE_URL: Host=localhost;Port=6432;Database=craw;Username=${POSTGRES_USER:-crawler};Password=${PG_PASSWORD};Pooling=true;Maximum Pool Size=10;Minimum Pool Size=2;Command Timeout=10;Timeout=5;Max Auto Prepare=0;No Reset On Close=true;
+      DATABASE_URL: Host=localhost;Port=6432;Database=craw;Username=${POSTGRES_USER:-crawler};Password=${PG_PASSWORD};Pooling=true;Maximum Pool Size=30;Minimum Pool Size=5;Command Timeout=30;Timeout=15;Max Auto Prepare=0;No Reset On Close=true;
       SEARCH_PROVIDER: PostgreSQL
       ASPNETCORE_URLS: http://0.0.0.0:${DASH_PORT:-3000}
       PORT: ${DASH_PORT:-3000}
