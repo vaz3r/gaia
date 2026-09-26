@@ -261,6 +261,12 @@ export default function App() {
     const newTorrents1hVal = serverStats?.new_torrents_last_1h ?? 0;
     const refreshed1hVal = serverStats?.refreshed_last_1h ?? Math.max(0, verifiedRateVal - newTorrents1hVal);
 
+    // Deduplication pass rate: unique fetch attempts queued / raw DHT infohashes harvested
+    const dedupPassPct = (fetchAttemptsVal != null && discoveredRateVal != null && discoveredRateVal > 0)
+      ? ((fetchAttemptsVal / discoveredRateVal) * 100).toFixed(1)
+      : null;
+    const dedupRateStr = dedupPassPct != null ? `${dedupPassPct}% unique` : (hasMetrics ? '100% unique' : '--');
+
     return {
       totalVerified: totalVerifiedCount > 0 ? (totalVerifiedCount / 1000000).toFixed(2) + 'M' : '--',
       totalVerifiedRaw: totalVerifiedCount,
@@ -286,6 +292,7 @@ export default function App() {
       failures: (failuresVal / 1000).toFixed(1) + 'k/hr',
       dropRate,
       conversionRate,
+      dedupRate: dedupRateStr,
       queueBacklog: queueDepth.toLocaleString(),
       activeVerifiers: `${activeVerifiersCount.toLocaleString()} active`,
       uptime: uptimeStr,
@@ -294,10 +301,16 @@ export default function App() {
       routingNodes: snap.routing_table_len ?? 0,
       routingNodesStr: snap.routing_table_len != null ? snap.routing_table_len.toLocaleString() : '--',
       routingBucketsUsed: 1572,
+      tcpConnOk: tcpConnectOk,
+      utpConnOk: utpConnectOk,
+      tcpConnOkStr: rates.tcp_connect_ok != null ? `${(rates.tcp_connect_ok / 1000).toFixed(1)}k` : '--',
+      utpConnOkStr: rates.utp_connect_ok != null ? `${(rates.utp_connect_ok / 1000).toFixed(1)}k` : '--',
       tcpOk: rates.tcp_metadata_ok ?? 0,
       utpOk: rates.utp_metadata_ok ?? 0,
-      tcpOkStr: rates.tcp_metadata_ok != null ? `${(rates.tcp_metadata_ok / 1000).toFixed(1)}k` : '--',
-      utpOkStr: rates.utp_metadata_ok != null ? `${(rates.utp_metadata_ok / 1000).toFixed(1)}k` : '--',
+      tcpMetaOkStr: rates.tcp_metadata_ok != null ? `${(rates.tcp_metadata_ok / 1000).toFixed(1)}k` : '--',
+      utpMetaOkStr: rates.utp_metadata_ok != null ? `${(rates.utp_metadata_ok / 1000).toFixed(1)}k` : '--',
+      tcpOkStr: rates.tcp_connect_ok != null ? `${(rates.tcp_connect_ok / 1000).toFixed(1)}k` : '--',
+      utpOkStr: rates.utp_connect_ok != null ? `${(rates.utp_connect_ok / 1000).toFixed(1)}k` : '--',
       timeoutFailures: rates.fetch_connect_timeout ?? 0,
       ioFailures: rates.fetch_connect_io ?? 0,
       shaMismatch: rates.sha1_mismatch ?? 0,
@@ -667,7 +680,7 @@ export default function App() {
               <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 hover:border-[#333] transition-colors">
                 <div className="flex items-center justify-between text-[#666] mb-2 text-xs">
                   <span className="font-mono text-[11px]">01 / Inbound DHT</span>
-                  <span className="text-white font-mono">{metrics.discoveredRate}</span>
+                  <span className="text-white font-mono">Live DHT</span>
                 </div>
                 <div className="text-xl font-bold text-white tracking-tight font-mono">
                   {metrics.discoveredRate} <span className="text-xs text-[#666] font-normal">harvest/hr</span>
@@ -681,7 +694,7 @@ export default function App() {
               <div className="rounded-lg border border-[#1e1e1e] bg-[#090909] p-3.5 hover:border-[#333] transition-colors">
                 <div className="flex items-center justify-between text-[#666] mb-2 text-xs">
                   <span className="font-mono text-[11px]">02 / Deduplication</span>
-                  <span className="text-white font-mono">{metrics.conversionRate}{metrics.conversionRate !== '--' ? '%' : ''}</span>
+                  <span className="text-white font-mono">{metrics.dedupRate}</span>
                 </div>
                 <div className="text-xl font-bold text-white tracking-tight font-mono">
                   {metrics.fetchAttempts} <span className="text-xs text-[#666] font-normal">attempts/hr</span>
@@ -701,7 +714,7 @@ export default function App() {
                   {metrics.connectOk} <span className="text-xs text-[#666] font-normal">conn/hr</span>
                 </div>
                 <p className="text-[11px] text-[#777] mt-1">
-                  TCP {metrics.tcpOkStr} · uTP {metrics.utpOkStr}
+                  TCP {metrics.tcpConnOkStr} · uTP {metrics.utpConnOkStr}
                 </p>
                 <div className="mt-3 h-[2px] w-full bg-[#1a1a1a]">
                   <div className="h-full bg-white w-[28%]" />
@@ -713,9 +726,11 @@ export default function App() {
                   <span className="font-mono text-[11px] text-[#ccc]">04 / Verified Store</span>
                   <span className="text-emerald-400 font-mono">+{metrics.newTorrentsRate} new</span>
                 </div>
-                <div className="text-xl font-bold text-white tracking-tight font-mono">{metrics.verifiedRate}</div>
+                <div className="text-xl font-bold text-white tracking-tight font-mono">
+                  {metrics.verifiedRate} <span className="text-xs text-[#666] font-normal">verified/hr</span>
+                </div>
                 <p className="text-[11px] text-[#888] mt-1">
-                  <span className="text-emerald-400 font-semibold">{metrics.newTorrentsRate}</span> net-new · <span className="text-[#aaa]">{metrics.refreshedRate}</span> refreshed
+                  TCP {metrics.tcpMetaOkStr} · uTP {metrics.utpMetaOkStr} metadata
                 </p>
                 <div className="mt-3 h-[2px] w-full bg-[#1f1f1f]">
                   <div className="h-full bg-emerald-400 w-full" />
