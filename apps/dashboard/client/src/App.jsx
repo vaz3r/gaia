@@ -903,13 +903,14 @@ export default function App() {
               {/* Bar Chart Container */}
               {(() => {
                 const hourlyData = serverStats?.hourly_48h || serverStats?.hourly_24h || [];
-                const maxCount = Math.max(...hourlyData.map((d) => d.count), 1);
+                const maxCount = Math.max(...hourlyData.map((d) => d?.count ?? 0), 1);
 
                 return (
                   <div className="space-y-2">
                     <div className="h-36 w-full bg-[#000000] border border-[#161616] rounded-lg p-3 flex items-end justify-between gap-[2px] sm:gap-1 select-none relative">
                       {hourlyData.map((bar, i) => {
-                        const heightPct = Math.max(4, Math.round((bar.count / maxCount) * 100));
+                        const count = bar?.count ?? 0;
+                        const heightPct = Math.max(4, Math.round((count / maxCount) * 100));
                         const isHovered = hoveredBarIdx === i;
 
                         return (
@@ -922,8 +923,8 @@ export default function App() {
                             {/* Hover Tooltip */}
                             {isHovered && (
                               <div className="absolute -top-12 z-30 pointer-events-none bg-[#141414] border border-[#333] rounded px-2 py-1 text-[11px] font-mono text-white whitespace-nowrap shadow-xl">
-                                <div className="text-[#888]">{bar.full_label || `${bar.hour_label} GST (UTC+4)`}</div>
-                                <div className="text-emerald-400 font-bold">{bar.count.toLocaleString()} torrents</div>
+                                <div className="text-[#888]">{bar?.full_label || `${bar?.hour_label || ''} GST (UTC+4)`}</div>
+                                <div className="text-emerald-400 font-bold">{count.toLocaleString()} torrents</div>
                               </div>
                             )}
 
@@ -932,9 +933,9 @@ export default function App() {
                               className={`w-full rounded-t transition-all duration-150 ${
                                 isHovered
                                   ? 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.5)]'
-                                  : bar.count >= 30000
+                                  : count >= 30000
                                   ? 'bg-emerald-500'
-                                  : bar.count >= 15000
+                                  : count >= 15000
                                   ? 'bg-emerald-600/80'
                                   : 'bg-[#2a2a2a]'
                               }`}
@@ -949,11 +950,11 @@ export default function App() {
                     <div className="flex justify-between text-[10px] font-mono text-[#555] px-1">
                       {hourlyData.length > 0 ? (
                         <>
-                          <span>{hourlyData[0]?.full_label || hourlyData[0]?.hour_label}</span>
-                          <span>{hourlyData[12]?.full_label || hourlyData[12]?.hour_label}</span>
-                          <span>{hourlyData[24]?.full_label || hourlyData[24]?.hour_label}</span>
-                          <span>{hourlyData[36]?.full_label || hourlyData[36]?.hour_label}</span>
-                          <span className="text-emerald-400">{hourlyData[hourlyData.length - 1]?.hour_label} (Now)</span>
+                          <span>{hourlyData[0]?.full_label || hourlyData[0]?.hour_label || ''}</span>
+                          <span>{hourlyData[12]?.full_label || hourlyData[12]?.hour_label || ''}</span>
+                          <span>{hourlyData[24]?.full_label || hourlyData[24]?.hour_label || ''}</span>
+                          <span>{hourlyData[36]?.full_label || hourlyData[36]?.hour_label || ''}</span>
+                          <span className="text-emerald-400">{hourlyData[hourlyData.length - 1]?.hour_label || ''} (Now)</span>
                         </>
                       ) : (
                         <span>Loading hourly data...</span>
