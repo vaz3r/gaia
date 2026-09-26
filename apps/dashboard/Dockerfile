@@ -1,10 +1,12 @@
-# Stage 1: build the Vite React client
-FROM node:20-alpine AS client-builder
+# Stage 1: build or use pre-built Vite React client
+FROM node:20-slim AS client-builder
 WORKDIR /build
-COPY apps/dashboard/client/package.json apps/dashboard/client/package-lock.json* ./
-RUN npm ci || npm install
 COPY apps/dashboard/client/ ./
-RUN npm run build
+RUN if [ -f dist/index.html ]; then \
+      echo "--> Using pre-built client dist"; \
+    else \
+      npm ci --prefer-offline --no-audit && NODE_OPTIONS="--max-old-space-size=1536" npm run build; \
+    fi
 
 # Stage 2: build Gaia.Api (.NET 10 Minimal API)
 FROM mcr.microsoft.com/dotnet/sdk:latest AS api-builder

@@ -188,6 +188,19 @@ if [ -f "$REPO_ROOT/apps/ml/anomalies/models_storage/isolation_forest.joblib" ];
     fi
 fi
 
+# Ensure dashboard client dist is synced to remote host if deploying dashboard
+if [ -z "$SERVICES" ] || [[ "$SERVICES" =~ "dashboard" ]]; then
+    if [ ! -f "$REPO_ROOT/apps/dashboard/client/dist/index.html" ]; then
+        echo "Building dashboard client dist locally..."
+        (cd "$REPO_ROOT/apps/dashboard/client" && npm run build)
+    fi
+    if [ -d "$REPO_ROOT/apps/dashboard/client/dist" ]; then
+        echo "Syncing pre-built dashboard client dist to remote ${DEPLOY_HOST}..."
+        $SSH "mkdir -p $DEPLOY_REMOTE_GIT/apps/dashboard/client"
+        $SCP -r "$REPO_ROOT/apps/dashboard/client/dist" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_REMOTE_GIT/apps/dashboard/client/"
+    fi
+fi
+
 # ── 4. Build and deploy services ──
 if [ -n "$SERVICES" ]; then
     echo "[4/4] Building and deploying services: $SERVICES..."
