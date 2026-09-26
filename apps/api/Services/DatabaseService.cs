@@ -272,9 +272,10 @@ public class DatabaseService
             const string scalarStatsSql = """
                 SELECT 
                     (SELECT reltuples::bigint FROM pg_class WHERE relname = 'torrents') AS total_torrents,
+                    (SELECT count(*) FROM torrents WHERE verified_at > NOW() - INTERVAL '1 hour') AS verified_1h,
                     (SELECT count(*) FROM torrents WHERE first_seen > NOW() - INTERVAL '1 hour') AS new_1h,
                     (SELECT count(*) FROM torrents WHERE last_seen > NOW() - INTERVAL '1 hour') AS seen_1h,
-                    (SELECT count(*) FROM torrents WHERE health_score >= 70 AND verified_at > NOW() - INTERVAL '7 days') AS healthy_count,
+                    (SELECT count(*) FROM torrents WHERE health_score >= 70) AS healthy_count,
                     (SELECT EXTRACT(EPOCH FROM (now() - ts))::int FROM metrics WHERE metric_name = '_session_start' ORDER BY ts DESC LIMIT 1) AS uptime_s,
                     (SELECT EXTRACT(EPOCH FROM (now() - max(ts)))::int FROM metrics) AS stale_s,
                     (SELECT max(ts) FROM metrics) AS crawler_heartbeat_ts;
@@ -354,7 +355,12 @@ public class DatabaseService
             long totalTorrents = scalar?.total_torrents ?? 3908000L;
             long verified48h = hourly.Sum(h => (int)h["count"]);
             long verified24h = hourly.TakeLast(24).Sum(h => (int)h["count"]);
-            long verified1h = hourly.Count > 0 ? (int)hourly.Last()["count"] : 0L;
+            long verified1h = scalar?.verified_1h ?? (hourly.Count > 0 ? (int)hourly.Last()["count"] : 0L);
+            int currentHourCount = hourly.Count > 0 ? (int)hourly.Last()["count"] : 0;
+            var nowDubai = DateTime.UtcNow.AddHours(4);
+            int elapsedMin = Math.Max(1, nowDubai.Minute);
+            int currentHourProjected = (int)Math.Round((double)currentHourCount / elapsedMin * 60.0);
+
             long new1h = scalar?.new_1h ?? 0L;
             long seen1h = scalar?.seen_1h ?? 0L;
             long healthyCount = scalar?.healthy_count ?? 0L;
@@ -371,6 +377,9 @@ public class DatabaseService
                 ["verified_last_48h"] = verified48h,
                 ["verified_last_24h"] = verified24h,
                 ["verified_last_1h"] = verified1h,
+                ["current_hour_count"] = currentHourCount,
+                ["current_hour_elapsed_min"] = elapsedMin,
+                ["current_hour_projected"] = currentHourProjected,
                 ["new_torrents_last_1h"] = new1h,
                 ["refreshed_last_1h"] = refreshed1h,
                 ["seen_last_1h"] = seen1h,

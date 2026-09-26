@@ -226,9 +226,9 @@ export default function App() {
     const snap = serverMetrics?.snapshot || {};
     const hasMetrics = Boolean(serverMetrics && (serverMetrics.rates || serverMetrics.snapshot));
 
-    const verifiedRateVal = (serverStats?.verified_last_1h && serverStats.verified_last_1h > 0)
-      ? serverStats.verified_last_1h
-      : (rates.verify_success ?? 0);
+    const liveVerifyRate = rates.verify_success ?? 0;
+    const dbVerify1h = serverStats?.verified_last_1h ?? 0;
+    const verifiedRateVal = liveVerifyRate > 0 ? liveVerifyRate : (dbVerify1h > 0 ? dbVerify1h : 0);
 
     // Live DHT harvest rate: use rates.infohashes_harvested if available;
     // DO NOT fall back to serverStats.seen_last_1h (which is net-new DB inserts, ~7k/hr, not DHT harvests)
@@ -895,7 +895,7 @@ export default function App() {
                   </div>
                   <div className="h-3 w-[1px] bg-[#222]" />
                   <div className="text-emerald-400">
-                    Trailing 1h: <span className="font-bold">{(metrics.verified1h ?? 0).toLocaleString()}</span>
+                    Trailing 1h (Rolling 60m): <span className="font-bold">{(metrics.verified1h ?? 0).toLocaleString()}</span>
                   </div>
                 </div>
               </div>
@@ -912,6 +912,7 @@ export default function App() {
                         const count = bar?.count ?? 0;
                         const heightPct = Math.max(4, Math.round((count / maxCount) * 100));
                         const isHovered = hoveredBarIdx === i;
+                        const isCurrent = i === hourlyData.length - 1;
 
                         return (
                           <div
@@ -922,9 +923,17 @@ export default function App() {
                           >
                             {/* Hover Tooltip */}
                             {isHovered && (
-                              <div className="absolute -top-12 z-30 pointer-events-none bg-[#141414] border border-[#333] rounded px-2 py-1 text-[11px] font-mono text-white whitespace-nowrap shadow-xl">
-                                <div className="text-[#888]">{bar?.full_label || `${bar?.hour_label || ''} GST (UTC+4)`}</div>
+                              <div className="absolute -top-16 z-30 pointer-events-none bg-[#141414] border border-[#333] rounded px-2.5 py-1.5 text-[11px] font-mono text-white whitespace-nowrap shadow-xl">
+                                <div className="text-[#888]">
+                                  {bar?.full_label || `${bar?.hour_label || ''} GST (UTC+4)`}
+                                  {isCurrent && <span className="ml-1.5 text-amber-400 font-semibold">(In Progress)</span>}
+                                </div>
                                 <div className="text-emerald-400 font-bold">{count.toLocaleString()} torrents</div>
+                                {isCurrent && serverStats?.current_hour_projected > 0 && (
+                                  <div className="text-[10px] text-[#aaa]">
+                                    Pace: ~{serverStats.current_hour_projected.toLocaleString()}/hr ({serverStats.current_hour_elapsed_min}m elapsed)
+                                  </div>
+                                )}
                               </div>
                             )}
 
@@ -933,6 +942,8 @@ export default function App() {
                               className={`w-full rounded-t transition-all duration-150 ${
                                 isHovered
                                   ? 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.5)]'
+                                  : isCurrent
+                                  ? 'bg-emerald-500/80 border-t-2 border-emerald-300'
                                   : count >= 30000
                                   ? 'bg-emerald-500'
                                   : count >= 15000
