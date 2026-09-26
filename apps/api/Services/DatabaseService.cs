@@ -195,12 +195,13 @@ public class DatabaseService
     {
         var nowDubai = DateTime.UtcNow.AddHours(4);
         var hourly = new List<object>();
-        for (int i = 23; i >= 0; i--)
+        for (int i = 47; i >= 0; i--)
         {
             var hr = nowDubai.AddHours(-i);
             hourly.Add(new Dictionary<string, object>
             {
                 ["hour_label"] = hr.ToString("HH:00"),
+                ["full_label"] = hr.ToString("MMM dd HH:00"),
                 ["count"] = 0
             });
         }
@@ -219,6 +220,7 @@ public class DatabaseService
         return new Dictionary<string, object>
         {
             ["total_torrents"] = 3908000L,
+            ["verified_last_48h"] = 1200000L,
             ["verified_last_24h"] = 620000L,
             ["verified_last_1h"] = 55000L,
             ["new_torrents_last_1h"] = 5500L,
@@ -230,7 +232,8 @@ public class DatabaseService
             ["crawler_heartbeat_ts"] = DateTime.UtcNow.ToString("o"),
             ["queue_backlog"] = 0,
             ["verifying"] = 0,
-            ["hourly_24h"] = hourly,
+            ["hourly_48h"] = hourly,
+            ["hourly_24h"] = hourly.TakeLast(24).ToList(),
             ["daily_7d"] = daily,
             ["updated_at"] = DateTime.UtcNow.ToString("o")
         };
@@ -269,6 +272,7 @@ public class DatabaseService
             const string scalarStatsSql = """
                 SELECT 
                     (SELECT reltuples::bigint FROM pg_class WHERE relname = 'torrents') AS total_torrents,
+                    (SELECT count(*) FROM torrents WHERE verified_at > NOW() - INTERVAL '48 hours') AS verified_48h,
                     (SELECT count(*) FROM torrents WHERE verified_at > NOW() - INTERVAL '24 hours') AS verified_24h,
                     (SELECT count(*) FROM torrents WHERE verified_at > NOW() - INTERVAL '1 hour') AS verified_1h,
                     (SELECT count(*) FROM torrents WHERE first_seen > NOW() - INTERVAL '1 hour') AS new_1h,
@@ -288,7 +292,7 @@ public class DatabaseService
             const string hourlySql = """
                 WITH hours AS (
                   SELECT generate_series(
-                    date_trunc('hour', now() AT TIME ZONE 'Asia/Dubai') - interval '23 hours',
+                    date_trunc('hour', now() AT TIME ZONE 'Asia/Dubai') - interval '47 hours',
                     date_trunc('hour', now() AT TIME ZONE 'Asia/Dubai'),
                     interval '1 hour'
                   ) AS hr
@@ -297,11 +301,12 @@ public class DatabaseService
                   SELECT date_trunc('hour', verified_at AT TIME ZONE 'Asia/Dubai') AS hr,
                          count(*) AS count
                   FROM torrents
-                  WHERE verified_at >= now() - interval '24 hours'
+                  WHERE verified_at >= now() - interval '48 hours'
                   GROUP BY 1
                 )
                 SELECT 
                   to_char(h.hr, 'HH24:00') AS hour_label,
+                  to_char(h.hr, 'Mon DD HH24:00') AS full_label,
                   COALESCE(r.count, 0)::int AS count
                 FROM hours h
                 LEFT JOIN recent r ON r.hr = h.hr
@@ -339,6 +344,7 @@ public class DatabaseService
             var hourly = hourlyRows.Select(r => new Dictionary<string, object>
             {
                 ["hour_label"] = (string)r.hour_label,
+                ["full_label"] = (string)r.full_label,
                 ["count"] = (int)r.count
             }).ToList();
 
@@ -349,6 +355,7 @@ public class DatabaseService
             }).ToList();
 
             long totalTorrents = scalar?.total_torrents ?? 3908000L;
+            long verified48h = scalar?.verified_48h ?? 0L;
             long verified24h = scalar?.verified_24h ?? 0L;
             long verified1h = scalar?.verified_1h ?? 0L;
             long new1h = scalar?.new_1h ?? 0L;
@@ -364,6 +371,7 @@ public class DatabaseService
             _cachedStats = new Dictionary<string, object>
             {
                 ["total_torrents"] = totalTorrents,
+                ["verified_last_48h"] = verified48h,
                 ["verified_last_24h"] = verified24h,
                 ["verified_last_1h"] = verified1h,
                 ["new_torrents_last_1h"] = new1h,
@@ -375,7 +383,8 @@ public class DatabaseService
                 ["crawler_heartbeat_ts"] = hbTs?.ToString("o") ?? DateTime.UtcNow.ToString("o"),
                 ["queue_backlog"] = queueBacklog,
                 ["verifying"] = verifying,
-                ["hourly_24h"] = hourly,
+                ["hourly_48h"] = hourly,
+                ["hourly_24h"] = hourly.TakeLast(24).ToList(),
                 ["daily_7d"] = daily,
                 ["updated_at"] = DateTime.UtcNow.ToString("o")
             };

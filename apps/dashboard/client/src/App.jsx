@@ -267,6 +267,7 @@ export default function App() {
       verifiedToday: serverStats?.verified_last_24h
         ? `+${(serverStats.verified_last_24h / 1000).toFixed(1)}k today`
         : '-- today',
+      verified48h: serverStats?.verified_last_48h ?? 0,
       verified24h: serverStats?.verified_last_24h ?? 0,
       verified1h: serverStats?.verified_last_1h ?? 0,
       verifiedRateNum: verifiedRateVal,
@@ -871,22 +872,26 @@ export default function App() {
               </div>
             </section>
 
-            {/* 24-Hour Hourly Ingestion Bar Chart */}
+            {/* 48-Hour Hourly Ingestion Bar Chart */}
             <section className="rounded-xl border border-[#1f1f1f] bg-[#080808] p-5 space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#181818]">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-[#999]">24-Hour Verified Ingestion Velocity</span>
+                    <span className="text-xs font-semibold uppercase tracking-wider text-[#999]">48-Hour Verified Ingestion Velocity</span>
                     <span className="text-[11px] font-mono text-[#555]">· Asia/Dubai (GST · UTC+4)</span>
                   </div>
                   <p className="text-xs text-[#777] mt-0.5">
-                    Cataloged torrent count indexed per hour over the trailing 24 hours (Dubai local time).
+                    Cataloged torrent count indexed per hour over the trailing 48 hours (Dubai local time).
                   </p>
                 </div>
 
                 <div className="flex items-center gap-4 text-xs font-mono">
                   <div className="text-[#888]">
-                    Last 24h Total: <span className="text-white font-bold">{(metrics.verified24h ?? 0).toLocaleString()}</span>
+                    Last 48h Total: <span className="text-white font-bold">{(metrics.verified48h ?? 0).toLocaleString()}</span>
+                  </div>
+                  <div className="h-3 w-[1px] bg-[#222]" />
+                  <div className="text-[#888]">
+                    Last 24h: <span className="text-[#aaa] font-bold">{(metrics.verified24h ?? 0).toLocaleString()}</span>
                   </div>
                   <div className="h-3 w-[1px] bg-[#222]" />
                   <div className="text-emerald-400">
@@ -897,12 +902,12 @@ export default function App() {
 
               {/* Bar Chart Container */}
               {(() => {
-                const hourlyData = serverStats?.hourly_24h || [];
+                const hourlyData = serverStats?.hourly_48h || serverStats?.hourly_24h || [];
                 const maxCount = Math.max(...hourlyData.map((d) => d.count), 1);
 
                 return (
                   <div className="space-y-2">
-                    <div className="h-36 w-full bg-[#000000] border border-[#161616] rounded-lg p-3 flex items-end justify-between gap-1 sm:gap-2 select-none relative">
+                    <div className="h-36 w-full bg-[#000000] border border-[#161616] rounded-lg p-3 flex items-end justify-between gap-[2px] sm:gap-1 select-none relative">
                       {hourlyData.map((bar, i) => {
                         const heightPct = Math.max(4, Math.round((bar.count / maxCount) * 100));
                         const isHovered = hoveredBarIdx === i;
@@ -917,7 +922,7 @@ export default function App() {
                             {/* Hover Tooltip */}
                             {isHovered && (
                               <div className="absolute -top-12 z-30 pointer-events-none bg-[#141414] border border-[#333] rounded px-2 py-1 text-[11px] font-mono text-white whitespace-nowrap shadow-xl">
-                                <div className="text-[#888]">{bar.hour_label} GST (UTC+4)</div>
+                                <div className="text-[#888]">{bar.full_label || `${bar.hour_label} GST (UTC+4)`}</div>
                                 <div className="text-emerald-400 font-bold">{bar.count.toLocaleString()} torrents</div>
                               </div>
                             )}
@@ -944,10 +949,10 @@ export default function App() {
                     <div className="flex justify-between text-[10px] font-mono text-[#555] px-1">
                       {hourlyData.length > 0 ? (
                         <>
-                          <span>{hourlyData[0]?.hour_label}</span>
-                          <span>{hourlyData[Math.floor(hourlyData.length * 0.25)]?.hour_label}</span>
-                          <span>{hourlyData[Math.floor(hourlyData.length * 0.5)]?.hour_label}</span>
-                          <span>{hourlyData[Math.floor(hourlyData.length * 0.75)]?.hour_label}</span>
+                          <span>{hourlyData[0]?.full_label || hourlyData[0]?.hour_label}</span>
+                          <span>{hourlyData[12]?.full_label || hourlyData[12]?.hour_label}</span>
+                          <span>{hourlyData[24]?.full_label || hourlyData[24]?.hour_label}</span>
+                          <span>{hourlyData[36]?.full_label || hourlyData[36]?.hour_label}</span>
                           <span className="text-emerald-400">{hourlyData[hourlyData.length - 1]?.hour_label} (Now)</span>
                         </>
                       ) : (
