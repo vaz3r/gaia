@@ -22,8 +22,8 @@ source_query_timeout_secs = 5
 rate_limit_per_sec = 8.0
 
 [fetch]
-pipeline_limit = 4000
-global_fetch_limit = 2000
+pipeline_limit = 1500
+global_fetch_limit = 800
 race_peers = 8
 metadata_timeout_secs = 25
 connect_deadline_ms = 10000
@@ -34,16 +34,16 @@ utp_enabled = true
 max_connections_per_ip = 2
 transport_race_concurrent = true
 ip_cooldown_secs = 180
-ip_cooldown_max_entries = 75000
+ip_cooldown_max_entries = 20000
 abuse_blacklist_path = "/etc/crawler/config/abuse_blacklist.txt"
 conn_limiter_ttl_secs = 60
-conn_limiter_max_entries = 150000
+conn_limiter_max_entries = 30000
 fresh_channel_capacity = 16384
 
 [cache]
 peer_cache_ttl_secs = 120
-peer_cache_max_entries = 100000
-announce_cache_max_entries = 50000
+peer_cache_max_entries = 30000
+announce_cache_max_entries = 20000
 peer_cache_failure_threshold = 1
 
 [retry]
