@@ -12,3 +12,27 @@
 2001:db8::/32
 
 # Known automated reporting honeypots & non-BitTorrent scanners
+
+# Top Verified Zero-Utility Sybil & Flood Threat Actors (0.00% Metadata Success)
+45.58.163.171        # Coordinated Sybil Node Rotator (0% metadata yield)
+45.58.163.172        # Coordinated Sybil Node Rotator (0% metadata yield)
+173.249.19.73        # Contabo High-Rate Flooder (0% metadata yield)
+207.180.192.206      # Contabo Sybil Flooder (0% metadata yield)
+5.189.160.21         # Contabo Sybil Flooder (0% metadata yield)
+62.171.160.55        # Contabo Sybil Flooder (0% metadata yield)
+5.189.179.32         # Contabo Sybil Flooder (0% metadata yield)
+208.87.240.21        # Psychz Sybil Node Rotator (0% metadata yield)
+104.168.15.234       # ColoCrossing Cryptographic Spoofing (0% metadata yield)
+23.94.185.198        # ColoCrossing Sybil Rotator (0% metadata yield)
+192.3.8.34           # ColoCrossing Sybil Rotator (0% metadata yield)
+23.94.20.142         # ColoCrossing Sybil Rotator (0% metadata yield)
+198.46.154.102       # ColoCrossing Sybil Rotator (0% metadata yield)
+144.217.255.230      # OVH Sybil Crawler (0% metadata yield)
+144.217.254.110      # OVH Cryptographic Spoofing (0% metadata yield)
+144.217.72.79        # OVH Sybil Rotator (0% metadata yield)
+142.44.138.177       # OVH Sybil Crawler (0% metadata yield)
+145.239.8.179        # OVH Cryptographic Spoofing (0% metadata yield)
+37.187.150.214       # OVH Sybil Rotator (0% metadata yield)
+37.187.77.174        # OVH Cryptographic Spoofing (0% metadata yield)
+162.251.63.79        # GTHost Sybil Rotator (0% metadata yield)
+176.125.242.201      # AlexHost Sybil Rotator (0% metadata yield)
